@@ -118,6 +118,29 @@ class TestBuildNewTags:
         assert tags["title"] == "Twenty-One"
         assert tags["tracknumber"] == "2"
 
+    def test_uses_track_artist_id(self) -> None:
+        release = MBRelease(
+            id="va-release",
+            title="Concert",
+            track_count=2,
+            discs={
+                1: [
+                    MBTrack(number=1, title="Song A", artist_id="artist-a"),
+                    MBTrack(number=2, title="Song B", artist_id="artist-b"),
+                ]
+            },
+            artist_id="album-artist",
+            release_group_id="rg-va",
+        )
+        track = TrackTags(path=Path("/music/01.flac"), tags={}, format="flac")
+        tags = _build_new_tags(release, track, 0, 1)
+        assert tags["musicbrainz_artistid"] == "artist-a"
+        assert tags["musicbrainz_albumartistid"] == "album-artist"
+
+        tags2 = _build_new_tags(release, track, 1, 1)
+        assert tags2["musicbrainz_artistid"] == "artist-b"
+        assert tags2["musicbrainz_albumartistid"] == "album-artist"
+
     def test_disc_two_track(self) -> None:
         release = _make_two_disc_release()
         track = TrackTags(path=Path("/music/01.flac"), tags={}, duration_secs=689.0, format="flac")

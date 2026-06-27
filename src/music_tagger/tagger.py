@@ -70,8 +70,11 @@ def _build_new_tags(
         tags["releasestatus"] = release.status
 
     tags["musicbrainz_albumid"] = release.id
-    if release.artist_id:
+    if mb_track and mb_track.artist_id:
+        tags["musicbrainz_artistid"] = mb_track.artist_id
+    elif release.artist_id:
         tags["musicbrainz_artistid"] = release.artist_id
+    if release.artist_id:
         tags["musicbrainz_albumartistid"] = release.artist_id
     if release.release_group_id:
         tags["musicbrainz_releasegroupid"] = release.release_group_id

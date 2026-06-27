@@ -17,6 +17,7 @@ class MBTrack:
     number: int
     title: str
     duration_ms: int | None = None
+    artist_id: str = ""
 
     @property
     def duration_secs(self) -> float | None:
@@ -73,7 +74,7 @@ class MusicBrainzClient:
                 m.get("format", "") for m in r.get("media", [])
             ]
             label_info = r.get("label-info", [])
-            label = label_info[0].get("label", {}).get("name", "") if label_info else ""
+            label = (label_info[0].get("label") or {}).get("name", "") if label_info else ""
             catnum = ""
             for li in label_info:
                 if li.get("catalog-number"):
@@ -111,7 +112,7 @@ class MusicBrainzClient:
         r = resp.json()
 
         label_info = r.get("label-info", [])
-        label = label_info[0].get("label", {}).get("name", "") if label_info else ""
+        label = (label_info[0].get("label") or {}).get("name", "") if label_info else ""
         catnum = ""
         for li in label_info:
             if li.get("catalog-number"):
@@ -136,11 +137,22 @@ class MusicBrainzClient:
             tracks = []
             for t in medium.get("tracks", []):
                 recording = t.get("recording", {})
+                track_artist_credit = (
+                    t.get("artist-credit")
+                    or recording.get("artist-credit")
+                    or []
+                )
+                track_artist_id = ""
+                if track_artist_credit:
+                    track_artist_id = (
+                        track_artist_credit[0].get("artist", {}).get("id", "")
+                    )
                 tracks.append(
                     MBTrack(
                         number=int(t.get("number", 0)),
                         title=t.get("title", recording.get("title", "")),
                         duration_ms=t.get("length") or recording.get("length"),
+                        artist_id=track_artist_id,
                     )
                 )
             total_tracks += len(tracks)
