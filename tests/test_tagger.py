@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-from music_tagger.matcher import MatchResult
 from music_tagger.musicbrainz import MBRelease, MBTrack
-from music_tagger.tagger import AlbumResult, TrackDiff, _build_new_tags, apply_changes, process_album
+from music_tagger.tagger import AlbumResult, TrackDiff, _build_new_tags, apply_changes, build_diff, search_candidates
 from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album
 
 
@@ -37,7 +36,7 @@ class TestBuildNewTags:
     def test_sets_album_level_tags(self) -> None:
         release = _make_release()
         track = TrackTags(path=Path("/music/01.flac"), tags={}, duration_secs=209.0, format="flac")
-        tags = _build_new_tags(release, track, 0, 1, 1)
+        tags = _build_new_tags(release, track, 0, 1)
 
         assert tags["album"] == "Desperado"
         assert tags["date"] == "1973-04-17"
@@ -54,7 +53,7 @@ class TestBuildNewTags:
     def test_sets_track_level_tags(self) -> None:
         release = _make_release()
         track = TrackTags(path=Path("/music/01.flac"), tags={}, duration_secs=209.0, format="flac")
-        tags = _build_new_tags(release, track, 0, 1, 1)
+        tags = _build_new_tags(release, track, 0, 1)
 
         assert tags["title"] == "Doolin-Dalton"
         assert tags["tracknumber"] == "1"
@@ -63,36 +62,61 @@ class TestBuildNewTags:
     def test_second_track(self) -> None:
         release = _make_release()
         track = TrackTags(path=Path("/music/02.flac"), tags={}, duration_secs=187.0, format="flac")
-        tags = _build_new_tags(release, track, 1, 1, 1)
+        tags = _build_new_tags(release, track, 1, 1)
 
         assert tags["title"] == "Twenty-One"
         assert tags["tracknumber"] == "2"
 
 
-class TestProcessAlbum:
-    def test_full_pipeline(self, flac_album: Path) -> None:
+class TestSearchCandidates:
+    def test_returns_album_and_candidates(self, flac_album: Path) -> None:
         release = _make_release()
-        match_result = MatchResult(
-            release_id="release-1",
-            confidence="high",
-            reasoning="Perfect match.",
-        )
 
         mock_mb = MagicMock()
         mock_mb.search_releases.return_value = [release]
         mock_mb.fetch_release.return_value = release
 
-        with patch("music_tagger.tagger.match_release", return_value=match_result):
-            result = process_album(flac_album, mock_mb)
+        album, candidates = search_candidates(flac_album, mock_mb)
 
-        assert result.match.release_id == "release-1"
-        assert result.release.title == "Desperado"
-        assert len(result.diffs) == 3
+        assert album.track_count == 3
+        assert len(candidates) == 1
+        assert candidates[0].id == "release-1"
 
     def test_empty_dir_raises(self, tmp_path: Path) -> None:
         import pytest
         with pytest.raises(ValueError, match="No audio files"):
-            process_album(tmp_path, MagicMock())
+            search_candidates(tmp_path, MagicMock())
+
+
+class TestBuildDiff:
+    def test_computes_changes(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        release = _make_release()
+        result = build_diff(album, release)
+
+        assert len(result.diffs) == 3
+        assert result.release.id == "release-1"
+
+    def test_no_changes_when_matching(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        release = MBRelease(
+            id="test-album-id-1",
+            title="Desperado",
+            track_count=3,
+            discs={
+                1: [
+                    MBTrack(number=1, title="Desperado"),
+                    MBTrack(number=2, title="Twenty-One"),
+                    MBTrack(number=3, title="Out of Control"),
+                ]
+            },
+            date="1973",
+            country="",
+            label="",
+            barcode="075596066624",
+        )
+        result = build_diff(album, release)
+        assert not result.has_changes
 
 
 class TestApplyChanges:
@@ -108,7 +132,6 @@ class TestApplyChanges:
         ]
         result = AlbumResult(
             album=album,
-            match=MatchResult(release_id="x", confidence="high", reasoning="test"),
             release=_make_release(),
             diffs=diffs,
         )

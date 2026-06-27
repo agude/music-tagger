@@ -9,7 +9,6 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "mutagen>=1.47",
-    "anthropic>=0.52",
     "httpx>=0.28",
 ]
 

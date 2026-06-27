@@ -1,11 +1,10 @@
-"""Orchestration: read tags, search MusicBrainz, match via LLM, compute diff."""
+"""Orchestration: search MusicBrainz candidates, compute diffs, apply tags."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .matcher import MatchResult, match_release
 from .musicbrainz import MBRelease, MusicBrainzClient
 from .tags import AlbumTags, TagChange, TrackTags, compute_diff, read_album, write_tags
 
@@ -19,7 +18,6 @@ class TrackDiff:
 @dataclass
 class AlbumResult:
     album: AlbumTags
-    match: MatchResult
     release: MBRelease
     diffs: list[TrackDiff] = field(default_factory=list)
 
@@ -33,7 +31,6 @@ def _build_new_tags(
     track: TrackTags,
     track_index: int,
     disc_num: int,
-    total_discs: int,
 ) -> dict[str, str]:
     """Build the target tag dict for a track from the matched release."""
     disc_tracks = release.discs.get(disc_num, [])
@@ -73,33 +70,38 @@ def _build_new_tags(
     return tags
 
 
-def process_album(directory: Path, mb_client: MusicBrainzClient) -> AlbumResult:
-    """Run the full pipeline for one album directory."""
+def search_candidates(
+    directory: Path, mb_client: MusicBrainzClient
+) -> tuple[AlbumTags, list[MBRelease]]:
+    """Read album tags and fetch detailed MusicBrainz candidates."""
     album = read_album(directory)
     if not album.tracks:
         raise ValueError(f"No audio files found in {directory}")
 
     candidates = mb_client.search_releases(album.artist, album.album)
     if not candidates:
-        raise ValueError(f"No MusicBrainz results for '{album.artist}' - '{album.album}'")
+        raise ValueError(
+            f"No MusicBrainz results for '{album.artist}' - '{album.album}'"
+        )
 
     detailed: list[MBRelease] = []
     for c in candidates:
         detailed.append(mb_client.fetch_release(c.id))
 
-    result = match_release(album, detailed)
-    release = next(r for r in detailed if r.id == result.release_id)
+    return album, detailed
 
-    total_discs = len(release.discs)
+
+def build_diff(album: AlbumTags, release: MBRelease) -> AlbumResult:
+    """Compute the tag diff between current tags and a chosen release."""
     disc_num = 1
 
     diffs: list[TrackDiff] = []
     for i, track in enumerate(album.tracks):
-        new_tags = _build_new_tags(release, track, i, disc_num, total_discs)
+        new_tags = _build_new_tags(release, track, i, disc_num)
         changes = compute_diff(track, new_tags)
         diffs.append(TrackDiff(track=track, changes=changes))
 
-    return AlbumResult(album=album, match=result, release=release, diffs=diffs)
+    return AlbumResult(album=album, release=release, diffs=diffs)
 
 
 def apply_changes(result: AlbumResult) -> int:
