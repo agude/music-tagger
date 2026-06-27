@@ -141,6 +141,57 @@ class TestBuildNewTags:
         assert tags2["musicbrainz_artistid"] == "artist-b"
         assert tags2["musicbrainz_albumartistid"] == "album-artist"
 
+    def test_sets_release_group_fields(self) -> None:
+        release = MBRelease(
+            id="r1",
+            title="Greatest Hits",
+            track_count=1,
+            discs={1: [MBTrack(number=1, title="Song")]},
+            artist_id="a1",
+            release_group_id="rg-1",
+            release_group_type="Album",
+            secondary_types=["Compilation"],
+            first_release_date="1990-01-01",
+            asin="B00001234",
+            script="Latn",
+        )
+        track = TrackTags(path=Path("/music/01.flac"), tags={}, format="flac")
+        tags = _build_new_tags(release, track, 0, 1)
+        assert tags["releasetype"] == "Album; Compilation"
+        assert tags["compilation"] == "1"
+        assert tags["originaldate"] == "1990-01-01"
+        assert tags["asin"] == "B00001234"
+        assert tags["script"] == "Latn"
+
+    def test_sets_track_credits(self) -> None:
+        release = MBRelease(
+            id="r1",
+            title="Album",
+            track_count=1,
+            discs={
+                1: [
+                    MBTrack(
+                        number=1, title="Song",
+                        recording_id="rec-1", track_id="trk-1",
+                        isrc="USEE10400287", work_id="work-1",
+                        composer="Bach", composer_id="c1",
+                        producer="George Martin", producer_id="p1",
+                        performers="John (guitar)", performer_ids="j1",
+                    ),
+                ]
+            },
+        )
+        track = TrackTags(path=Path("/music/01.flac"), tags={}, format="flac")
+        tags = _build_new_tags(release, track, 0, 1)
+        assert tags["musicbrainz_recordingid"] == "rec-1"
+        assert tags["musicbrainz_releasetrackid"] == "trk-1"
+        assert tags["isrc"] == "USEE10400287"
+        assert tags["musicbrainz_workid"] == "work-1"
+        assert tags["composer"] == "Bach"
+        assert tags["musicbrainz_composerid"] == "c1"
+        assert tags["producer"] == "George Martin"
+        assert tags["performer"] == "John (guitar)"
+
     def test_disc_two_track(self) -> None:
         release = _make_two_disc_release()
         track = TrackTags(path=Path("/music/01.flac"), tags={}, duration_secs=689.0, format="flac")
@@ -245,4 +296,6 @@ class TestApplyChanges:
 
         album2 = read_album(flac_album)
         assert album2.tracks[0].tags["title"] == "New Title"
+        assert album2.tracks[0].tags["music_tagger_updated"] != ""
+        assert "music_tagger_updated" not in album2.tracks[1].tags
         assert album2.tracks[1].tags["title"] == "Twenty-One"

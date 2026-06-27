@@ -38,6 +38,10 @@ def _scan(argv: list[str] | None = None) -> None:
         "-o", "--output", type=Path, default=None,
         help="Output checklist file (default: stdout).",
     )
+    parser.add_argument(
+        "--all", action="store_true",
+        help="Include albums that already have a consistent MB ID.",
+    )
     args = parser.parse_args(argv)
 
     target: Path = args.path.resolve()
@@ -62,6 +66,9 @@ def _scan(argv: list[str] | None = None) -> None:
             status = f"SPLIT ({len(ids)} IDs)"
         elif len(ids) == 0:
             status = "NO MB ID"
+        elif getattr(args, "all", False):
+            mb_id = next(iter(ids))
+            status = f"ID: {mb_id}"
         else:
             continue
 

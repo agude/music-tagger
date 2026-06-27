@@ -61,6 +61,54 @@ FIELD_MAP: dict[str, tuple[str, str]] = {
     ),
     "releasetype": ("RELEASETYPE", "TXXX:MusicBrainz Album Type"),
     "releasestatus": ("RELEASESTATUS", "TXXX:MusicBrainz Album Status"),
+    "isrc": ("ISRC", "TSRC"),
+    "compilation": ("COMPILATION", "TXXX:COMPILATION"),
+    "asin": ("ASIN", "TXXX:ASIN"),
+    "script": ("SCRIPT", "TXXX:SCRIPT"),
+    "lyricist": ("LYRICIST", "TEXT"),
+    "conductor": ("CONDUCTOR", "TPE3"),
+    "producer": ("PRODUCER", "TXXX:PRODUCER"),
+    "engineer": ("ENGINEER", "TXXX:ENGINEER"),
+    "mixer": ("MIXER", "TXXX:MIXER"),
+    "remixer": ("REMIXER", "TPE4"),
+    "performer": ("PERFORMER", "TXXX:PERFORMER"),
+    "musicbrainz_workid": ("MUSICBRAINZ_WORKID", "TXXX:MusicBrainz Work Id"),
+    "musicbrainz_composerid": (
+        "MUSICBRAINZ_COMPOSERID",
+        "TXXX:MusicBrainz Composer Id",
+    ),
+    "musicbrainz_lyricistid": (
+        "MUSICBRAINZ_LYRICISTID",
+        "TXXX:MusicBrainz Lyricist Id",
+    ),
+    "musicbrainz_producerid": (
+        "MUSICBRAINZ_PRODUCERID",
+        "TXXX:MusicBrainz Producer Id",
+    ),
+    "musicbrainz_engineerid": (
+        "MUSICBRAINZ_ENGINEERID",
+        "TXXX:MusicBrainz Engineer Id",
+    ),
+    "musicbrainz_mixerid": (
+        "MUSICBRAINZ_MIXERID",
+        "TXXX:MusicBrainz Mixer Id",
+    ),
+    "musicbrainz_conductorid": (
+        "MUSICBRAINZ_CONDUCTORID",
+        "TXXX:MusicBrainz Conductor Id",
+    ),
+    "musicbrainz_remixerid": (
+        "MUSICBRAINZ_REMIXERID",
+        "TXXX:MusicBrainz Remixer Id",
+    ),
+    "musicbrainz_performerid": (
+        "MUSICBRAINZ_PERFORMERID",
+        "TXXX:MusicBrainz Performer Id",
+    ),
+    "music_tagger_updated": (
+        "MUSIC_TAGGER_UPDATED",
+        "TXXX:MUSIC_TAGGER_UPDATED",
+    ),
 }
 
 
@@ -186,9 +234,13 @@ def compute_diff(
     """Compute the tag changes needed for a single track."""
     # Fields where comparison should be case-insensitive
     case_insensitive = {"releasestatus", "releasetype"}
+    # Fields excluded from diff — always written when other changes exist
+    skip_diff = {"music_tagger_updated"}
 
     changes = []
     for field_name, new_value in sorted(new_tags.items()):
+        if field_name in skip_diff:
+            continue
         old_value = track.tags.get(field_name, "")
         if field_name in case_insensitive:
             if old_value.lower() == new_value.lower():

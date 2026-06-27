@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .musicbrainz import MBRelease, MusicBrainzClient
@@ -69,17 +70,59 @@ def _build_new_tags(
     if release.status:
         tags["releasestatus"] = release.status
 
+    # Release-level metadata
     tags["musicbrainz_albumid"] = release.id
-    if mb_track and mb_track.artist_id:
-        tags["musicbrainz_artistid"] = mb_track.artist_id
-    elif release.artist_id:
-        tags["musicbrainz_artistid"] = release.artist_id
     if release.artist_id:
         tags["musicbrainz_albumartistid"] = release.artist_id
     if release.release_group_id:
         tags["musicbrainz_releasegroupid"] = release.release_group_id
+    if release.release_group_type:
+        types = [release.release_group_type] + release.secondary_types
+        tags["releasetype"] = "; ".join(types)
+    if "Compilation" in release.secondary_types:
+        tags["compilation"] = "1"
+    if release.first_release_date:
+        tags["originaldate"] = release.first_release_date
+    if release.asin:
+        tags["asin"] = release.asin
+    if release.script:
+        tags["script"] = release.script
+
+    # Track-level artist
+    if mb_track and mb_track.artist_id:
+        tags["musicbrainz_artistid"] = mb_track.artist_id
+    elif release.artist_id:
+        tags["musicbrainz_artistid"] = release.artist_id
+
+    # Track-level IDs and credits
+    if mb_track:
+        if mb_track.recording_id:
+            tags["musicbrainz_recordingid"] = mb_track.recording_id
+        if mb_track.track_id:
+            tags["musicbrainz_releasetrackid"] = mb_track.track_id
+        if mb_track.isrc:
+            tags["isrc"] = mb_track.isrc
+        if mb_track.work_id:
+            tags["musicbrainz_workid"] = mb_track.work_id
+
+        # Personnel
+        _set_credit(tags, "composer", mb_track.composer, "musicbrainz_composerid", mb_track.composer_id)
+        _set_credit(tags, "lyricist", mb_track.lyricist, "musicbrainz_lyricistid", mb_track.lyricist_id)
+        _set_credit(tags, "producer", mb_track.producer, "musicbrainz_producerid", mb_track.producer_id)
+        _set_credit(tags, "engineer", mb_track.engineer, "musicbrainz_engineerid", mb_track.engineer_id)
+        _set_credit(tags, "mixer", mb_track.mixer, "musicbrainz_mixerid", mb_track.mixer_id)
+        _set_credit(tags, "conductor", mb_track.conductor, "musicbrainz_conductorid", mb_track.conductor_id)
+        _set_credit(tags, "remixer", mb_track.remixer, "musicbrainz_remixerid", mb_track.remixer_id)
+        _set_credit(tags, "performer", mb_track.performers, "musicbrainz_performerid", mb_track.performer_ids)
 
     return tags
+
+
+def _set_credit(tags: dict[str, str], name_field: str, name: str, id_field: str, aid: str) -> None:
+    if name:
+        tags[name_field] = name
+    if aid:
+        tags[id_field] = aid
 
 
 def search_candidates(
@@ -123,9 +166,15 @@ def build_diff(album: AlbumTags, release: MBRelease) -> AlbumResult:
 
 def apply_changes(result: AlbumResult) -> int:
     """Write all tag changes. Returns the number of tracks modified."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     count = 0
     for diff in result.diffs:
         if diff.changes:
-            write_tags(diff.track, diff.changes)
+            timestamp = TagChange(
+                field="music_tagger_updated",
+                old_value=diff.track.tags.get("music_tagger_updated", ""),
+                new_value=now,
+            )
+            write_tags(diff.track, diff.changes + [timestamp])
             count += 1
     return count
