@@ -54,8 +54,11 @@ src/music_tagger/
 
 ## Safety
 
-**Always copy test files to /tmp before running against them.** Never run
-destructive commands against the live library at `/mnt/synology/media/music`.
+- `candidates` is read-only. Safe to run directly against the live library.
+- `tag --dry-run` is read-only. Safe to run directly against the live library.
+- `tag` (without `--dry-run`) writes metadata into files. It does not move,
+  rename, or delete files. Use `--dry-run` first, review the diff, then run
+  without it.
 
 ## Running tests
 
