@@ -97,6 +97,20 @@ class TestComputeDiff:
         assert changes[0].old_value == ""
         assert changes[0].new_value == "Asylum Records"
 
+    def test_releasestatus_case_insensitive(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        track = album.tracks[0]
+        track.tags["releasestatus"] = "official"
+        changes = compute_diff(track, {"releasestatus": "Official"})
+        assert changes == []
+
+    def test_releasestatus_different_value(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        track = album.tracks[0]
+        track.tags["releasestatus"] = "official"
+        changes = compute_diff(track, {"releasestatus": "Promotion"})
+        assert len(changes) == 1
+
 
 class TestWriteTagsFlac:
     def test_write_and_read_back(self, flac_album: Path) -> None:

@@ -26,6 +26,15 @@ class AlbumResult:
         return any(d.changes for d in self.diffs)
 
 
+def _parse_disc_number(track: TrackTags) -> int:
+    """Extract disc number from tags. Handles '2', '2/3', etc. Falls back to 1."""
+    raw = track.tags.get("discnumber", "1")
+    try:
+        return int(raw.split("/")[0])
+    except (ValueError, IndexError):
+        return 1
+
+
 def _build_new_tags(
     release: MBRelease,
     track: TrackTags,
@@ -46,7 +55,7 @@ def _build_new_tags(
     tags["discnumber"] = str(disc_num)
 
     if release.date:
-        tags["date"] = release.date
+        tags["releasedate"] = release.date
     if release.country:
         tags["country"] = release.country
     if release.label:
@@ -93,11 +102,16 @@ def search_candidates(
 
 def build_diff(album: AlbumTags, release: MBRelease) -> AlbumResult:
     """Compute the tag diff between current tags and a chosen release."""
-    disc_num = 1
+    # Group tracks by disc number, tracking each track's position within its disc
+    disc_positions: dict[int, int] = {}
 
     diffs: list[TrackDiff] = []
-    for i, track in enumerate(album.tracks):
-        new_tags = _build_new_tags(release, track, i, disc_num)
+    for track in album.tracks:
+        disc_num = _parse_disc_number(track)
+        track_index = disc_positions.get(disc_num, 0)
+        disc_positions[disc_num] = track_index + 1
+
+        new_tags = _build_new_tags(release, track, track_index, disc_num)
         changes = compute_diff(track, new_tags)
         diffs.append(TrackDiff(track=track, changes=changes))
 

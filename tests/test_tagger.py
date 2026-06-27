@@ -4,7 +4,15 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from music_tagger.musicbrainz import MBRelease, MBTrack
-from music_tagger.tagger import AlbumResult, TrackDiff, _build_new_tags, apply_changes, build_diff, search_candidates
+from music_tagger.tagger import (
+    AlbumResult,
+    TrackDiff,
+    _build_new_tags,
+    _parse_disc_number,
+    apply_changes,
+    build_diff,
+    search_candidates,
+)
 from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album
 
 
@@ -32,6 +40,49 @@ def _make_release() -> MBRelease:
     )
 
 
+def _make_two_disc_release() -> MBRelease:
+    return MBRelease(
+        id="release-2disc",
+        title="Purple Rain",
+        date="2017-06-23",
+        country="XE",
+        status="Official",
+        label="Warner Bros.",
+        format="CD, CD",
+        track_count=4,
+        discs={
+            1: [
+                MBTrack(number=1, title="Let's Go Crazy", duration_ms=278000),
+                MBTrack(number=2, title="Take Me With U", duration_ms=233000),
+            ],
+            2: [
+                MBTrack(number=1, title="The Dance Electric", duration_ms=689000),
+                MBTrack(number=2, title="Love and Sex", duration_ms=300000),
+            ],
+        },
+        artist_id="artist-2",
+        release_group_id="rg-2",
+    )
+
+
+class TestParseDiscNumber:
+    def test_simple(self) -> None:
+        t = TrackTags(path=Path("x.flac"), tags={"discnumber": "2"}, format="flac")
+        assert _parse_disc_number(t) == 2
+
+    def test_fraction(self) -> None:
+        t = TrackTags(path=Path("x.flac"), tags={"discnumber": "1/2"}, format="flac")
+        assert _parse_disc_number(t) == 1
+
+    def test_missing(self) -> None:
+        t = TrackTags(path=Path("x.flac"), tags={}, format="flac")
+        assert _parse_disc_number(t) == 1
+
+    def test_garbage(self) -> None:
+        t = TrackTags(path=Path("x.flac"), tags={"discnumber": "abc"}, format="flac")
+        assert _parse_disc_number(t) == 1
+
+
 class TestBuildNewTags:
     def test_sets_album_level_tags(self) -> None:
         release = _make_release()
@@ -39,7 +90,7 @@ class TestBuildNewTags:
         tags = _build_new_tags(release, track, 0, 1)
 
         assert tags["album"] == "Desperado"
-        assert tags["date"] == "1973-04-17"
+        assert tags["releasedate"] == "1973-04-17"
         assert tags["country"] == "US"
         assert tags["label"] == "Asylum Records"
         assert tags["catalognumber"] == "SD 5068"
@@ -66,6 +117,15 @@ class TestBuildNewTags:
 
         assert tags["title"] == "Twenty-One"
         assert tags["tracknumber"] == "2"
+
+    def test_disc_two_track(self) -> None:
+        release = _make_two_disc_release()
+        track = TrackTags(path=Path("/music/01.flac"), tags={}, duration_secs=689.0, format="flac")
+        tags = _build_new_tags(release, track, 0, 2)
+
+        assert tags["title"] == "The Dance Electric"
+        assert tags["tracknumber"] == "1"
+        assert tags["discnumber"] == "2"
 
 
 class TestSearchCandidates:
@@ -110,13 +170,34 @@ class TestBuildDiff:
                     MBTrack(number=3, title="Out of Control"),
                 ]
             },
-            date="1973",
+            date="",
             country="",
             label="",
             barcode="075596066624",
         )
         result = build_diff(album, release)
         assert not result.has_changes
+
+    def test_multi_disc(self) -> None:
+        release = _make_two_disc_release()
+        tracks = [
+            TrackTags(path=Path("01a.flac"), tags={"discnumber": "1", "tracknumber": "1"},
+                      duration_secs=278.0, format="flac"),
+            TrackTags(path=Path("01b.flac"), tags={"discnumber": "2", "tracknumber": "1"},
+                      duration_secs=689.0, format="flac"),
+            TrackTags(path=Path("02a.flac"), tags={"discnumber": "1", "tracknumber": "2"},
+                      duration_secs=233.0, format="flac"),
+            TrackTags(path=Path("02b.flac"), tags={"discnumber": "2", "tracknumber": "2"},
+                      duration_secs=300.0, format="flac"),
+        ]
+        album = AlbumTags(directory=Path("/music"), tracks=tracks)
+        result = build_diff(album, release)
+
+        titles = [
+            next((c.new_value for c in d.changes if c.field == "title"), None)
+            for d in result.diffs
+        ]
+        assert titles == ["Let's Go Crazy", "The Dance Electric", "Take Me With U", "Love and Sex"]
 
 
 class TestApplyChanges:

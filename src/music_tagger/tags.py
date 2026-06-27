@@ -28,6 +28,7 @@ FIELD_MAP: dict[str, tuple[str, str]] = {
     "discnumber": ("DISCNUMBER", "TPOS"),
     "date": ("DATE", "TDRC"),
     "originaldate": ("ORIGINALDATE", "TDOR"),
+    "releasedate": ("RELEASEDATE", "TDRL"),
     "genre": ("GENRE", "TCON"),
     "composer": ("COMPOSER", "TCOM"),
     "catalognumber": ("CATALOGNUMBER", "TXXX:CATALOGNUMBER"),
@@ -178,11 +179,18 @@ def compute_diff(
     track: TrackTags, new_tags: dict[str, str]
 ) -> list[TagChange]:
     """Compute the tag changes needed for a single track."""
+    # Fields where comparison should be case-insensitive
+    case_insensitive = {"releasestatus", "releasetype"}
+
     changes = []
     for field_name, new_value in sorted(new_tags.items()):
         old_value = track.tags.get(field_name, "")
-        if old_value != new_value:
-            changes.append(TagChange(field=field_name, old_value=old_value, new_value=new_value))
+        if field_name in case_insensitive:
+            if old_value.lower() == new_value.lower():
+                continue
+        elif old_value == new_value:
+            continue
+        changes.append(TagChange(field=field_name, old_value=old_value, new_value=new_value))
     return changes
 
 
