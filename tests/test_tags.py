@@ -97,6 +97,30 @@ class TestComputeDiff:
         assert changes[0].old_value == ""
         assert changes[0].new_value == "Asylum Records"
 
+    def test_title_ignores_mb_disambig_suffix(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        track = album.tracks[0]
+        changes = compute_diff(track, {"title": "Desperado (single edit)"})
+        assert changes == []
+
+    def test_title_ignores_live_suffix(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        track = album.tracks[0]
+        changes = compute_diff(track, {"title": "Desperado (live & acoustic)"})
+        assert changes == []
+
+    def test_title_keeps_legit_parenthetical(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        track = album.tracks[0]
+        changes = compute_diff(track, {"title": "Desperado (reprise)"})
+        assert len(changes) == 1
+
+    def test_title_keeps_different_title_with_parens(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        track = album.tracks[0]
+        changes = compute_diff(track, {"title": "Heart (Broken)"})
+        assert len(changes) == 1
+
     def test_releasestatus_case_insensitive(self, flac_album: Path) -> None:
         album = read_album(flac_album)
         track = album.tracks[0]

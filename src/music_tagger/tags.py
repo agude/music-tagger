@@ -17,6 +17,11 @@ from mutagen.mp3 import MP3
 
 AUDIO_EXTENSIONS = {".flac", ".mp3"}
 
+_MB_DISAMBIG_TERMS = {
+    "acoustic", "demo", "live", "radio edit", "remaster",
+    "remastered", "remix", "single edit",
+}
+
 # Canonical field name -> (FLAC Vorbis tag, MP3 ID3 frame)
 # For MP3 TXXX frames, the value is the description string.
 FIELD_MAP: dict[str, tuple[str, str]] = {
@@ -190,6 +195,12 @@ def compute_diff(
                 continue
         elif old_value == new_value:
             continue
+        if field_name == "title" and old_value and new_value.startswith(old_value):
+            suffix = new_value[len(old_value):].strip()
+            if suffix.startswith("(") and suffix.endswith(")"):
+                inner = suffix[1:-1].lower()
+                if any(t in inner for t in _MB_DISAMBIG_TERMS):
+                    continue
         changes.append(TagChange(field=field_name, old_value=old_value, new_value=new_value))
     return changes
 
