@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Runtime artifacts
+checklist.md
+changes.log

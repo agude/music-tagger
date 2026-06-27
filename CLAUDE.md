@@ -22,15 +22,17 @@ Three CLI subcommands, driven by Claude Code in conversation:
 
 Processing the library is staged album by album across sessions:
 
-1. Run `scan` once to generate `checklist.md`.
-2. Each session: read `checklist.md`, find the next unchecked album.
+1. Run `scan` once to generate the checklist.
+2. Each session: read the checklist, find the next `- [ ]` entry.
 3. Run `candidates` for that album, pick the release, run `tag --dry-run`,
    review, then `tag --log changes.log`.
-4. Mark the album `[x]` in the checklist.
+4. Mark the entry `- [x]` in the checklist.
 5. Repeat until done. Re-scan if needed to catch stragglers.
 
-The checklist and log file persist across sessions. The checklist tracks
-what's left; the log tracks what was changed for auditing.
+**File locations:**
+- Checklist: `~/Projects/music-tagger/checklist.md`
+- Change log: `~/Projects/music-tagger/changes.log`
+- Library root: `/mnt/synology/media/music`
 
 ## Matching rules
 
