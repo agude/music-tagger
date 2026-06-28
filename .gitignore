@@ -11,4 +11,6 @@ wheels/
 
 # Runtime artifacts
 checklist.md
+checklist-all.md
 changes.log
+issues.md
