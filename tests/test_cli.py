@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from music_tagger.cli import _is_album_dir, _print_diff
+from music_tagger.cli import _is_album_dir, _print_diff, _scan
 from music_tagger.musicbrainz import MBRelease
 from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album
 from music_tagger.tagger import AlbumResult, TrackDiff
@@ -55,6 +56,77 @@ class TestPrintDiff:
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "title: Desperado" in captured.out
         assert "→ New" in captured.out
+
+
+class TestScanCommand:
+    def test_outputs_json(self, flac_album: Path, tmp_path: Path) -> None:
+        out = tmp_path / "scan.json"
+        _scan([str(flac_album.parent), "--all", "-o", str(out)])
+        data = json.loads(out.read_text())
+        assert len(data) == 1
+        assert data[0]["artist"] == "Eagles"
+        assert data[0]["album"] == "Desperado"
+        assert data[0]["track_count"] == 3
+        assert data[0]["status"] == "ok"
+        assert data[0]["done"] is False
+        assert data[0]["musicbrainz_albumid"] == "test-album-id-1"
+
+    def test_skips_consistent_without_all(self, flac_album: Path, tmp_path: Path, capsys: object) -> None:
+        out = tmp_path / "scan.json"
+        _scan([str(flac_album.parent), "-o", str(out)])
+        assert not out.exists()
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "All albums have consistent" in captured.out
+
+    def test_no_id_status(self, tmp_path: Path) -> None:
+        album_dir = tmp_path / "noalbum"
+        album_dir.mkdir()
+        import shutil
+        from tests.conftest import FIXTURES
+        for f in sorted((FIXTURES / "album_flac").iterdir()):
+            if f.suffix == ".flac":
+                shutil.copy2(f, album_dir / f.name)
+        # Strip the MB album ID from the copies
+        from mutagen.flac import FLAC
+        for f in album_dir.glob("*.flac"):
+            audio = FLAC(f)
+            if "MUSICBRAINZ_ALBUMID" in audio:
+                del audio["MUSICBRAINZ_ALBUMID"]
+                audio.save()
+        out = tmp_path / "scan.json"
+        _scan([str(tmp_path), "-o", str(out)])
+        data = json.loads(out.read_text())
+        no_id = [e for e in data if e["status"] == "no_id"]
+        assert len(no_id) == 1
+        assert "musicbrainz_albumid" not in no_id[0]
+
+    def test_split_status(self, tmp_path: Path) -> None:
+        album_dir = tmp_path / "splitalbum"
+        album_dir.mkdir()
+        import shutil
+        from tests.conftest import FIXTURES
+        for f in sorted((FIXTURES / "album_flac").iterdir()):
+            if f.suffix == ".flac":
+                shutil.copy2(f, album_dir / f.name)
+        from mutagen.flac import FLAC
+        files = sorted(album_dir.glob("*.flac"))
+        audio = FLAC(files[0])
+        audio["MUSICBRAINZ_ALBUMID"] = ["different-id"]
+        audio.save()
+        out = tmp_path / "scan.json"
+        _scan([str(tmp_path), "-o", str(out)])
+        data = json.loads(out.read_text())
+        split = [e for e in data if e["status"] == "split"]
+        assert len(split) == 1
+        assert isinstance(split[0]["musicbrainz_albumid"], list)
+        assert len(split[0]["musicbrainz_albumid"]) == 2
+
+    def test_stdout_when_no_output(self, flac_album: Path, capsys: object) -> None:
+        _scan([str(flac_album.parent), "--all"])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        data = json.loads(captured.out)
+        assert len(data) == 1
+        assert data[0]["artist"] == "Eagles"
 
 
 class TestCandidatesCommand:

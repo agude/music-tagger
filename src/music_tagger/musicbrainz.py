@@ -269,9 +269,15 @@ class MusicBrainzClient:
                 isrcs = recording.get("isrcs", [])
                 credits = _parse_recording_credits(recording)
 
+                raw_number = t.get("number", 0)
+                try:
+                    track_number = int(raw_number)
+                except (ValueError, TypeError):
+                    track_number = t.get("position", 0)
+
                 tracks.append(
                     MBTrack(
-                        number=int(t.get("number", 0)),
+                        number=track_number,
                         title=t.get("title", recording.get("title", "")),
                         duration_ms=t.get("length") or recording.get("length"),
                         artist_id=track_artist_id,

@@ -31,12 +31,12 @@ def _find_album_dirs(root: Path) -> list[Path]:
 def _scan(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger scan",
-        description="Scan library and generate a checklist of albums to process.",
+        description="Scan library and output a JSON list of albums to process.",
     )
     parser.add_argument("path", type=Path, help="Library root directory.")
     parser.add_argument(
         "-o", "--output", type=Path, default=None,
-        help="Output checklist file (default: stdout).",
+        help="Output JSON file (default: stdout).",
     )
     parser.add_argument(
         "--all", action="store_true",
@@ -49,10 +49,12 @@ def _scan(argv: list[str] | None = None) -> None:
         print(f"Error: {target} is not a directory.", file=sys.stderr)
         sys.exit(1)
 
+    import json
+
     from .tags import read_album
 
     dirs = _find_album_dirs(target)
-    lines: list[str] = []
+    entries: list[dict[str, object]] = []
 
     for album_dir in dirs:
         album = read_album(album_dir)
@@ -63,30 +65,36 @@ def _scan(argv: list[str] | None = None) -> None:
         ids.discard("")
 
         if len(ids) > 1:
-            status = f"SPLIT ({len(ids)} IDs)"
+            status = "split"
         elif len(ids) == 0:
-            status = "NO MB ID"
-        elif getattr(args, "all", False):
-            mb_id = next(iter(ids))
-            status = f"ID: {mb_id}"
+            status = "no_id"
+        elif args.all:
+            status = "ok"
         else:
             continue
 
-        lines.append(
-            f"- [ ] `{album_dir}` — {album.artist} — {album.album} "
-            f"({album.track_count} tracks) [{status}]"
-        )
+        entry: dict[str, object] = {
+            "path": str(album_dir),
+            "artist": album.artist,
+            "album": album.album,
+            "track_count": album.track_count,
+            "status": status,
+            "done": False,
+        }
+        if ids:
+            entry["musicbrainz_albumid"] = sorted(ids) if len(ids) > 1 else next(iter(ids))
 
-    if not lines:
+        entries.append(entry)
+
+    if not entries:
         print("All albums have consistent MusicBrainz IDs.")
         return
 
-    output = f"# music-tagger checklist\n\n{len(lines)} albums to process.\n\n"
-    output += "\n".join(lines) + "\n"
+    output = json.dumps(entries, indent=2, ensure_ascii=False) + "\n"
 
     if args.output:
         args.output.write_text(output)
-        print(f"Wrote {len(lines)} entries to {args.output}")
+        print(f"Wrote {len(entries)} entries to {args.output}")
     else:
         print(output)
 
