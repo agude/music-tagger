@@ -12,5 +12,7 @@ wheels/
 # Runtime artifacts
 checklist.md
 checklist-all.md
+checklist.json
 changes.log
 issues.md
+notes/
