@@ -146,18 +146,45 @@ def search_candidates(
     return album, detailed
 
 
+def _parse_track_number(track: TrackTags) -> int | None:
+    """Extract track number from tags. Returns None if missing/unparseable."""
+    raw = track.tags.get("tracknumber", "")
+    try:
+        return int(raw.split("/")[0])
+    except (ValueError, IndexError):
+        return None
+
+
 def build_diff(album: AlbumTags, release: MBRelease) -> AlbumResult:
-    """Compute the tag diff between current tags and a chosen release."""
-    # Group tracks by disc number, tracking each track's position within its disc
-    disc_positions: dict[int, int] = {}
+    """Compute the tag diff between current tags and a chosen release.
+
+    Matches local files to MB tracks by tracknumber tag, not file position.
+    This ensures partial albums (e.g. one track from a 10-track release)
+    get matched to the correct MB track.
+    """
+    # Index MB tracks by (disc, number) for direct lookup
+    mb_index: dict[tuple[int, int], int] = {}
+    for disc_num, disc_tracks in release.discs.items():
+        for i, mbt in enumerate(disc_tracks):
+            mb_index[(disc_num, mbt.number)] = i
 
     diffs: list[TrackDiff] = []
     for track in album.tracks:
         disc_num = _parse_disc_number(track)
-        track_index = disc_positions.get(disc_num, 0)
-        disc_positions[disc_num] = track_index + 1
+        track_num = _parse_track_number(track)
 
-        new_tags = _build_new_tags(release, track, track_index, disc_num)
+        track_index: int | None = None
+        if track_num is not None:
+            key = (disc_num, track_num)
+            if key in mb_index:
+                track_index = mb_index[key]
+
+        if track_index is not None:
+            new_tags = _build_new_tags(release, track, track_index, disc_num)
+        else:
+            # No tracknumber or no matching MB track — apply album-level tags only
+            new_tags = _build_new_tags(release, track, len(release.discs.get(disc_num, [])), disc_num)
+
         changes = compute_diff(track, new_tags)
         diffs.append(TrackDiff(track=track, changes=changes))
 

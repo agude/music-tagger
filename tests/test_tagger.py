@@ -9,6 +9,7 @@ from music_tagger.tagger import (
     TrackDiff,
     _build_new_tags,
     _parse_disc_number,
+    _parse_track_number,
     apply_changes,
     build_diff,
     search_candidates,
@@ -81,6 +82,24 @@ class TestParseDiscNumber:
     def test_garbage(self) -> None:
         t = TrackTags(path=Path("x.flac"), tags={"discnumber": "abc"}, format="flac")
         assert _parse_disc_number(t) == 1
+
+
+class TestParseTrackNumber:
+    def test_simple(self) -> None:
+        t = TrackTags(path=Path("x.flac"), tags={"tracknumber": "5"}, format="flac")
+        assert _parse_track_number(t) == 5
+
+    def test_fraction(self) -> None:
+        t = TrackTags(path=Path("x.flac"), tags={"tracknumber": "3/10"}, format="flac")
+        assert _parse_track_number(t) == 3
+
+    def test_missing(self) -> None:
+        t = TrackTags(path=Path("x.flac"), tags={}, format="flac")
+        assert _parse_track_number(t) is None
+
+    def test_garbage(self) -> None:
+        t = TrackTags(path=Path("x.flac"), tags={"tracknumber": "abc"}, format="flac")
+        assert _parse_track_number(t) is None
 
 
 class TestBuildNewTags:
@@ -272,6 +291,61 @@ class TestBuildDiff:
             for d in result.diffs
         ]
         assert titles == ["Let's Go Crazy", "The Dance Electric", "Take Me With U", "Love and Sex"]
+
+    def test_partial_album_matches_by_tracknumber(self) -> None:
+        """A single file with tracknumber=3 should match MB track 3, not track 1."""
+        release = _make_release()
+        tracks = [
+            TrackTags(
+                path=Path("03.flac"),
+                tags={"tracknumber": "3", "title": "Old Title"},
+                duration_secs=195.0,
+                format="flac",
+            ),
+        ]
+        album = AlbumTags(directory=Path("/music"), tracks=tracks)
+        result = build_diff(album, release)
+
+        assert len(result.diffs) == 1
+        title_change = next(c for c in result.diffs[0].changes if c.field == "title")
+        assert title_change.new_value == "Out of Control"
+
+    def test_partial_album_does_not_match_track_1(self) -> None:
+        """Ensure a file with tracknumber=3 does NOT get track 1's title."""
+        release = _make_release()
+        tracks = [
+            TrackTags(
+                path=Path("03.flac"),
+                tags={"tracknumber": "3"},
+                duration_secs=195.0,
+                format="flac",
+            ),
+        ]
+        album = AlbumTags(directory=Path("/music"), tracks=tracks)
+        result = build_diff(album, release)
+
+        title_change = next(c for c in result.diffs[0].changes if c.field == "title")
+        assert title_change.new_value != "Doolin-Dalton"
+
+    def test_missing_tracknumber_gets_album_tags_only(self) -> None:
+        """A file with no tracknumber tag should still get album-level tags."""
+        release = _make_release()
+        tracks = [
+            TrackTags(
+                path=Path("unknown.flac"),
+                tags={},
+                duration_secs=200.0,
+                format="flac",
+            ),
+        ]
+        album = AlbumTags(directory=Path("/music"), tracks=tracks)
+        result = build_diff(album, release)
+
+        assert len(result.diffs) == 1
+        fields = {c.field for c in result.diffs[0].changes}
+        assert "album" in fields
+        assert "musicbrainz_albumid" in fields
+        assert "title" not in fields
 
 
 class TestApplyChanges:
