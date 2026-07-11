@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from music_tagger.cli import _is_album_dir, _match, _mb_release, _mb_search, _print_diff, _read, _scan
+from music_tagger.cli import _diff, _is_album_dir, _match, _mb_release, _mb_search, _print_diff, _read, _scan
 from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album
 from music_tagger.tagger import AlbumResult, TrackDiff
@@ -279,6 +279,59 @@ class TestMatchCommand:
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "1 candidates scored" in captured.out
         assert "r-1" in captured.out
+        assert out.exists()
+
+
+class TestDiffCommand:
+    def test_json_to_stdout(self, flac_album: Path, tmp_path: Path, capsys: object) -> None:
+        from music_tagger.tags import read_album as _read_album
+        album = _read_album(flac_album)
+        evidence_path = tmp_path / "evidence.json"
+        evidence_path.write_text(json.dumps(album.to_dict()))
+
+        release = MBRelease(
+            id="r-1", title="Desperado", date="1973", country="US",
+            label="Asylum", track_count=3, format="CD",
+            discs={1: [
+                MBTrack(number=1, title="Doolin-Dalton"),
+                MBTrack(number=2, title="Twenty-One"),
+                MBTrack(number=3, title="Out of Control"),
+            ]},
+        )
+        release_path = tmp_path / "release.json"
+        release_path.write_text(json.dumps(release.to_dict()))
+
+        _diff(["--evidence", str(evidence_path), "--release", str(release_path)])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        data = json.loads(captured.out)
+        assert data["release_id"] == "r-1"
+        assert len(data["tracks"]) == 3
+        changed_tracks = [t for t in data["tracks"] if t["changes"]]
+        assert len(changed_tracks) > 0
+
+    def test_digest_shows_changed_fields(self, flac_album: Path, tmp_path: Path, capsys: object) -> None:
+        from music_tagger.tags import read_album as _read_album
+        album = _read_album(flac_album)
+        evidence_path = tmp_path / "evidence.json"
+        evidence_path.write_text(json.dumps(album.to_dict()))
+
+        release = MBRelease(
+            id="r-1", title="Desperado", track_count=3,
+            discs={1: [
+                MBTrack(number=1, title="Doolin-Dalton"),
+                MBTrack(number=2, title="Twenty-One"),
+                MBTrack(number=3, title="Out of Control"),
+            ]},
+            barcode="075596066624",
+        )
+        release_path = tmp_path / "release.json"
+        release_path.write_text(json.dumps(release.to_dict()))
+
+        out = tmp_path / "diff.json"
+        _diff(["--evidence", str(evidence_path), "--release", str(release_path), "-o", str(out)])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "r-1" in captured.out
+        assert "with changes" in captured.out
         assert out.exists()
 
 

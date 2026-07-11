@@ -260,6 +260,21 @@ class TagChange:
     old_value: str
     new_value: str
 
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "field": self.field,
+            "old_value": self.old_value,
+            "new_value": self.new_value,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, str]) -> TagChange:
+        return cls(
+            field=data["field"],
+            old_value=data.get("old_value", ""),
+            new_value=data["new_value"],
+        )
+
 
 def compute_diff(
     track: TrackTags, new_tags: dict[str, str]

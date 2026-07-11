@@ -191,6 +191,42 @@ def _match(argv: list[str] | None = None) -> None:
     _output_json(data, args.out, "\n".join(lines))
 
 
+def _diff(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger diff",
+        description="Compute tag diff between local evidence and a MusicBrainz release.",
+    )
+    parser.add_argument(
+        "--evidence", type=Path, required=True,
+        help="Evidence JSON from `read`.",
+    )
+    parser.add_argument(
+        "--release", type=Path, required=True,
+        help="Release JSON from `mb release`.",
+    )
+    parser.add_argument(
+        "-o", "--out", type=Path, default=None,
+        help="Output JSON file (prints digest to stdout).",
+    )
+    args = parser.parse_args(argv)
+
+    album = AlbumTags.from_dict(json.loads(args.evidence.read_text()))
+    release = MBRelease.from_dict(json.loads(args.release.read_text()))
+
+    result = build_diff(album, release)
+    data = result.to_dict()
+
+    changed = [d for d in result.diffs if d.changes]
+    lines = [f"Release: {release.title} [{release.id}]"]
+    lines.append(f"{len(result.diffs)} tracks, {len(changed)} with changes:")
+    for d in changed:
+        fields = ", ".join(c.field for c in d.changes)
+        lines.append(f"  {d.track.path.name}: {fields}")
+    if not changed:
+        lines.append("  (no changes)")
+    _output_json(data, args.out, "\n".join(lines))
+
+
 def _scan(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger scan",
@@ -420,6 +456,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("read", help="Read album tags and durations as JSON.")
     sub.add_parser("mb", help="MusicBrainz query commands.")
     sub.add_parser("match", help="Score candidates by duration match.")
+    sub.add_parser("diff", help="Compute tag diff against a MusicBrainz release.")
     sub.add_parser("scan", help="Generate a checklist of albums needing attention.")
     sub.add_parser("candidates", help="Show MusicBrainz candidates for an album.")
     sub.add_parser("tag", help="Apply tags from a chosen MusicBrainz release.")
@@ -432,6 +469,8 @@ def main(argv: list[str] | None = None) -> None:
         _mb(remaining)
     elif args.command == "match":
         _match(remaining)
+    elif args.command == "diff":
+        _diff(remaining)
     elif args.command == "scan":
         _scan(remaining)
     elif args.command == "candidates":

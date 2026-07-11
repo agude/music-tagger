@@ -51,6 +51,15 @@ class TestAlbumTagsSerialization:
         assert len(d["tracks"]) == 3
 
 
+class TestTagChangeSerialization:
+    def test_round_trip(self) -> None:
+        change = TagChange(field="title", old_value="Old", new_value="New")
+        restored = TagChange.from_dict(change.to_dict())
+        assert restored.field == "title"
+        assert restored.old_value == "Old"
+        assert restored.new_value == "New"
+
+
 class TestReadAlbumFlac:
     def test_track_count(self, flac_album: Path) -> None:
         album = read_album(flac_album)

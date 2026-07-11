@@ -421,6 +421,39 @@ class TestScoreCandidates:
         assert restored.stats.max_deviation_secs == 0.5
 
 
+class TestAlbumResultSerialization:
+    def test_round_trip(self) -> None:
+        track = TrackTags(path=Path("/music/01.flac"), tags={"title": "Old"}, format="flac")
+        changes = [TagChange(field="title", old_value="Old", new_value="New")]
+        result = AlbumResult(
+            album=AlbumTags(directory=Path("/music"), tracks=[track]),
+            release=_make_release(),
+            diffs=[TrackDiff(track=track, changes=changes)],
+        )
+        d = result.to_dict()
+        assert d["release_id"] == "release-1"
+        assert len(d["tracks"]) == 1
+        assert d["tracks"][0]["path"] == "/music/01.flac"
+        assert d["tracks"][0]["changes"][0]["field"] == "title"
+
+        restored = AlbumResult.from_dict(d)
+        assert restored.release.id == "release-1"
+        assert len(restored.diffs) == 1
+        assert restored.diffs[0].track.path == Path("/music/01.flac")
+        assert restored.diffs[0].changes[0].new_value == "New"
+
+    def test_empty_changes(self) -> None:
+        track = TrackTags(path=Path("/music/01.flac"), tags={}, format="flac")
+        result = AlbumResult(
+            album=AlbumTags(directory=Path("/music"), tracks=[track]),
+            release=_make_release(),
+            diffs=[TrackDiff(track=track, changes=[])],
+        )
+        d = result.to_dict()
+        assert d["tracks"][0]["changes"] == []
+        assert not result.has_changes
+
+
 class TestApplyChanges:
     def test_writes_changes(self, flac_album: Path) -> None:
         album = read_album(flac_album)

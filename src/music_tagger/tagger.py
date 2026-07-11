@@ -16,6 +16,13 @@ class TrackDiff:
     track: TrackTags
     changes: list[TagChange]
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": str(self.track.path),
+            "format": self.track.format,
+            "changes": [c.to_dict() for c in self.changes],
+        }
+
 
 @dataclass
 class AlbumResult:
@@ -26,6 +33,27 @@ class AlbumResult:
     @property
     def has_changes(self) -> bool:
         return any(d.changes for d in self.diffs)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "release_id": self.release.id,
+            "release_title": self.release.title,
+            "tracks": [d.to_dict() for d in self.diffs],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> AlbumResult:
+        diffs = []
+        for td in data.get("tracks", []):
+            track = TrackTags(
+                path=Path(td["path"]),
+                format=td.get("format", ""),
+            )
+            changes = [TagChange.from_dict(c) for c in td.get("changes", [])]
+            diffs.append(TrackDiff(track=track, changes=changes))
+        release = MBRelease(id=data["release_id"], title=data.get("release_title", ""))
+        album = AlbumTags(directory=Path("."))
+        return cls(album=album, release=release, diffs=diffs)
 
 
 @dataclass
