@@ -403,15 +403,16 @@ class TestWriteTagsCommand:
 
 
 class TestCandidatesCommand:
-    def test_prints_candidates(self, capsys: object, flac_album: Path) -> None:
+    def test_json_to_stdout(self, capsys: object, flac_album: Path) -> None:
         from music_tagger.cli import _print_candidates
-        from music_tagger.musicbrainz import MBRelease, MBTrack
 
         release = MBRelease(
             id="r-1", title="Desperado", date="1973", country="US",
             label="Asylum", track_count=3, format="CD",
             discs={1: [
                 MBTrack(number=1, title="Track 1", duration_ms=200000),
+                MBTrack(number=2, title="Track 2", duration_ms=200000),
+                MBTrack(number=3, title="Track 3", duration_ms=200000),
             ]},
         )
 
@@ -424,8 +425,40 @@ class TestCandidatesCommand:
             _print_candidates([str(flac_album)])
 
         captured = capsys.readouterr()  # type: ignore[attr-defined]
+        data = json.loads(captured.out)
+        assert data["album"]["artist"] == "Eagles"
+        assert len(data["matches"]) == 1
+        assert data["matches"][0]["release"]["id"] == "r-1"
+        assert "tracks_within_2s" in data["matches"][0]["match"]
+
+    def test_digest_with_out(self, capsys: object, flac_album: Path, tmp_path: Path) -> None:
+        from music_tagger.cli import _print_candidates
+
+        release = MBRelease(
+            id="r-1", title="Desperado", date="1973", country="US",
+            label="Asylum", track_count=3, format="CD",
+            discs={1: [
+                MBTrack(number=1, title="T1", duration_ms=200000),
+                MBTrack(number=2, title="T2", duration_ms=200000),
+                MBTrack(number=3, title="T3", duration_ms=200000),
+            ]},
+        )
+
+        out = tmp_path / "candidates.json"
+        with (
+            patch("music_tagger.cli.search_candidates") as mock_search,
+            patch("music_tagger.cli.MusicBrainzClient"),
+        ):
+            album = read_album(flac_album)
+            mock_search.return_value = (album, [release])
+            _print_candidates([str(flac_album), "-o", str(out)])
+
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "Eagles" in captured.out
         assert "r-1" in captured.out
+        assert "scored" in captured.out
+        data = json.loads(out.read_text())
+        assert data["album"]["artist"] == "Eagles"
 
 
 class TestTagCommand:

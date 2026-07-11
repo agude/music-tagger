@@ -362,9 +362,13 @@ def _scan(argv: list[str] | None = None) -> None:
 def _print_candidates(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger candidates",
-        description="Show album file data and MusicBrainz candidate releases.",
+        description="Read album, search MusicBrainz, and score candidates.",
     )
     parser.add_argument("path", type=Path, help="Album directory.")
+    parser.add_argument(
+        "-o", "--out", type=Path, default=None,
+        help="Output JSON file (prints digest to stdout).",
+    )
     args = parser.parse_args(argv)
 
     target: Path = args.path.resolve()
@@ -378,49 +382,28 @@ def _print_candidates(argv: list[str] | None = None) -> None:
     finally:
         mb_client.close()
 
-    print(f"Album:  {album.artist} — {album.album}")
-    print(f"Dir:    {album.directory}")
-    print(f"Tracks: {album.track_count}")
-    print()
+    matches = score_candidates(album, candidates)
 
-    print("Files (durations from audio stream):")
-    for i, track in enumerate(album.tracks, 1):
-        dur = f"{track.duration_secs:.1f}s"
-        title = track.tags.get("title", "")
-        print(f"  {i:2d}. {track.path.name}  ({dur})  [{title}]")
-    print()
+    data = {
+        "album": album.to_dict(),
+        "matches": [m.to_dict() for m in matches],
+    }
 
-    existing = album.tracks[0].tags if album.tracks else {}
-    tag_lines = []
-    for field in (
-        "barcode", "catalognumber", "country", "media",
-        "date", "label", "musicbrainz_albumid",
-    ):
-        val = existing.get(field, "")
-        if val:
-            tag_lines.append(f"  {field}: {val}")
-    if tag_lines:
-        print("Existing tags (track 1):")
-        for line in tag_lines:
-            print(line)
-        print()
-
-    print(f"MusicBrainz candidates ({len(candidates)}):")
-    print()
-    for c in candidates:
-        print(f"  [{c.id}]")
-        print(f"  {c.title} ({c.date}) — {c.country} — {c.label}")
-        if c.catalognum:
-            print(f"  Catalog#: {c.catalognum}  Barcode: {c.barcode}")
-        print(f"  Format: {c.format}  Tracks: {c.track_count}")
-        for disc_num in sorted(c.discs):
-            tracks = c.discs[disc_num]
-            if len(c.discs) > 1:
-                print(f"  Disc {disc_num}:")
-            for t in tracks:
-                dur = f"{t.duration_secs:.1f}s" if t.duration_secs is not None else "?"
-                print(f"    {t.number:2d}. {t.title}  ({dur})")
-        print()
+    lines = [
+        f"{album.artist} — {album.album}  ({album.track_count} tracks)",
+        f"",
+        f"{len(matches)} candidates scored:",
+    ]
+    for m in matches:
+        r = m.release
+        s = m.stats
+        count_ok = "=" if s.track_count_match else "!"
+        lines.append(
+            f"  [{r.id}]  {r.title} ({r.date}) {r.country} / {r.label} / {r.format}"
+            f"  {s.tracks_within_2s}/{s.tracks_compared} within 2s  max_dev={s.max_deviation_secs:.1f}s"
+            f"  count{count_ok}"
+        )
+    _output_json(data, args.out, "\n".join(lines))
 
 
 def _write_log(log_path: Path, result: AlbumResult) -> None:
