@@ -12,6 +12,7 @@ from .musicbrainz import MusicBrainzClient
 from .tags import AUDIO_EXTENSIONS, AlbumTags, read_album
 from .discid import parse_rip_dir
 from .musicbrainz import MBRelease
+from .placement import compute_placement
 from .tagger import AlbumResult, apply_changes, build_diff, score_candidates, search_candidates
 
 
@@ -493,6 +494,43 @@ def _print_diff(result: AlbumResult) -> None:
     print()
 
 
+def _path_for(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger path-for",
+        description="Compute library destination paths for album files.",
+    )
+    parser.add_argument(
+        "--evidence", type=Path, required=True,
+        help="Evidence JSON from `read`.",
+    )
+    parser.add_argument(
+        "--root", type=Path, default=None,
+        help="Library root (default: /mnt/synology/media/music).",
+    )
+    parser.add_argument(
+        "-o", "--out", type=Path, default=None,
+        help="Output JSON file (prints digest to stdout).",
+    )
+    args = parser.parse_args(argv)
+
+    album = AlbumTags.from_dict(json.loads(args.evidence.read_text()))
+
+    kwargs = {}
+    if args.root:
+        kwargs["root"] = args.root
+
+    plan = compute_placement(album, **kwargs)
+    data = plan.to_dict()
+
+    artist = album.artist or "Unknown Artist"
+    album_name = album.album or "Unknown Album"
+    lines = [
+        f"{artist} — {album_name}",
+        f"{len(plan.mappings)} files → {plan.album_dir}",
+    ]
+    _output_json(data, args.out, "\n".join(lines))
+
+
 def _tag(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger tag",
@@ -549,6 +587,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("match", help="Score candidates by duration match.")
     sub.add_parser("diff", help="Compute tag diff against a MusicBrainz release.")
     sub.add_parser("write-tags", help="Apply tag changes from a diff JSON.")
+    sub.add_parser("path-for", help="Compute library destination paths.")
     sub.add_parser("scan", help="Generate a checklist of albums needing attention.")
     sub.add_parser("candidates", help="Show MusicBrainz candidates for an album.")
     sub.add_parser("tag", help="Apply tags from a chosen MusicBrainz release.")
@@ -567,6 +606,8 @@ def main(argv: list[str] | None = None) -> None:
         _diff(remaining)
     elif args.command == "write-tags":
         _write_tags(remaining)
+    elif args.command == "path-for":
+        _path_for(remaining)
     elif args.command == "scan":
         _scan(remaining)
     elif args.command == "candidates":
