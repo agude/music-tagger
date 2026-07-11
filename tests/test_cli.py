@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from music_tagger.cli import _is_album_dir, _print_diff, _read, _scan
+from music_tagger.cli import _is_album_dir, _mb_search, _print_diff, _read, _scan
 from music_tagger.musicbrainz import MBRelease
 from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album
 from music_tagger.tagger import AlbumResult, TrackDiff
@@ -162,6 +162,37 @@ class TestScanCommand:
         data = json.loads(captured.out)
         assert len(data) == 1
         assert data[0]["artist"] == "Eagles"
+
+
+class TestMbSearchCommand:
+    def test_json_to_stdout(self, capsys: object) -> None:
+        release = MBRelease(
+            id="r-1", title="Desperado", date="1973", country="US",
+            label="Asylum", track_count=11, format="CD",
+        )
+        with patch("music_tagger.cli.MusicBrainzClient") as mock_cls:
+            mock_cls.return_value.search_releases.return_value = [release]
+            _mb_search(["--artist", "Eagles", "--album", "Desperado"])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        data = json.loads(captured.out)
+        assert len(data) == 1
+        assert data[0]["id"] == "r-1"
+        assert data[0]["title"] == "Desperado"
+
+    def test_json_to_file_with_digest(self, capsys: object, tmp_path: Path) -> None:
+        release = MBRelease(
+            id="r-1", title="Desperado", date="1973", country="US",
+            label="Asylum", track_count=11, format="CD",
+        )
+        out = tmp_path / "candidates.json"
+        with patch("music_tagger.cli.MusicBrainzClient") as mock_cls:
+            mock_cls.return_value.search_releases.return_value = [release]
+            _mb_search(["--artist", "Eagles", "--album", "Desperado", "-o", str(out)])
+        data = json.loads(out.read_text())
+        assert len(data) == 1
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "1 candidates" in captured.out
+        assert "r-1" in captured.out
 
 
 class TestCandidatesCommand:

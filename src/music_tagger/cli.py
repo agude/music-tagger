@@ -72,6 +72,55 @@ def _read(argv: list[str] | None = None) -> None:
     _output_json(data, args.out, "\n".join(lines))
 
 
+def _mb_search(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger mb search",
+        description="Search MusicBrainz for candidate releases.",
+    )
+    parser.add_argument("--artist", required=True, help="Artist name.")
+    parser.add_argument("--album", required=True, help="Album title.")
+    parser.add_argument("--format", default="CD", help="Media format filter (default: CD).")
+    parser.add_argument("--limit", type=int, default=10, help="Max results (default: 10).")
+    parser.add_argument(
+        "-o", "--out", type=Path, default=None,
+        help="Output JSON file (prints digest to stdout).",
+    )
+    args = parser.parse_args(argv)
+
+    mb_client = MusicBrainzClient()
+    try:
+        results = mb_client.search_releases(
+            args.artist, args.album, format=args.format, limit=args.limit,
+        )
+    finally:
+        mb_client.close()
+
+    data = [r.to_dict() for r in results]
+
+    lines = [f'{len(results)} candidates for "{args.artist}" — "{args.album}":']
+    for r in results:
+        info = f"  [{r.id}]  {r.title} ({r.date}) {r.country} / {r.label} / {r.format} / {r.track_count}t"
+        lines.append(info)
+    _output_json(data, args.out, "\n".join(lines))
+
+
+def _mb(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger mb",
+        description="MusicBrainz query commands.",
+    )
+    sub = parser.add_subparsers(dest="mb_command")
+    sub.add_parser("search", help="Search for candidate releases.")
+
+    args, remaining = parser.parse_known_args(argv)
+
+    if args.mb_command == "search":
+        _mb_search(remaining)
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
 def _scan(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger scan",
@@ -299,6 +348,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("read", help="Read album tags and durations as JSON.")
+    sub.add_parser("mb", help="MusicBrainz query commands.")
     sub.add_parser("scan", help="Generate a checklist of albums needing attention.")
     sub.add_parser("candidates", help="Show MusicBrainz candidates for an album.")
     sub.add_parser("tag", help="Apply tags from a chosen MusicBrainz release.")
@@ -307,6 +357,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "read":
         _read(remaining)
+    elif args.command == "mb":
+        _mb(remaining)
     elif args.command == "scan":
         _scan(remaining)
     elif args.command == "candidates":

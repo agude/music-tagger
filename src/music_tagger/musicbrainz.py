@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 
@@ -43,6 +44,51 @@ class MBTrack:
     def duration_secs(self) -> float | None:
         return self.duration_ms / 1000.0 if self.duration_ms is not None else None
 
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"number": self.number, "title": self.title}
+        if self.duration_ms is not None:
+            d["duration_ms"] = self.duration_ms
+        for attr in (
+            "artist_id", "recording_id", "track_id", "isrc", "work_id",
+            "composer", "composer_id", "lyricist", "lyricist_id",
+            "producer", "producer_id", "engineer", "engineer_id",
+            "mixer", "mixer_id", "conductor", "conductor_id",
+            "remixer", "remixer_id", "performers", "performer_ids",
+        ):
+            val = getattr(self, attr)
+            if val:
+                d[attr] = val
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MBTrack:
+        return cls(
+            number=data["number"],
+            title=data["title"],
+            duration_ms=data.get("duration_ms"),
+            artist_id=data.get("artist_id", ""),
+            recording_id=data.get("recording_id", ""),
+            track_id=data.get("track_id", ""),
+            isrc=data.get("isrc", ""),
+            work_id=data.get("work_id", ""),
+            composer=data.get("composer", ""),
+            composer_id=data.get("composer_id", ""),
+            lyricist=data.get("lyricist", ""),
+            lyricist_id=data.get("lyricist_id", ""),
+            producer=data.get("producer", ""),
+            producer_id=data.get("producer_id", ""),
+            engineer=data.get("engineer", ""),
+            engineer_id=data.get("engineer_id", ""),
+            mixer=data.get("mixer", ""),
+            mixer_id=data.get("mixer_id", ""),
+            conductor=data.get("conductor", ""),
+            conductor_id=data.get("conductor_id", ""),
+            remixer=data.get("remixer", ""),
+            remixer_id=data.get("remixer_id", ""),
+            performers=data.get("performers", ""),
+            performer_ids=data.get("performer_ids", ""),
+        )
+
 
 @dataclass
 class MBRelease:
@@ -64,6 +110,60 @@ class MBRelease:
     first_release_date: str = ""
     asin: str = ""
     script: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "id": self.id,
+            "title": self.title,
+            "date": self.date,
+            "country": self.country,
+            "status": self.status,
+            "label": self.label,
+            "catalognum": self.catalognum,
+            "barcode": self.barcode,
+            "format": self.format,
+            "track_count": self.track_count,
+        }
+        if self.discs:
+            d["discs"] = {
+                str(k): [t.to_dict() for t in v] for k, v in self.discs.items()
+            }
+        for attr in (
+            "artist_id", "release_group_id", "release_group_type",
+            "first_release_date", "asin", "script",
+        ):
+            val = getattr(self, attr)
+            if val:
+                d[attr] = val
+        if self.secondary_types:
+            d["secondary_types"] = list(self.secondary_types)
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MBRelease:
+        discs: dict[int, list[MBTrack]] = {}
+        for k, v in data.get("discs", {}).items():
+            discs[int(k)] = [MBTrack.from_dict(t) for t in v]
+        return cls(
+            id=data["id"],
+            title=data.get("title", ""),
+            date=data.get("date", ""),
+            country=data.get("country", ""),
+            status=data.get("status", ""),
+            label=data.get("label", ""),
+            catalognum=data.get("catalognum", ""),
+            barcode=data.get("barcode", ""),
+            format=data.get("format", ""),
+            track_count=data.get("track_count", 0),
+            discs=discs,
+            artist_id=data.get("artist_id", ""),
+            release_group_id=data.get("release_group_id", ""),
+            release_group_type=data.get("release_group_type", ""),
+            secondary_types=data.get("secondary_types", []),
+            first_release_date=data.get("first_release_date", ""),
+            asin=data.get("asin", ""),
+            script=data.get("script", ""),
+        )
 
 
 _CREDIT_ROLES = {
