@@ -12,6 +12,7 @@ from .musicbrainz import MusicBrainzClient
 from .tags import AUDIO_EXTENSIONS, AlbumTags, read_album
 from .discid import parse_rip_dir
 from .musicbrainz import MBRelease
+from .coverart import fetch_cover_art
 from .placement import PlacementPlan, compute_placement, copy_files
 from .tagger import AlbumResult, apply_changes, build_diff, score_candidates, search_candidates
 
@@ -596,6 +597,32 @@ def _write_copy_log(log_path: Path, plan: PlacementPlan, result: object) -> None
         f.write("\n".join(lines))
 
 
+def _art(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger art",
+        description="Fetch cover art from the Cover Art Archive.",
+    )
+    parser.add_argument("path", type=Path, help="Album directory to save cover art into.")
+    parser.add_argument("--release-id", required=True, help="MusicBrainz release UUID.")
+    parser.add_argument("--full", action="store_true", help="Fetch full-size image instead of 500px.")
+    parser.add_argument("--force", action="store_true", help="Overwrite existing cover.jpg.")
+    args = parser.parse_args(argv)
+
+    target: Path = args.path.resolve()
+
+    result = fetch_cover_art(
+        args.release_id, target, full_size=args.full, force=args.force,
+    )
+
+    if result.not_found:
+        print("No cover art available for this release.")
+    elif result.skipped:
+        print(f"cover.jpg already exists at {result.path} (use --force to overwrite).")
+    elif result.saved:
+        size_kb = result.size_bytes / 1024
+        print(f"Saved cover.jpg ({size_kb:.0f} KB) to {result.path}")
+
+
 def _tag(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger tag",
@@ -654,6 +681,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("write-tags", help="Apply tag changes from a diff JSON.")
     sub.add_parser("path-for", help="Compute library destination paths.")
     sub.add_parser("copy", help="Copy files to library per a placement plan.")
+    sub.add_parser("art", help="Fetch cover art from the Cover Art Archive.")
     sub.add_parser("scan", help="Generate a checklist of albums needing attention.")
     sub.add_parser("candidates", help="Show MusicBrainz candidates for an album.")
     sub.add_parser("tag", help="Apply tags from a chosen MusicBrainz release.")
@@ -676,6 +704,8 @@ def main(argv: list[str] | None = None) -> None:
         _path_for(remaining)
     elif args.command == "copy":
         _copy(remaining)
+    elif args.command == "art":
+        _art(remaining)
     elif args.command == "scan":
         _scan(remaining)
     elif args.command == "candidates":
