@@ -406,32 +406,6 @@ def _print_candidates(argv: list[str] | None = None) -> None:
     _output_json(data, args.out, "\n".join(lines))
 
 
-def _write_log(log_path: Path, result: AlbumResult) -> None:
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    lines = [
-        f"## {result.album.artist} — {result.album.album}",
-        f"",
-        f"- **Date:** {timestamp}",
-        f"- **Dir:** `{result.album.directory}`",
-        f"- **Release:** {result.release.title} [`{result.release.id}`]",
-        f"- **Release info:** {result.release.date} / {result.release.country} / {result.release.label}",
-        f"",
-    ]
-    for diff in result.diffs:
-        if not diff.changes:
-            continue
-        lines.append(f"  {diff.track.path.name}:")
-        for change in diff.changes:
-            old = change.old_value or "(empty)"
-            lines.append(f"    {change.field}: {old} → {change.new_value}")
-    lines.append("")
-    lines.append("---")
-    lines.append("")
-
-    with open(log_path, "a") as f:
-        f.write("\n".join(lines))
-
-
 def _print_diff(result: AlbumResult) -> None:
     print(f"Release: {result.release.title} [{result.release.id}]")
     print(f"         {result.release.date} / {result.release.country} / {result.release.label}")
@@ -454,7 +428,7 @@ def _print_diff(result: AlbumResult) -> None:
 def _tag(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger tag",
-        description="Apply tags from a chosen MusicBrainz release.",
+        description="Fetch release, compute diff, and apply tags (wrapper over mb release + diff + write-tags).",
     )
     parser.add_argument("path", type=Path, help="Album directory.")
     parser.add_argument("--release-id", required=True, help="MusicBrainz release UUID.")
@@ -492,7 +466,7 @@ def _tag(argv: list[str] | None = None) -> None:
     print(f"Updated {count} track(s).")
 
     if args.log:
-        _write_log(args.log, result)
+        _write_log_entry(args.log, result)
 
 
 def main(argv: list[str] | None = None) -> None:
