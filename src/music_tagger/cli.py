@@ -104,6 +104,35 @@ def _mb_search(argv: list[str] | None = None) -> None:
     _output_json(data, args.out, "\n".join(lines))
 
 
+def _mb_release(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger mb release",
+        description="Fetch full release detail from MusicBrainz.",
+    )
+    parser.add_argument("release_id", help="MusicBrainz release UUID.")
+    parser.add_argument(
+        "-o", "--out", type=Path, default=None,
+        help="Output JSON file (prints digest to stdout).",
+    )
+    args = parser.parse_args(argv)
+
+    mb_client = MusicBrainzClient()
+    try:
+        release = mb_client.fetch_release(args.release_id)
+    finally:
+        mb_client.close()
+
+    data = release.to_dict()
+
+    disc_info = f"{len(release.discs)} disc(s)" if release.discs else "no disc info"
+    lines = [
+        f"{release.title} [{release.id}]",
+        f"{release.date} / {release.country} / {release.label} / {release.catalognum or '—'} / {release.format}",
+        f"{release.track_count} tracks, {disc_info}",
+    ]
+    _output_json(data, args.out, "\n".join(lines))
+
+
 def _mb(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger mb",
@@ -111,11 +140,14 @@ def _mb(argv: list[str] | None = None) -> None:
     )
     sub = parser.add_subparsers(dest="mb_command")
     sub.add_parser("search", help="Search for candidate releases.")
+    sub.add_parser("release", help="Fetch full release detail.")
 
     args, remaining = parser.parse_known_args(argv)
 
     if args.mb_command == "search":
         _mb_search(remaining)
+    elif args.mb_command == "release":
+        _mb_release(remaining)
     else:
         parser.print_help()
         sys.exit(1)

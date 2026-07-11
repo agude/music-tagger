@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from music_tagger.cli import _is_album_dir, _mb_search, _print_diff, _read, _scan
-from music_tagger.musicbrainz import MBRelease
+from music_tagger.cli import _is_album_dir, _mb_release, _mb_search, _print_diff, _read, _scan
+from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album
 from music_tagger.tagger import AlbumResult, TrackDiff
 
@@ -193,6 +193,42 @@ class TestMbSearchCommand:
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "1 candidates" in captured.out
         assert "r-1" in captured.out
+
+
+class TestMbReleaseCommand:
+    def test_json_to_stdout(self, capsys: object) -> None:
+        release = MBRelease(
+            id="r-1", title="Desperado", date="1973", country="US",
+            label="Asylum", track_count=11, format="CD",
+            discs={1: [MBTrack(number=1, title="Track 1", duration_ms=200000)]},
+            artist_id="art-1", release_group_id="rg-1",
+        )
+        with patch("music_tagger.cli.MusicBrainzClient") as mock_cls:
+            mock_cls.return_value.fetch_release.return_value = release
+            _mb_release(["r-1"])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        data = json.loads(captured.out)
+        assert data["id"] == "r-1"
+        assert data["title"] == "Desperado"
+        assert "1" in data["discs"]
+        assert len(data["discs"]["1"]) == 1
+
+    def test_json_to_file_with_digest(self, capsys: object, tmp_path: Path) -> None:
+        release = MBRelease(
+            id="r-1", title="Desperado", date="1973", country="US",
+            label="Asylum", track_count=11, format="CD",
+            discs={1: [MBTrack(number=1, title="Track 1", duration_ms=200000)]},
+        )
+        out = tmp_path / "release.json"
+        with patch("music_tagger.cli.MusicBrainzClient") as mock_cls:
+            mock_cls.return_value.fetch_release.return_value = release
+            _mb_release(["r-1", "-o", str(out)])
+        assert out.exists()
+        data = json.loads(out.read_text())
+        assert data["id"] == "r-1"
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "Desperado" in captured.out
+        assert "11 tracks" in captured.out
 
 
 class TestCandidatesCommand:
