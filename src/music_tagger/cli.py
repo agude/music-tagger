@@ -227,6 +227,71 @@ def _diff(argv: list[str] | None = None) -> None:
     _output_json(data, args.out, "\n".join(lines))
 
 
+def _write_tags(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger write-tags",
+        description="Apply tag changes from a diff JSON.",
+    )
+    parser.add_argument(
+        "--diff", type=Path, required=True, dest="diff_file",
+        help="Diff JSON from `diff` (possibly LLM-edited).",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Show what would change without writing.",
+    )
+    parser.add_argument(
+        "--log", type=Path, default=None,
+        help="Append changes to this log file.",
+    )
+    args = parser.parse_args(argv)
+
+    result = AlbumResult.from_dict(json.loads(args.diff_file.read_text()))
+
+    if not result.has_changes:
+        print("No tag changes to apply.")
+        return
+
+    if args.dry_run:
+        for d in result.diffs:
+            if d.changes:
+                print(f"  {d.track.path.name}:")
+                for c in d.changes:
+                    old = c.old_value or "(empty)"
+                    print(f"    {c.field}: {old} → {c.new_value}")
+        print("\n(dry run — skipping write)")
+        return
+
+    count = apply_changes(result)
+    print(f"Updated {count} track(s).")
+
+    if args.log:
+        _write_log_entry(args.log, result)
+
+
+def _write_log_entry(log_path: Path, result: AlbumResult) -> None:
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        f"## {result.release.title} [{result.release.id}]",
+        f"",
+        f"- **Date:** {timestamp}",
+        f"",
+    ]
+    for diff in result.diffs:
+        if not diff.changes:
+            continue
+        lines.append(f"  {diff.track.path.name}:")
+        for change in diff.changes:
+            old = change.old_value or "(empty)"
+            lines.append(f"    {change.field}: {old} → {change.new_value}")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    with open(log_path, "a") as f:
+        f.write("\n".join(lines))
+
+
 def _scan(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger scan",
@@ -457,6 +522,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("mb", help="MusicBrainz query commands.")
     sub.add_parser("match", help="Score candidates by duration match.")
     sub.add_parser("diff", help="Compute tag diff against a MusicBrainz release.")
+    sub.add_parser("write-tags", help="Apply tag changes from a diff JSON.")
     sub.add_parser("scan", help="Generate a checklist of albums needing attention.")
     sub.add_parser("candidates", help="Show MusicBrainz candidates for an album.")
     sub.add_parser("tag", help="Apply tags from a chosen MusicBrainz release.")
@@ -471,6 +537,8 @@ def main(argv: list[str] | None = None) -> None:
         _match(remaining)
     elif args.command == "diff":
         _diff(remaining)
+    elif args.command == "write-tags":
+        _write_tags(remaining)
     elif args.command == "scan":
         _scan(remaining)
     elif args.command == "candidates":

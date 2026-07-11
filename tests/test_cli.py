@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from music_tagger.cli import _diff, _is_album_dir, _match, _mb_release, _mb_search, _print_diff, _read, _scan
+from music_tagger.cli import _diff, _is_album_dir, _match, _mb_release, _mb_search, _print_diff, _read, _scan, _write_tags
 from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album
 from music_tagger.tagger import AlbumResult, TrackDiff
@@ -333,6 +333,73 @@ class TestDiffCommand:
         assert "r-1" in captured.out
         assert "with changes" in captured.out
         assert out.exists()
+
+
+class TestWriteTagsCommand:
+    def _make_diff_json(self, flac_album: Path) -> dict:
+        from music_tagger.tags import read_album as _read_album
+        album = _read_album(flac_album)
+        return {
+            "release_id": "r-1",
+            "release_title": "Desperado",
+            "tracks": [
+                {
+                    "path": str(album.tracks[0].path),
+                    "format": "flac",
+                    "changes": [
+                        {"field": "title", "old_value": "Desperado", "new_value": "New Title"},
+                        {"field": "label", "old_value": "", "new_value": "Asylum"},
+                    ],
+                },
+                {
+                    "path": str(album.tracks[1].path),
+                    "format": "flac",
+                    "changes": [],
+                },
+            ],
+        }
+
+    def test_dry_run(self, capsys: object, flac_album: Path, tmp_path: Path) -> None:
+        diff_path = tmp_path / "diff.json"
+        diff_path.write_text(json.dumps(self._make_diff_json(flac_album)))
+        _write_tags(["--diff", str(diff_path), "--dry-run"])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "dry run" in captured.out
+        assert "title" in captured.out
+        from music_tagger.tags import read_album as _read_album
+        album = _read_album(flac_album)
+        assert album.tracks[0].tags["title"] == "Desperado"
+
+    def test_applies_changes(self, capsys: object, flac_album: Path, tmp_path: Path) -> None:
+        diff_path = tmp_path / "diff.json"
+        diff_path.write_text(json.dumps(self._make_diff_json(flac_album)))
+        _write_tags(["--diff", str(diff_path)])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "Updated 1 track" in captured.out
+        from music_tagger.tags import read_album as _read_album
+        album = _read_album(flac_album)
+        assert album.tracks[0].tags["title"] == "New Title"
+        assert album.tracks[0].tags["label"] == "Asylum"
+        assert album.tracks[1].tags["title"] == "Twenty-One"
+
+    def test_no_changes(self, capsys: object, tmp_path: Path) -> None:
+        diff_path = tmp_path / "diff.json"
+        diff_path.write_text(json.dumps({
+            "release_id": "r-1", "release_title": "X",
+            "tracks": [{"path": "/x.flac", "format": "flac", "changes": []}],
+        }))
+        _write_tags(["--diff", str(diff_path)])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "No tag changes" in captured.out
+
+    def test_log_file(self, flac_album: Path, tmp_path: Path) -> None:
+        diff_path = tmp_path / "diff.json"
+        diff_path.write_text(json.dumps(self._make_diff_json(flac_album)))
+        log_path = tmp_path / "changes.log"
+        _write_tags(["--diff", str(diff_path), "--log", str(log_path)])
+        log_content = log_path.read_text()
+        assert "r-1" in log_content
+        assert "title" in log_content
 
 
 class TestCandidatesCommand:
