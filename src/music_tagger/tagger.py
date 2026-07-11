@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from .musicbrainz import MBRelease, MusicBrainzClient
 from .tags import AlbumTags, TagChange, TrackTags, compute_diff, read_album, write_tags
@@ -25,6 +26,94 @@ class AlbumResult:
     @property
     def has_changes(self) -> bool:
         return any(d.changes for d in self.diffs)
+
+
+@dataclass
+class MatchStats:
+    track_count_match: bool
+    tracks_within_2s: int
+    tracks_compared: int
+    max_deviation_secs: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "track_count_match": self.track_count_match,
+            "tracks_within_2s": self.tracks_within_2s,
+            "tracks_compared": self.tracks_compared,
+            "max_deviation_secs": round(self.max_deviation_secs, 2),
+        }
+
+
+@dataclass
+class CandidateMatch:
+    release: MBRelease
+    stats: MatchStats
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "release": self.release.to_dict(),
+            "match": self.stats.to_dict(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CandidateMatch:
+        return cls(
+            release=MBRelease.from_dict(data["release"]),
+            stats=MatchStats(
+                track_count_match=data["match"]["track_count_match"],
+                tracks_within_2s=data["match"]["tracks_within_2s"],
+                tracks_compared=data["match"]["tracks_compared"],
+                max_deviation_secs=data["match"]["max_deviation_secs"],
+            ),
+        )
+
+
+def score_candidates(
+    album: AlbumTags, candidates: list[MBRelease],
+) -> list[CandidateMatch]:
+    """Score candidates by duration match against local evidence.
+
+    For each candidate, compares local track durations to MB track durations,
+    matching by track number within each disc. Returns results sorted by
+    match quality (most tracks within 2s first, then lowest max deviation).
+    """
+    results: list[CandidateMatch] = []
+
+    local_by_key: dict[tuple[int, int], float] = {}
+    for track in album.tracks:
+        disc = _parse_disc_number(track)
+        tnum = _parse_track_number(track)
+        if tnum is not None:
+            local_by_key[(disc, tnum)] = track.duration_secs
+
+    for candidate in candidates:
+        within_2s = 0
+        compared = 0
+        max_dev = 0.0
+
+        for disc_num, disc_tracks in candidate.discs.items():
+            for mb_track in disc_tracks:
+                local_dur = local_by_key.get((disc_num, mb_track.number))
+                if local_dur is None or mb_track.duration_ms is None:
+                    continue
+                compared += 1
+                dev = abs(local_dur - mb_track.duration_ms / 1000.0)
+                max_dev = max(max_dev, dev)
+                if dev <= 2.0:
+                    within_2s += 1
+
+        results.append(CandidateMatch(
+            release=candidate,
+            stats=MatchStats(
+                track_count_match=candidate.track_count == album.track_count,
+                tracks_within_2s=within_2s,
+                tracks_compared=compared,
+                max_deviation_secs=max_dev,
+            ),
+        ))
+
+    results.sort(key=lambda m: (-m.stats.tracks_within_2s, m.stats.max_deviation_secs))
+    return results
 
 
 def _parse_disc_number(track: TrackTags) -> int:

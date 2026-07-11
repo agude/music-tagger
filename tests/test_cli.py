@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from music_tagger.cli import _is_album_dir, _mb_release, _mb_search, _print_diff, _read, _scan
+from music_tagger.cli import _is_album_dir, _match, _mb_release, _mb_search, _print_diff, _read, _scan
 from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album
 from music_tagger.tagger import AlbumResult, TrackDiff
@@ -229,6 +229,57 @@ class TestMbReleaseCommand:
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "Desperado" in captured.out
         assert "11 tracks" in captured.out
+
+
+class TestMatchCommand:
+    def test_scores_candidates(self, flac_album: Path, tmp_path: Path, capsys: object) -> None:
+        from music_tagger.tags import read_album as _read_album
+        album = _read_album(flac_album)
+        evidence_path = tmp_path / "evidence.json"
+        evidence_path.write_text(json.dumps(album.to_dict()))
+
+        release = MBRelease(
+            id="r-1", title="Desperado", date="1973", country="US",
+            label="Asylum", track_count=3, format="CD",
+            discs={1: [
+                MBTrack(number=1, title="Desperado", duration_ms=int(album.tracks[0].duration_secs * 1000)),
+                MBTrack(number=2, title="Twenty-One", duration_ms=int(album.tracks[1].duration_secs * 1000)),
+                MBTrack(number=3, title="Out of Control", duration_ms=int(album.tracks[2].duration_secs * 1000)),
+            ]},
+        )
+        candidates_path = tmp_path / "candidates.json"
+        candidates_path.write_text(json.dumps([release.to_dict()]))
+
+        _match(["--evidence", str(evidence_path), "--candidates", str(candidates_path)])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        data = json.loads(captured.out)
+        assert len(data) == 1
+        assert data[0]["match"]["tracks_within_2s"] == 3
+        assert data[0]["release"]["id"] == "r-1"
+
+    def test_digest_output(self, flac_album: Path, tmp_path: Path, capsys: object) -> None:
+        from music_tagger.tags import read_album as _read_album
+        album = _read_album(flac_album)
+        evidence_path = tmp_path / "evidence.json"
+        evidence_path.write_text(json.dumps(album.to_dict()))
+
+        release = MBRelease(
+            id="r-1", title="Desperado", track_count=3,
+            discs={1: [
+                MBTrack(number=1, title="A", duration_ms=int(album.tracks[0].duration_secs * 1000)),
+                MBTrack(number=2, title="B", duration_ms=int(album.tracks[1].duration_secs * 1000)),
+                MBTrack(number=3, title="C", duration_ms=int(album.tracks[2].duration_secs * 1000)),
+            ]},
+        )
+        candidates_path = tmp_path / "candidates.json"
+        candidates_path.write_text(json.dumps([release.to_dict()]))
+
+        out = tmp_path / "matched.json"
+        _match(["--evidence", str(evidence_path), "--candidates", str(candidates_path), "-o", str(out)])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "1 candidates scored" in captured.out
+        assert "r-1" in captured.out
+        assert out.exists()
 
 
 class TestCandidatesCommand:

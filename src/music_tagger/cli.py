@@ -9,8 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .musicbrainz import MusicBrainzClient
-from .tags import AUDIO_EXTENSIONS, read_album
-from .tagger import AlbumResult, apply_changes, build_diff, search_candidates
+from .tags import AUDIO_EXTENSIONS, AlbumTags, read_album
+from .musicbrainz import MBRelease
+from .tagger import AlbumResult, apply_changes, build_diff, score_candidates, search_candidates
 
 
 def _output_json(data: object, out: Path | None, digest: str) -> None:
@@ -151,6 +152,43 @@ def _mb(argv: list[str] | None = None) -> None:
     else:
         parser.print_help()
         sys.exit(1)
+
+
+def _match(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger match",
+        description="Score candidates by duration match against local evidence.",
+    )
+    parser.add_argument(
+        "--evidence", type=Path, required=True,
+        help="Evidence JSON from `read`.",
+    )
+    parser.add_argument(
+        "--candidates", type=Path, required=True,
+        help="Candidates JSON from `mb search`.",
+    )
+    parser.add_argument(
+        "-o", "--out", type=Path, default=None,
+        help="Output JSON file (prints digest to stdout).",
+    )
+    args = parser.parse_args(argv)
+
+    album = AlbumTags.from_dict(json.loads(args.evidence.read_text()))
+    candidates = [MBRelease.from_dict(c) for c in json.loads(args.candidates.read_text())]
+
+    matches = score_candidates(album, candidates)
+    data = [m.to_dict() for m in matches]
+
+    lines = [f"{len(matches)} candidates scored:"]
+    for m in matches:
+        r = m.release
+        s = m.stats
+        count_ok = "=" if s.track_count_match else "!"
+        lines.append(
+            f"  [{r.id}]  {r.title}  {s.tracks_within_2s}/{s.tracks_compared} within 2s  "
+            f"max_dev={s.max_deviation_secs:.1f}s  count{count_ok}"
+        )
+    _output_json(data, args.out, "\n".join(lines))
 
 
 def _scan(argv: list[str] | None = None) -> None:
@@ -381,6 +419,7 @@ def main(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("read", help="Read album tags and durations as JSON.")
     sub.add_parser("mb", help="MusicBrainz query commands.")
+    sub.add_parser("match", help="Score candidates by duration match.")
     sub.add_parser("scan", help="Generate a checklist of albums needing attention.")
     sub.add_parser("candidates", help="Show MusicBrainz candidates for an album.")
     sub.add_parser("tag", help="Apply tags from a chosen MusicBrainz release.")
@@ -391,6 +430,8 @@ def main(argv: list[str] | None = None) -> None:
         _read(remaining)
     elif args.command == "mb":
         _mb(remaining)
+    elif args.command == "match":
+        _match(remaining)
     elif args.command == "scan":
         _scan(remaining)
     elif args.command == "candidates":

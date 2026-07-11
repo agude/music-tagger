@@ -6,12 +6,14 @@ from unittest.mock import MagicMock
 from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.tagger import (
     AlbumResult,
+    CandidateMatch,
     TrackDiff,
     _build_new_tags,
     _parse_disc_number,
     _parse_track_number,
     apply_changes,
     build_diff,
+    score_candidates,
     search_candidates,
 )
 from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album
@@ -346,6 +348,77 @@ class TestBuildDiff:
         assert "album" in fields
         assert "musicbrainz_albumid" in fields
         assert "title" not in fields
+
+
+class TestScoreCandidates:
+    def test_scores_matching_release(self) -> None:
+        tracks = [
+            TrackTags(path=Path("01.flac"), tags={"tracknumber": "1", "discnumber": "1"},
+                      duration_secs=209.0, format="flac"),
+            TrackTags(path=Path("02.flac"), tags={"tracknumber": "2", "discnumber": "1"},
+                      duration_secs=187.0, format="flac"),
+            TrackTags(path=Path("03.flac"), tags={"tracknumber": "3", "discnumber": "1"},
+                      duration_secs=195.0, format="flac"),
+        ]
+        album = AlbumTags(directory=Path("/music"), tracks=tracks)
+        release = _make_release()
+        results = score_candidates(album, [release])
+        assert len(results) == 1
+        assert results[0].stats.track_count_match is True
+        assert results[0].stats.tracks_within_2s == 3
+        assert results[0].stats.tracks_compared == 3
+        assert results[0].stats.max_deviation_secs == 0.0
+
+    def test_sorts_by_match_quality(self) -> None:
+        tracks = [
+            TrackTags(path=Path("01.flac"), tags={"tracknumber": "1", "discnumber": "1"},
+                      duration_secs=209.0, format="flac"),
+            TrackTags(path=Path("02.flac"), tags={"tracknumber": "2", "discnumber": "1"},
+                      duration_secs=187.0, format="flac"),
+        ]
+        album = AlbumTags(directory=Path("/music"), tracks=tracks)
+
+        good = MBRelease(
+            id="good", title="Good", track_count=2,
+            discs={1: [
+                MBTrack(number=1, title="A", duration_ms=209000),
+                MBTrack(number=2, title="B", duration_ms=187000),
+            ]},
+        )
+        bad = MBRelease(
+            id="bad", title="Bad", track_count=2,
+            discs={1: [
+                MBTrack(number=1, title="A", duration_ms=220000),
+                MBTrack(number=2, title="B", duration_ms=200000),
+            ]},
+        )
+        results = score_candidates(album, [bad, good])
+        assert results[0].release.id == "good"
+        assert results[1].release.id == "bad"
+
+    def test_no_discs_in_candidate(self) -> None:
+        tracks = [
+            TrackTags(path=Path("01.flac"), tags={"tracknumber": "1"},
+                      duration_secs=209.0, format="flac"),
+        ]
+        album = AlbumTags(directory=Path("/music"), tracks=tracks)
+        release = MBRelease(id="no-discs", title="X", track_count=1)
+        results = score_candidates(album, [release])
+        assert results[0].stats.tracks_compared == 0
+
+    def test_round_trip_serialization(self) -> None:
+        stats = CandidateMatch(
+            release=_make_release(),
+            stats=__import__("music_tagger.tagger", fromlist=["MatchStats"]).MatchStats(
+                track_count_match=True, tracks_within_2s=3,
+                tracks_compared=3, max_deviation_secs=0.5,
+            ),
+        )
+        d = stats.to_dict()
+        restored = CandidateMatch.from_dict(d)
+        assert restored.release.id == stats.release.id
+        assert restored.stats.tracks_within_2s == 3
+        assert restored.stats.max_deviation_secs == 0.5
 
 
 class TestApplyChanges:
