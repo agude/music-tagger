@@ -119,6 +119,23 @@ class TrackTags:
     duration_secs: float = 0.0
     format: str = ""
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": str(self.path),
+            "format": self.format,
+            "duration_secs": self.duration_secs,
+            "tags": dict(self.tags),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TrackTags:
+        return cls(
+            path=Path(data["path"]),
+            tags=data.get("tags", {}),
+            duration_secs=data.get("duration_secs", 0.0),
+            format=data.get("format", ""),
+        )
+
 
 @dataclass
 class AlbumTags:
@@ -136,6 +153,22 @@ class AlbumTags:
     @property
     def track_count(self) -> int:
         return len(self.tracks)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "directory": str(self.directory),
+            "artist": self.artist,
+            "album": self.album,
+            "track_count": self.track_count,
+            "tracks": [t.to_dict() for t in self.tracks],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> AlbumTags:
+        return cls(
+            directory=Path(data["directory"]),
+            tracks=[TrackTags.from_dict(t) for t in data.get("tracks", [])],
+        )
 
 
 def _most_common(values: Any) -> str:

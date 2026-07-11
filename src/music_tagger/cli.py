@@ -3,13 +3,24 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .musicbrainz import MusicBrainzClient
-from .tags import AUDIO_EXTENSIONS
+from .tags import AUDIO_EXTENSIONS, read_album
 from .tagger import AlbumResult, apply_changes, build_diff, search_candidates
+
+
+def _output_json(data: object, out: Path | None, digest: str) -> None:
+    """Write JSON to file (printing digest to stdout) or JSON to stdout."""
+    text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    if out:
+        out.write_text(text)
+        print(digest)
+    else:
+        sys.stdout.write(text)
 
 
 def _is_album_dir(path: Path) -> bool:
@@ -26,6 +37,39 @@ def _find_album_dirs(root: Path) -> list[Path]:
         if child.is_dir() and _is_album_dir(child):
             dirs.append(child)
     return dirs
+
+
+def _read(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger read",
+        description="Read album tags and durations as JSON evidence.",
+    )
+    parser.add_argument("path", type=Path, help="Album directory.")
+    parser.add_argument(
+        "-o", "--out", type=Path, default=None,
+        help="Output JSON file (prints digest to stdout). Without this, JSON goes to stdout.",
+    )
+    args = parser.parse_args(argv)
+
+    target: Path = args.path.resolve()
+    if not target.is_dir():
+        print(f"Error: {target} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    album = read_album(target)
+    if not album.tracks:
+        print(f"Error: no audio files in {target}.", file=sys.stderr)
+        sys.exit(1)
+
+    data = album.to_dict()
+
+    lines = [f"{album.artist} — {album.album} ({album.track_count} tracks, {album.tracks[0].format.upper()})"]
+    for track in album.tracks:
+        dur = f"{track.duration_secs:.1f}s"
+        title = track.tags.get("title", track.path.name)
+        num = track.tags.get("tracknumber", "?")
+        lines.append(f"  {num:>2s}. {title}  ({dur})")
+    _output_json(data, args.out, "\n".join(lines))
 
 
 def _scan(argv: list[str] | None = None) -> None:
@@ -48,10 +92,6 @@ def _scan(argv: list[str] | None = None) -> None:
     if not target.is_dir():
         print(f"Error: {target} is not a directory.", file=sys.stderr)
         sys.exit(1)
-
-    import json
-
-    from .tags import read_album
 
     dirs = _find_album_dirs(target)
     entries: list[dict[str, object]] = []
@@ -224,8 +264,6 @@ def _tag(argv: list[str] | None = None) -> None:
         print(f"Error: {target} is not a directory.", file=sys.stderr)
         sys.exit(1)
 
-    from .tags import read_album
-
     album = read_album(target)
     if not album.tracks:
         print(f"Error: no audio files in {target}.", file=sys.stderr)
@@ -260,13 +298,16 @@ def main(argv: list[str] | None = None) -> None:
         description="Fix album tags using MusicBrainz.",
     )
     sub = parser.add_subparsers(dest="command")
+    sub.add_parser("read", help="Read album tags and durations as JSON.")
     sub.add_parser("scan", help="Generate a checklist of albums needing attention.")
     sub.add_parser("candidates", help="Show MusicBrainz candidates for an album.")
     sub.add_parser("tag", help="Apply tags from a chosen MusicBrainz release.")
 
     args, remaining = parser.parse_known_args(argv)
 
-    if args.command == "scan":
+    if args.command == "read":
+        _read(remaining)
+    elif args.command == "scan":
         _scan(remaining)
     elif args.command == "candidates":
         _print_candidates(remaining)

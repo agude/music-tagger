@@ -2,7 +2,53 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from music_tagger.tags import TagChange, compute_diff, read_album, write_tags
+from music_tagger.tags import AlbumTags, TagChange, TrackTags, compute_diff, read_album, write_tags
+
+
+class TestTrackTagsSerialization:
+    def test_round_trip(self) -> None:
+        track = TrackTags(
+            path=Path("/music/01.flac"),
+            tags={"title": "Song", "artist": "Band"},
+            duration_secs=234.5,
+            format="flac",
+        )
+        data = track.to_dict()
+        restored = TrackTags.from_dict(data)
+        assert restored.path == track.path
+        assert restored.tags == track.tags
+        assert restored.duration_secs == track.duration_secs
+        assert restored.format == track.format
+
+    def test_dict_keys(self) -> None:
+        track = TrackTags(path=Path("/a.flac"), tags={"title": "X"}, duration_secs=1.0, format="flac")
+        d = track.to_dict()
+        assert d["path"] == "/a.flac"
+        assert d["format"] == "flac"
+        assert d["duration_secs"] == 1.0
+        assert d["tags"] == {"title": "X"}
+
+
+class TestAlbumTagsSerialization:
+    def test_round_trip(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        data = album.to_dict()
+        restored = AlbumTags.from_dict(data)
+        assert restored.directory == album.directory
+        assert restored.track_count == album.track_count
+        assert restored.artist == album.artist
+        assert restored.album == album.album
+        for orig, rest in zip(album.tracks, restored.tracks):
+            assert rest.path == orig.path
+            assert rest.tags == orig.tags
+
+    def test_dict_includes_computed_fields(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        d = album.to_dict()
+        assert d["artist"] == "Eagles"
+        assert d["album"] == "Desperado"
+        assert d["track_count"] == 3
+        assert len(d["tracks"]) == 3
 
 
 class TestReadAlbumFlac:

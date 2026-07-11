@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from music_tagger.cli import _is_album_dir, _print_diff, _scan
+from music_tagger.cli import _is_album_dir, _print_diff, _read, _scan
 from music_tagger.musicbrainz import MBRelease
 from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album
 from music_tagger.tagger import AlbumResult, TrackDiff
@@ -56,6 +56,41 @@ class TestPrintDiff:
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "title: Desperado" in captured.out
         assert "→ New" in captured.out
+
+
+class TestReadCommand:
+    def test_json_to_stdout(self, capsys: object, flac_album: Path) -> None:
+        _read([str(flac_album)])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        data = json.loads(captured.out)
+        assert data["artist"] == "Eagles"
+        assert data["album"] == "Desperado"
+        assert data["track_count"] == 3
+        assert len(data["tracks"]) == 3
+        assert data["tracks"][0]["format"] == "flac"
+        assert data["tracks"][0]["duration_secs"] > 0
+
+    def test_json_to_file_with_digest(self, capsys: object, flac_album: Path, tmp_path: Path) -> None:
+        out = tmp_path / "evidence.json"
+        _read([str(flac_album), "-o", str(out)])
+        data = json.loads(out.read_text())
+        assert data["artist"] == "Eagles"
+        assert data["track_count"] == 3
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "Eagles" in captured.out
+        assert "Desperado" in captured.out
+        assert "3 tracks" in captured.out
+
+    def test_mp3_album(self, capsys: object, mp3_album: Path) -> None:
+        _read([str(mp3_album)])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        data = json.loads(captured.out)
+        assert data["tracks"][0]["format"] == "mp3"
+
+    def test_empty_dir_exits(self, tmp_path: Path) -> None:
+        import pytest
+        with pytest.raises(SystemExit):
+            _read([str(tmp_path)])
 
 
 class TestScanCommand:
