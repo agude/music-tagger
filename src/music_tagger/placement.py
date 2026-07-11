@@ -1,8 +1,10 @@
-"""Compute library destination paths from album evidence."""
+"""Compute library destination paths and copy files."""
 
 from __future__ import annotations
 
+import hashlib
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -115,3 +117,74 @@ def _parse_int(raw: str, default: int) -> int:
         return int(raw.split("/")[0])
     except (ValueError, IndexError):
         return default
+
+
+@dataclass
+class CopyResult:
+    copied: list[FileMapping]
+    skipped: list[FileMapping]
+    failed: list[tuple[FileMapping, str]]
+    total_bytes: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "copied": [m.to_dict() for m in self.copied],
+            "skipped": [m.to_dict() for m in self.skipped],
+            "failed": [{"mapping": m.to_dict(), "error": e} for m, e in self.failed],
+            "total_bytes": self.total_bytes,
+        }
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def copy_files(plan: PlacementPlan, dry_run: bool = False) -> CopyResult:
+    copied: list[FileMapping] = []
+    skipped: list[FileMapping] = []
+    failed: list[tuple[FileMapping, str]] = []
+    total_bytes = 0
+
+    for mapping in plan.mappings:
+        if mapping.dest.exists():
+            skipped.append(mapping)
+            continue
+
+        if dry_run:
+            copied.append(mapping)
+            if mapping.source.exists():
+                total_bytes += mapping.source.stat().st_size
+            continue
+
+        mapping.dest.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            shutil.copy2(mapping.source, mapping.dest)
+        except OSError as e:
+            failed.append((mapping, str(e)))
+            continue
+
+        src_size = mapping.source.stat().st_size
+        dst_size = mapping.dest.stat().st_size
+        if src_size != dst_size:
+            mapping.dest.unlink()
+            failed.append((mapping, f"size mismatch: {src_size} vs {dst_size}"))
+            continue
+
+        src_hash = _sha256(mapping.source)
+        dst_hash = _sha256(mapping.dest)
+        if src_hash != dst_hash:
+            mapping.dest.unlink()
+            failed.append((mapping, f"hash mismatch: {src_hash} vs {dst_hash}"))
+            continue
+
+        copied.append(mapping)
+        total_bytes += src_size
+
+    return CopyResult(
+        copied=copied, skipped=skipped, failed=failed, total_bytes=total_bytes,
+    )

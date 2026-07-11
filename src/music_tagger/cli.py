@@ -12,7 +12,7 @@ from .musicbrainz import MusicBrainzClient
 from .tags import AUDIO_EXTENSIONS, AlbumTags, read_album
 from .discid import parse_rip_dir
 from .musicbrainz import MBRelease
-from .placement import compute_placement
+from .placement import PlacementPlan, compute_placement, copy_files
 from .tagger import AlbumResult, apply_changes, build_diff, score_candidates, search_candidates
 
 
@@ -531,6 +531,71 @@ def _path_for(argv: list[str] | None = None) -> None:
     _output_json(data, args.out, "\n".join(lines))
 
 
+def _copy(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger copy",
+        description="Copy files to library destinations per a placement plan.",
+    )
+    parser.add_argument(
+        "--plan", type=Path, required=True, dest="plan_file",
+        help="Plan JSON from `path-for` (possibly LLM-edited).",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Show what would be copied without copying.",
+    )
+    parser.add_argument(
+        "--log", type=Path, default=None,
+        help="Append copy results to this log file.",
+    )
+    args = parser.parse_args(argv)
+
+    plan = PlacementPlan.from_dict(json.loads(args.plan_file.read_text()))
+    result = copy_files(plan, dry_run=args.dry_run)
+
+    if result.skipped:
+        print(f"Skipped {len(result.skipped)} file(s) (already exist):")
+        for m in result.skipped:
+            print(f"  {m.dest}")
+
+    if result.failed:
+        print(f"Failed {len(result.failed)} file(s):")
+        for m, err in result.failed:
+            print(f"  {m.dest}: {err}")
+
+    size_mb = result.total_bytes / (1024 * 1024)
+    if args.dry_run:
+        print(f"\n(dry run) Would copy {len(result.copied)} file(s) ({size_mb:.1f} MB) → {plan.album_dir}")
+    else:
+        print(f"Copied {len(result.copied)} file(s) ({size_mb:.1f} MB) → {plan.album_dir}")
+
+    if result.failed:
+        sys.exit(1)
+
+    if args.log and not args.dry_run:
+        _write_copy_log(args.log, plan, result)
+
+
+def _write_copy_log(log_path: Path, plan: PlacementPlan, result: object) -> None:
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        f"## Copy to {plan.album_dir}",
+        f"",
+        f"- **Date:** {timestamp}",
+        f"- **Files:** {len(plan.mappings)}",
+        f"",
+    ]
+    from .placement import CopyResult
+    if isinstance(result, CopyResult):
+        for m in result.copied:
+            lines.append(f"  {m.source.name} → {m.dest}")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    with open(log_path, "a") as f:
+        f.write("\n".join(lines))
+
+
 def _tag(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger tag",
@@ -588,6 +653,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("diff", help="Compute tag diff against a MusicBrainz release.")
     sub.add_parser("write-tags", help="Apply tag changes from a diff JSON.")
     sub.add_parser("path-for", help="Compute library destination paths.")
+    sub.add_parser("copy", help="Copy files to library per a placement plan.")
     sub.add_parser("scan", help="Generate a checklist of albums needing attention.")
     sub.add_parser("candidates", help="Show MusicBrainz candidates for an album.")
     sub.add_parser("tag", help="Apply tags from a chosen MusicBrainz release.")
@@ -608,6 +674,8 @@ def main(argv: list[str] | None = None) -> None:
         _write_tags(remaining)
     elif args.command == "path-for":
         _path_for(remaining)
+    elif args.command == "copy":
+        _copy(remaining)
     elif args.command == "scan":
         _scan(remaining)
     elif args.command == "candidates":

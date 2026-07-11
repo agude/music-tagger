@@ -4,10 +4,12 @@ import json
 from pathlib import Path
 
 from music_tagger.placement import (
+    CopyResult,
     FileMapping,
     PlacementPlan,
     _sanitize,
     compute_placement,
+    copy_files,
 )
 from music_tagger.tags import AlbumTags, TrackTags, read_album
 
@@ -176,6 +178,124 @@ class TestPlacementPlanSerialization:
         assert restored.album_dir == plan.album_dir
         assert len(restored.mappings) == 1
         assert restored.mappings[0].source == plan.mappings[0].source
+
+
+class TestCopyFiles:
+    def _make_plan(self, src_dir: Path, dest_dir: Path) -> PlacementPlan:
+        files = []
+        for name in ["01.flac", "02.flac"]:
+            f = src_dir / name
+            f.write_bytes(b"\x00" * 100)
+            files.append(FileMapping(source=f, dest=dest_dir / name))
+        return PlacementPlan(album_dir=dest_dir, mappings=files)
+
+    def test_copies_files(self, tmp_path: Path) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        dest = tmp_path / "dest" / "album"
+        plan = self._make_plan(src, dest)
+
+        result = copy_files(plan)
+        assert len(result.copied) == 2
+        assert len(result.skipped) == 0
+        assert len(result.failed) == 0
+        assert result.total_bytes == 200
+        assert (dest / "01.flac").exists()
+        assert (dest / "02.flac").exists()
+
+    def test_dry_run_does_not_copy(self, tmp_path: Path) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        dest = tmp_path / "dest" / "album"
+        plan = self._make_plan(src, dest)
+
+        result = copy_files(plan, dry_run=True)
+        assert len(result.copied) == 2
+        assert not dest.exists()
+
+    def test_skips_existing(self, tmp_path: Path) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        dest = tmp_path / "dest" / "album"
+        dest.mkdir(parents=True)
+        plan = self._make_plan(src, dest)
+        (dest / "01.flac").write_bytes(b"existing")
+
+        result = copy_files(plan)
+        assert len(result.skipped) == 1
+        assert result.skipped[0].dest.name == "01.flac"
+        assert len(result.copied) == 1
+        assert (dest / "01.flac").read_bytes() == b"existing"
+
+    def test_creates_directories(self, tmp_path: Path) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        dest = tmp_path / "deep" / "nested" / "album"
+        plan = self._make_plan(src, dest)
+
+        result = copy_files(plan)
+        assert len(result.copied) == 2
+        assert dest.exists()
+
+    def test_serialization(self, tmp_path: Path) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        dest = tmp_path / "dest" / "album"
+        plan = self._make_plan(src, dest)
+
+        result = copy_files(plan)
+        d = result.to_dict()
+        assert len(d["copied"]) == 2
+        assert d["total_bytes"] == 200
+        assert d["skipped"] == []
+        assert d["failed"] == []
+
+
+class TestCopyCommand:
+    def test_dry_run(self, flac_album: Path, tmp_path: Path, capsys: object) -> None:
+        from music_tagger.cli import _copy
+
+        album = read_album(flac_album)
+        dest = tmp_path / "library"
+        plan = compute_placement(album, root=dest)
+        plan_path = tmp_path / "plan.json"
+        plan_path.write_text(json.dumps(plan.to_dict()))
+
+        _copy(["--plan", str(plan_path), "--dry-run"])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "dry run" in captured.out
+        assert "Would copy" in captured.out
+        assert not dest.exists()
+
+    def test_copies_files(self, flac_album: Path, tmp_path: Path, capsys: object) -> None:
+        from music_tagger.cli import _copy
+
+        album = read_album(flac_album)
+        dest = tmp_path / "library"
+        plan = compute_placement(album, root=dest)
+        plan_path = tmp_path / "plan.json"
+        plan_path.write_text(json.dumps(plan.to_dict()))
+
+        _copy(["--plan", str(plan_path)])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "Copied 3 file(s)" in captured.out
+        for m in plan.mappings:
+            assert m.dest.exists()
+
+    def test_log_file(self, flac_album: Path, tmp_path: Path) -> None:
+        from music_tagger.cli import _copy
+
+        album = read_album(flac_album)
+        dest = tmp_path / "library"
+        plan = compute_placement(album, root=dest)
+        plan_path = tmp_path / "plan.json"
+        plan_path.write_text(json.dumps(plan.to_dict()))
+        log_path = tmp_path / "copy.log"
+
+        _copy(["--plan", str(plan_path), "--log", str(log_path)])
+        assert log_path.exists()
+        content = log_path.read_text()
+        assert "Copy to" in content
 
 
 class TestPathForCommand:
