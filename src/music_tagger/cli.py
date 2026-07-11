@@ -13,6 +13,7 @@ from .tags import AUDIO_EXTENSIONS, AlbumTags, read_album
 from .discid import parse_rip_dir
 from .musicbrainz import MBRelease
 from .coverart import fetch_cover_art
+from .navidrome import NavidromeClient
 from .placement import PlacementPlan, compute_placement, copy_files
 from .tagger import AlbumResult, apply_changes, build_diff, score_candidates, search_candidates
 
@@ -623,6 +624,44 @@ def _art(argv: list[str] | None = None) -> None:
         print(f"Saved cover.jpg ({size_kb:.0f} KB) to {result.path}")
 
 
+def _nd_rescan(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger nd rescan",
+        description="Trigger a Navidrome library scan.",
+    )
+    parser.parse_args(argv)
+
+    client = NavidromeClient()
+    try:
+        status = client.start_scan()
+    finally:
+        client.close()
+
+    scanning = status.get("scanning", False)
+    count = status.get("count", 0)
+    if scanning:
+        print(f"Scan started ({count} files scanned so far).")
+    else:
+        print(f"Scan complete ({count} files).")
+
+
+def _nd(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger nd",
+        description="Navidrome commands.",
+    )
+    sub = parser.add_subparsers(dest="nd_command")
+    sub.add_parser("rescan", help="Trigger a library scan.")
+
+    args, remaining = parser.parse_known_args(argv)
+
+    if args.nd_command == "rescan":
+        _nd_rescan(remaining)
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
 def _tag(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger tag",
@@ -682,6 +721,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("path-for", help="Compute library destination paths.")
     sub.add_parser("copy", help="Copy files to library per a placement plan.")
     sub.add_parser("art", help="Fetch cover art from the Cover Art Archive.")
+    sub.add_parser("nd", help="Navidrome commands.")
     sub.add_parser("scan", help="Generate a checklist of albums needing attention.")
     sub.add_parser("candidates", help="Show MusicBrainz candidates for an album.")
     sub.add_parser("tag", help="Apply tags from a chosen MusicBrainz release.")
@@ -706,6 +746,8 @@ def main(argv: list[str] | None = None) -> None:
         _copy(remaining)
     elif args.command == "art":
         _art(remaining)
+    elif args.command == "nd":
+        _nd(remaining)
     elif args.command == "scan":
         _scan(remaining)
     elif args.command == "candidates":
