@@ -49,7 +49,11 @@ src/music_tagger/
 ├── tags.py          # Read/write FLAC + MP3 tags via mutagen
 ├── musicbrainz.py   # MB API client with 1 req/sec rate limiting
 ├── tagger.py        # Orchestration: search → diff → write
-└── cli.py           # Argparse entry point (scan / candidates / tag)
+├── discid.py        # CUE sheet parser, disc ID computation
+├── placement.py     # Library path computation + verified copy
+├── coverart.py      # Cover Art Archive client
+├── navidrome.py     # Navidrome / Subsonic API client
+└── cli.py           # Argparse entry point (all subcommands)
 ```
 
 - `tags.py` provides a unified interface over FLAC Vorbis Comments and MP3
@@ -57,6 +61,11 @@ src/music_tagger/
 - `musicbrainz.py` searches and fetches releases. Rate-limited to 1 req/sec.
 - `tagger.py` builds the target tags from an MB release and computes diffs.
   Handles multi-disc albums by parsing `discnumber` tags.
+- `discid.py` parses CUE sheets and computes MusicBrainz disc IDs.
+- `placement.py` computes library destination paths and copies files with
+  SHA-256 verification.
+- `coverart.py` fetches front cover images from the Cover Art Archive.
+- `navidrome.py` Subsonic API client for library scans (and future ratings).
 - `cli.py` wires the subcommands together.
 
 ## Tag mapping details

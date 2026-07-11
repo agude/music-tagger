@@ -97,6 +97,20 @@ Thin wrappers reimplemented as compositions of primitives:
 All previous composability gaps are resolved. LLM-edited diffs work:
 `diff` → hand-edit the JSON → `write-tags --diff edited.json`.
 
+**Phase 2 complete.** Placement pipeline from rip to library:
+- `path-for --evidence` — computes library paths per the
+  `Artist/Album (Year)/NN. Title.ext` convention. Handles multi-disc
+  naming (`D-NN.`), non-audio files (cue/log/art), filesystem
+  sanitization.
+- `copy --plan` — copies with SHA-256 verification, refuses existing
+  destinations, supports `--dry-run` and `--log`.
+- `art <dir> --release-id` — fetches cover art from the Cover Art
+  Archive (500px or `--full`), skips existing, `--force` to overwrite.
+- `nd rescan` — triggers Navidrome library scan via Subsonic API.
+
+New modules: `placement.py` (path computation + verified copy),
+`coverart.py` (CAA client), `navidrome.py` (Subsonic API client).
+
 In progress: working through `checklist.json` album by album to fix
 Navidrome album splits. This continues as Phase 0 and is unaffected by the
 rest of the plan.
@@ -203,8 +217,8 @@ scan --all → LLM filters digest → read each → LLM builds minimal diffs →
 1. **Phase 0** (ongoing): finish the split-fix checklist. No code changes.
 2. ~~**Phase 1 — decompose and add disc ID path**~~: **Done.** All
    primitives implemented and tested. See Current State above.
-3. **Phase 2 — placement**: `path-for`, `copy`, `art`, `nd rescan`.
-   Completes rip → library.
+3. ~~**Phase 2 — placement**~~: **Done.** `path-for`, `copy`, `art`,
+   `nd rescan` all implemented and tested. See Phase 2 detail below.
 4. **Phase 3 — ratings**: `nd ratings`, ratings→tag mapping in
    `write-tags`, `nd set-rating`. Scheduled export via cron/routine, with
    a state file so unchanged files aren't rewritten (mtime churn would
