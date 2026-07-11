@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .musicbrainz import MusicBrainzClient
 from .tags import AUDIO_EXTENSIONS, AlbumTags, read_album
+from .discid import parse_rip_dir
 from .musicbrainz import MBRelease
 from .tagger import AlbumResult, apply_changes, build_diff, score_candidates, search_candidates
 
@@ -70,6 +71,35 @@ def _read(argv: list[str] | None = None) -> None:
         title = track.tags.get("title", track.path.name)
         num = track.tags.get("tracknumber", "?")
         lines.append(f"  {num:>2s}. {title}  ({dur})")
+    _output_json(data, args.out, "\n".join(lines))
+
+
+def _toc(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger toc",
+        description="Parse rip artifacts (CUE sheet) and extract TOC / disc ID.",
+    )
+    parser.add_argument("path", type=Path, help="Rip directory containing .cue file.")
+    parser.add_argument(
+        "-o", "--out", type=Path, default=None,
+        help="Output JSON file (prints digest to stdout).",
+    )
+    args = parser.parse_args(argv)
+
+    target: Path = args.path.resolve()
+    if not target.is_dir():
+        print(f"Error: {target} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    toc = parse_rip_dir(target)
+    data = toc.to_dict()
+
+    lines = [f"TOC: {toc.last_track} tracks"]
+    if toc.disc_id:
+        lines.append(f"Disc ID: {toc.disc_id}")
+    else:
+        lines.append("Disc ID: (unavailable — leadout offset unknown)")
+    lines.append(f"TOC string: {toc.to_toc_string()}")
     _output_json(data, args.out, "\n".join(lines))
 
 
@@ -134,6 +164,41 @@ def _mb_release(argv: list[str] | None = None) -> None:
     _output_json(data, args.out, "\n".join(lines))
 
 
+def _mb_discid(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger mb discid",
+        description="Look up releases by disc ID or TOC offsets.",
+    )
+    parser.add_argument("discid", nargs="?", default=None, help="MusicBrainz disc ID.")
+    parser.add_argument("--toc", default=None, help="TOC string for fuzzy lookup (from `toc` command).")
+    parser.add_argument(
+        "-o", "--out", type=Path, default=None,
+        help="Output JSON file (prints digest to stdout).",
+    )
+    args = parser.parse_args(argv)
+
+    if not args.discid and not args.toc:
+        print("Error: provide a disc ID or --toc string.", file=sys.stderr)
+        sys.exit(1)
+
+    mb_client = MusicBrainzClient()
+    try:
+        if args.discid:
+            results = mb_client.lookup_discid(args.discid)
+        else:
+            results = mb_client.lookup_toc(args.toc)
+    finally:
+        mb_client.close()
+
+    data = [r.to_dict() for r in results]
+
+    method = f"disc ID {args.discid}" if args.discid else "TOC fuzzy match"
+    lines = [f"{len(results)} releases via {method}:"]
+    for r in results:
+        lines.append(f"  [{r.id}]  {r.title} ({r.date}) {r.country} / {r.label} / {r.format} / {r.track_count}t")
+    _output_json(data, args.out, "\n".join(lines))
+
+
 def _mb(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger mb",
@@ -142,6 +207,7 @@ def _mb(argv: list[str] | None = None) -> None:
     sub = parser.add_subparsers(dest="mb_command")
     sub.add_parser("search", help="Search for candidate releases.")
     sub.add_parser("release", help="Fetch full release detail.")
+    sub.add_parser("discid", help="Look up by disc ID or TOC.")
 
     args, remaining = parser.parse_known_args(argv)
 
@@ -149,6 +215,8 @@ def _mb(argv: list[str] | None = None) -> None:
         _mb_search(remaining)
     elif args.mb_command == "release":
         _mb_release(remaining)
+    elif args.mb_command == "discid":
+        _mb_discid(remaining)
     else:
         parser.print_help()
         sys.exit(1)
@@ -476,6 +544,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("read", help="Read album tags and durations as JSON.")
+    sub.add_parser("toc", help="Parse rip artifacts for TOC / disc ID.")
     sub.add_parser("mb", help="MusicBrainz query commands.")
     sub.add_parser("match", help="Score candidates by duration match.")
     sub.add_parser("diff", help="Compute tag diff against a MusicBrainz release.")
@@ -488,6 +557,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "read":
         _read(remaining)
+    elif args.command == "toc":
+        _toc(remaining)
     elif args.command == "mb":
         _mb(remaining)
     elif args.command == "match":

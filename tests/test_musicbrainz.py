@@ -321,6 +321,76 @@ class TestMBReleaseSerialization:
         assert restored.discs == {}
 
 
+class TestLookupDiscid:
+    def test_returns_releases(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "releases": [
+                {
+                    "id": "release-disc",
+                    "title": "Desperado",
+                    "date": "1973",
+                    "country": "US",
+                    "status": "Official",
+                    "barcode": "",
+                    "label-info": [],
+                    "media": [{"format": "CD", "track-count": 11}],
+                }
+            ]
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        client = MusicBrainzClient()
+        client._client = MagicMock()
+        client._client.get.return_value = mock_resp
+
+        releases = client.lookup_discid("test-discid")
+        assert len(releases) == 1
+        assert releases[0].id == "release-disc"
+        assert releases[0].track_count == 11
+
+    def test_not_found_returns_empty(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+
+        client = MusicBrainzClient()
+        client._client = MagicMock()
+        client._client.get.return_value = mock_resp
+
+        releases = client.lookup_discid("nonexistent")
+        assert releases == []
+
+
+class TestLookupToc:
+    def test_returns_releases(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "releases": [
+                {
+                    "id": "release-toc",
+                    "title": "Album",
+                    "date": "2020",
+                    "country": "US",
+                    "status": "Official",
+                    "barcode": "",
+                    "label-info": [],
+                    "media": [{"format": "CD", "track-count": 5}],
+                }
+            ]
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        client = MusicBrainzClient()
+        client._client = MagicMock()
+        client._client.get.return_value = mock_resp
+
+        releases = client.lookup_toc("1 3 200000 150 15000 30000")
+        assert len(releases) == 1
+        assert releases[0].id == "release-toc"
+
+
 class TestParseRecordingCredits:
     def test_merges_performer_attributes(self) -> None:
         recording = {

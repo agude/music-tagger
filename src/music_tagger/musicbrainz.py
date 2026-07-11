@@ -276,36 +276,7 @@ class MusicBrainzClient:
         )
         resp.raise_for_status()
         data = resp.json()
-        releases = []
-        for r in data.get("releases", []):
-            media_formats = [
-                m.get("format", "") for m in r.get("media", [])
-            ]
-            label_info = r.get("label-info", [])
-            label = (label_info[0].get("label") or {}).get("name", "") if label_info else ""
-            catnum = ""
-            for li in label_info:
-                if li.get("catalog-number"):
-                    catnum = li["catalog-number"]
-                    break
-            track_count = sum(
-                m.get("track-count", 0) for m in r.get("media", [])
-            )
-            releases.append(
-                MBRelease(
-                    id=r["id"],
-                    title=r.get("title", ""),
-                    date=r.get("date", ""),
-                    country=r.get("country", ""),
-                    status=r.get("status", ""),
-                    label=label,
-                    catalognum=catnum,
-                    barcode=r.get("barcode", ""),
-                    format=", ".join(f for f in media_formats if f),
-                    track_count=track_count,
-                )
-            )
-        return releases
+        return [self._parse_search_release(r) for r in data.get("releases", [])]
 
     def fetch_release(self, release_id: str) -> MBRelease:
         self._rate_limit()
@@ -425,6 +396,63 @@ class MusicBrainzClient:
             first_release_date=first_release_date,
             asin=r.get("asin") or "",
             script=script,
+        )
+
+    def lookup_discid(self, discid: str) -> list[MBRelease]:
+        self._rate_limit()
+        resp = self._client.get(
+            f"/discid/{discid}",
+            params={
+                "fmt": "json",
+                "inc": "recordings+artist-credits+labels+release-groups",
+            },
+        )
+        if resp.status_code == 404:
+            return []
+        resp.raise_for_status()
+        data = resp.json()
+        releases = data.get("releases", [])
+        return [self._parse_search_release(r) for r in releases]
+
+    def lookup_toc(self, toc: str) -> list[MBRelease]:
+        self._rate_limit()
+        resp = self._client.get(
+            "/discid/-",
+            params={
+                "toc": toc,
+                "fmt": "json",
+                "inc": "recordings+artist-credits+labels+release-groups",
+            },
+        )
+        if resp.status_code == 404:
+            return []
+        resp.raise_for_status()
+        data = resp.json()
+        releases = data.get("releases", [])
+        return [self._parse_search_release(r) for r in releases]
+
+    @staticmethod
+    def _parse_search_release(r: dict) -> MBRelease:
+        media_formats = [m.get("format", "") for m in r.get("media", [])]
+        label_info = r.get("label-info", [])
+        label = (label_info[0].get("label") or {}).get("name", "") if label_info else ""
+        catnum = ""
+        for li in label_info:
+            if li.get("catalog-number"):
+                catnum = li["catalog-number"]
+                break
+        track_count = sum(m.get("track-count", 0) for m in r.get("media", []))
+        return MBRelease(
+            id=r["id"],
+            title=r.get("title", ""),
+            date=r.get("date", ""),
+            country=r.get("country", ""),
+            status=r.get("status", ""),
+            label=label,
+            catalognum=catnum,
+            barcode=r.get("barcode", ""),
+            format=", ".join(f for f in media_formats if f),
+            track_count=track_count,
         )
 
     def close(self) -> None:

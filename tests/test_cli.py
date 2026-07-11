@@ -4,7 +4,10 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from music_tagger.cli import _diff, _is_album_dir, _match, _mb_release, _mb_search, _print_diff, _read, _scan, _write_tags
+from music_tagger.cli import (
+    _diff, _is_album_dir, _match, _mb_discid, _mb_release, _mb_search,
+    _print_diff, _read, _scan, _toc, _write_tags,
+)
 from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album
 from music_tagger.tagger import AlbumResult, TrackDiff
@@ -162,6 +165,60 @@ class TestScanCommand:
         data = json.loads(captured.out)
         assert len(data) == 1
         assert data[0]["artist"] == "Eagles"
+
+
+SAMPLE_CUE = """\
+FILE "audio.flac" WAVE
+  TRACK 01 AUDIO
+    INDEX 01 00:00:00
+  TRACK 02 AUDIO
+    INDEX 01 03:29:37
+  TRACK 03 AUDIO
+    INDEX 01 06:36:50
+"""
+
+
+class TestTocCommand:
+    def test_json_to_stdout(self, capsys: object, tmp_path: Path) -> None:
+        (tmp_path / "album.cue").write_text(SAMPLE_CUE)
+        _toc([str(tmp_path)])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        data = json.loads(captured.out)
+        assert data["first_track"] == 1
+        assert data["last_track"] == 3
+        assert len(data["track_offsets"]) == 3
+
+    def test_no_cue_exits(self, tmp_path: Path) -> None:
+        import pytest
+        with pytest.raises((SystemExit, ValueError)):
+            _toc([str(tmp_path)])
+
+
+class TestMbDiscidCommand:
+    def test_by_discid(self, capsys: object) -> None:
+        release = MBRelease(
+            id="r-1", title="Desperado", date="1973", country="US",
+            label="Asylum", track_count=11, format="CD",
+        )
+        with patch("music_tagger.cli.MusicBrainzClient") as mock_cls:
+            mock_cls.return_value.lookup_discid.return_value = [release]
+            _mb_discid(["abc123"])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        data = json.loads(captured.out)
+        assert len(data) == 1
+        assert data[0]["id"] == "r-1"
+
+    def test_by_toc(self, capsys: object) -> None:
+        release = MBRelease(
+            id="r-2", title="Album", track_count=5, format="CD",
+        )
+        with patch("music_tagger.cli.MusicBrainzClient") as mock_cls:
+            mock_cls.return_value.lookup_toc.return_value = [release]
+            _mb_discid(["--toc", "1 3 200000 150 15000 30000"])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        data = json.loads(captured.out)
+        assert len(data) == 1
+        assert data[0]["id"] == "r-2"
 
 
 class TestMbSearchCommand:
