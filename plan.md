@@ -76,12 +76,17 @@ Concretely:
 
 ## Current State (July 2026)
 
-**Phase 1 complete.** The full primitive set from the plan is implemented and
-tested. Every command emits JSON (to stdout or `--out`), prints a compact
-digest when writing to a file, and accepts input from prior commands via
-`--from`/`--evidence`/`--release`/`--diff` file arguments.
+**Phase 1 — DONE.** Primitive decomposition complete. Every command emits
+JSON (to stdout or `--out`), prints a compact digest when writing to a
+file, and accepts input from prior commands via file arguments.
 
-Implemented primitives:
+**Phase 2 — DONE.** Full rip-to-library placement pipeline working.
+
+**Phase 3 — NOT STARTED.** Ratings export/import. See detail section below.
+
+### What is implemented (168 tests, all passing)
+
+Primitives (Phase 1):
 - `read <album-dir>` — per-track tags, durations, formats as JSON evidence.
 - `toc <rip-dir>` — CUE sheet parser, disc ID computation.
 - `mb search`, `mb release`, `mb discid` — all MB query paths.
@@ -90,14 +95,7 @@ Implemented primitives:
 - `write-tags --diff` — applies tag changes, supports `--dry-run` and
   `--log`.
 
-Thin wrappers reimplemented as compositions of primitives:
-- `candidates <dir>` ≡ `read` + `search_candidates` + `score_candidates`.
-- `tag <dir> --release-id` ≡ `read` + `mb release` + `diff` + `write-tags`.
-
-All previous composability gaps are resolved. LLM-edited diffs work:
-`diff` → hand-edit the JSON → `write-tags --diff edited.json`.
-
-**Phase 2 complete.** Placement pipeline from rip to library:
+Placement (Phase 2):
 - `path-for --evidence` — computes library paths per the
   `Artist/Album (Year)/NN. Title.ext` convention. Handles multi-disc
   naming (`D-NN.`), non-audio files (cue/log/art), filesystem
@@ -108,12 +106,49 @@ All previous composability gaps are resolved. LLM-edited diffs work:
   Archive (500px or `--full`), skips existing, `--force` to overwrite.
 - `nd rescan` — triggers Navidrome library scan via Subsonic API.
 
-New modules: `placement.py` (path computation + verified copy),
-`coverart.py` (CAA client), `navidrome.py` (Subsonic API client).
+Thin wrappers (compositions of the above):
+- `candidates <dir>` ≡ `read` + `search_candidates` + `score_candidates`.
+- `tag <dir> --release-id` ≡ `read` + `mb release` + `diff` + `write-tags`.
 
-In progress: working through `checklist.json` album by album to fix
-Navidrome album splits. This continues as Phase 0 and is unaffected by the
-rest of the plan.
+Legacy (predates primitive decomposition but still works):
+- `scan <root>` — JSON list of albums with split/missing MBIDs.
+
+Modules:
+- `tags.py` — read/write FLAC + MP3 tags via mutagen (~45 fields).
+- `musicbrainz.py` — MB API client, 1 req/sec rate limit.
+- `tagger.py` — search, score, diff, apply orchestration.
+- `discid.py` — CUE parser + disc ID computation.
+- `placement.py` — path computation + SHA-256 verified copy.
+- `coverart.py` — Cover Art Archive client.
+- `navidrome.py` — Subsonic API client (auth, startScan; extend for
+  Phase 3 ratings).
+
+LLM-edited diffs work end-to-end:
+`diff` → hand-edit the JSON → `write-tags --diff edited.json`.
+
+### What is NOT yet implemented
+
+Phase 3 commands (ratings):
+- `nd ratings` — export all rated/starred songs from Navidrome as JSON.
+- `write-tags --ratings` mode — map ratings to file tags.
+- `nd set-rating --from <json>` — push ratings back into Navidrome.
+- Scheduled periodic export with a state file.
+
+Phase 5 (low priority):
+- AcoustID fingerprinting via `fpcalc` + `api.acoustid.org`.
+
+### Blockers for Phase 3
+
+Before implementing `nd ratings`, test against the live Navidrome server:
+- Does `getStarred2` return all starred items?
+- Is there a Subsonic endpoint that enumerates *rated* (not just starred)
+  songs? If not, fall back to querying the SQLite `annotation` table
+  directly at `/volume1/docker/navidrome/data/navidrome.db`.
+
+### Ongoing (no code changes)
+
+Phase 0: working through `checklist.json` album by album to fix Navidrome
+album splits using the existing primitives.
 
 Library conventions (observed, keep):
 - Path: `Artist/Album Title (Year)/NN. Track Title.flac`
