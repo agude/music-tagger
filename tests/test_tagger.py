@@ -329,25 +329,58 @@ class TestBuildDiff:
         title_change = next(c for c in result.diffs[0].changes if c.field == "title")
         assert title_change.new_value != "Doolin-Dalton"
 
-    def test_missing_tracknumber_gets_album_tags_only(self) -> None:
-        """A file with no tracknumber tag should still get album-level tags."""
+    def test_no_tracknumbers_uses_positional_fallback(self) -> None:
+        """When no files have tracknumber tags, match by file position."""
         release = _make_release()
         tracks = [
-            TrackTags(
-                path=Path("unknown.flac"),
-                tags={},
-                duration_secs=200.0,
-                format="flac",
-            ),
+            TrackTags(path=Path("01.flac"), tags={}, duration_secs=209.0, format="flac"),
+            TrackTags(path=Path("02.flac"), tags={}, duration_secs=187.0, format="flac"),
+            TrackTags(path=Path("03.flac"), tags={}, duration_secs=195.0, format="flac"),
         ]
         album = AlbumTags(directory=Path("/music"), tracks=tracks)
         result = build_diff(album, release)
 
-        assert len(result.diffs) == 1
-        fields = {c.field for c in result.diffs[0].changes}
-        assert "album" in fields
-        assert "musicbrainz_albumid" in fields
-        assert "title" not in fields
+        titles = [
+            next((c.new_value for c in d.changes if c.field == "title"), None)
+            for d in result.diffs
+        ]
+        assert titles == ["Doolin-Dalton", "Twenty-One", "Out of Control"]
+
+    def test_mixed_tracknumbers_untagged_gets_album_only(self) -> None:
+        """When some files have tracknumber and one doesn't, the untagged
+        file gets album-level tags only (not positional fallback)."""
+        release = _make_release()
+        tracks = [
+            TrackTags(path=Path("01.flac"), tags={"tracknumber": "1"},
+                      duration_secs=209.0, format="flac"),
+            TrackTags(path=Path("unknown.flac"), tags={},
+                      duration_secs=200.0, format="flac"),
+        ]
+        album = AlbumTags(directory=Path("/music"), tracks=tracks)
+        result = build_diff(album, release)
+
+        # The tagged file gets a title
+        tagged_fields = {c.field for c in result.diffs[0].changes}
+        assert "title" in tagged_fields
+
+        # The untagged file gets album-level tags but no title
+        untagged_fields = {c.field for c in result.diffs[1].changes}
+        assert "album" in untagged_fields
+        assert "musicbrainz_albumid" in untagged_fields
+        assert "title" not in untagged_fields
+
+    def test_positional_fallback_warns(self, capsys) -> None:
+        """Positional fallback prints a warning to stderr."""
+        release = _make_release()
+        tracks = [
+            TrackTags(path=Path("01.flac"), tags={}, duration_secs=209.0, format="flac"),
+        ]
+        album = AlbumTags(directory=Path("/music"), tracks=tracks)
+        build_diff(album, release)
+
+        captured = capsys.readouterr()
+        assert "no tracknumber tags found" in captured.err
+        assert "matching 1 files by position" in captured.err
 
 
 class TestScoreCandidates:

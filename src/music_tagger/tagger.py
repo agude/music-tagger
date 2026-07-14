@@ -275,18 +275,32 @@ def _parse_track_number(track: TrackTags) -> int | None:
 def build_diff(album: AlbumTags, release: MBRelease) -> AlbumResult:
     """Compute the tag diff between current tags and a chosen release.
 
-    Matches local files to MB tracks by tracknumber tag, not file position.
-    This ensures partial albums (e.g. one track from a 10-track release)
-    get matched to the correct MB track.
+    Matches local files to MB tracks by tracknumber tag. When no tracks
+    have tracknumber tags (e.g. freshly ripped files), falls back to
+    positional matching by file sort order.
     """
+    import sys
+
     # Index MB tracks by (disc, number) for direct lookup
     mb_index: dict[tuple[int, int], int] = {}
     for disc_num, disc_tracks in release.discs.items():
         for i, mbt in enumerate(disc_tracks):
             mb_index[(disc_num, mbt.number)] = i
 
+    # Detect whether any track has a tracknumber tag
+    has_any_tracknumber = any(
+        _parse_track_number(t) is not None for t in album.tracks
+    )
+    positional = not has_any_tracknumber and len(album.tracks) > 0
+    if positional:
+        print(
+            f"Warning: no tracknumber tags found; matching {len(album.tracks)} "
+            f"files by position",
+            file=sys.stderr,
+        )
+
     diffs: list[TrackDiff] = []
-    for track in album.tracks:
+    for file_pos, track in enumerate(album.tracks):
         disc_num = _parse_disc_number(track)
         track_num = _parse_track_number(track)
 
@@ -295,11 +309,12 @@ def build_diff(album: AlbumTags, release: MBRelease) -> AlbumResult:
             key = (disc_num, track_num)
             if key in mb_index:
                 track_index = mb_index[key]
+        elif positional:
+            track_index = file_pos if file_pos < len(release.discs.get(disc_num, [])) else None
 
         if track_index is not None:
             new_tags = _build_new_tags(release, track, track_index, disc_num)
         else:
-            # No tracknumber or no matching MB track — apply album-level tags only
             new_tags = _build_new_tags(release, track, len(release.discs.get(disc_num, [])), disc_num)
 
         changes = compute_diff(track, new_tags)
