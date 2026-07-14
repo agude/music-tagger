@@ -29,9 +29,15 @@ Processing the library is staged album by album across sessions:
 
 1. Run `scan` once to generate the checklist.
 2. Each session: read the checklist, find the next `- [ ]` entry.
-3. Run `candidates` for that album, pick the release, run `tag --dry-run`,
-   review, then `tag --log changes.log`.
-4. Mark the entry `- [x]` in the checklist.
+3. Per album:
+   a. `candidates <dir>` — find MB release candidates, pick one.
+   b. `tag <dir> --release-id <uuid> --dry-run` — review the diff.
+   c. `tag <dir> --release-id <uuid> --log changes.log` — apply tags.
+   d. `art <dir> --release-id <uuid>` — fetch cover art.
+   e. `genre <dir> <group>` — set the meta-grouping tag.
+   f. Rename files to `NN - Title.flac` convention (manual or `rename`).
+   g. Mark the checklist entry `- [x]`.
+4. After a batch: `nd rescan` to trigger Navidrome library scan.
 5. Repeat until done. Re-scan if needed to catch stragglers.
 
 **File locations:**
