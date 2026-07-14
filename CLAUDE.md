@@ -28,6 +28,13 @@ Key CLI subcommands, driven by Claude Code in conversation:
    Sanitizes filesystem-unsafe characters. Skips files missing title or
    tracknumber tags.
 
+6. `uv run music-tagger rip <output-dir> [--device /dev/cdrom] [--no-discid]`
+   — rips a CD to FLAC using cdparanoia + flac. Reads the disc ID via
+   libdiscid for MusicBrainz lookup. Sets tracknumber tags from position
+   so `tag` can match tracks. Requires system packages: `cdparanoia`,
+   `flac`, `libdiscid-dev`; Python package `discid` (optional, for disc
+   ID lookup).
+
 ## Library workflow
 
 Processing the library is staged album by album across sessions:
@@ -69,6 +76,7 @@ src/music_tagger/
 ├── placement.py     # Library path computation + verified copy
 ├── coverart.py      # Cover Art Archive client
 ├── navidrome.py     # Navidrome / Subsonic API client
+├── ripper.py        # CD ripping via cdparanoia + FLAC encoding
 └── cli.py           # Argparse entry point (all subcommands)
 ```
 

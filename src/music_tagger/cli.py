@@ -624,6 +624,54 @@ def _art(argv: list[str] | None = None) -> None:
         print(f"Saved cover.jpg ({size_kb:.0f} KB) to {result.path}")
 
 
+def _rip(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger rip",
+        description="Rip a CD to FLAC files with bootstrap tags.",
+    )
+    parser.add_argument("path", type=Path, help="Output directory for FLAC files.")
+    parser.add_argument("--device", default="/dev/cdrom", help="CD drive device (default: /dev/cdrom).")
+    parser.add_argument("--no-discid", action="store_true", help="Skip disc ID lookup.")
+    args = parser.parse_args(argv)
+
+    from .ripper import read_disc_id, rip_cd
+
+    target: Path = args.path.resolve()
+
+    # Read disc ID first (while disc is in the drive)
+    disc_info = None
+    if not args.no_discid:
+        try:
+            disc_info = read_disc_id(args.device)
+            print(f"Disc ID: {disc_info['disc_id']}")
+            print(f"Tracks: {disc_info['track_count']}")
+        except RuntimeError as e:
+            print(f"Warning: disc ID read failed: {e}", file=sys.stderr)
+            print("Continuing without disc ID.", file=sys.stderr)
+
+    # Rip and encode
+    expected = disc_info["track_count"] if disc_info else None
+    print(f"\nRipping to {target}...")
+    result = rip_cd(target, device=args.device, track_count=expected)
+    print(f"Ripped {result.track_count} tracks.")
+
+    # Bootstrap tracknumber tags so `tag` can match by position
+    from mutagen.flac import FLAC
+    for i, flac_path in enumerate(result.tracks, 1):
+        audio = FLAC(str(flac_path))
+        audio["TRACKNUMBER"] = str(i)
+        audio.save()
+
+    print(f"\nSet tracknumber tags on {result.track_count} files.")
+
+    if disc_info:
+        print(f"\nNext: look up disc ID {disc_info['disc_id']} on MusicBrainz:")
+        print(f"  uv run music-tagger mb discid {disc_info['disc_id']}")
+    else:
+        print("\nNext: search MusicBrainz manually:")
+        print(f"  uv run music-tagger candidates {target}")
+
+
 def _nd_rescan(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger nd rescan",
@@ -862,6 +910,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("tag", help="Apply tags from a chosen MusicBrainz release.")
     sub.add_parser("genre", help="Set or show the genre meta-grouping tag.")
     sub.add_parser("rename", help="Rename files to 'NN - Title.ext' from tags.")
+    sub.add_parser("rip", help="Rip a CD to FLAC with bootstrap tags.")
 
     args, remaining = parser.parse_known_args(argv)
 
@@ -895,6 +944,8 @@ def main(argv: list[str] | None = None) -> None:
         _genre(remaining)
     elif args.command == "rename":
         _rename(remaining)
+    elif args.command == "rip":
+        _rip(remaining)
     else:
         parser.print_help()
         sys.exit(1)

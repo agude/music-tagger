@@ -84,7 +84,7 @@ file, and accepts input from prior commands via file arguments.
 
 **Phase 3 — NOT STARTED.** Ratings export/import. See detail section below.
 
-### What is implemented (168 tests, all passing)
+### What is implemented (182 tests, all passing)
 
 Primitives (Phase 1):
 - `read <album-dir>` — per-track tags, durations, formats as JSON evidence.
@@ -106,6 +106,14 @@ Placement (Phase 2):
   Archive (500px or `--full`), skips existing, `--force` to overwrite.
 - `nd rescan` — triggers Navidrome library scan via Subsonic API.
 
+CD ripping (Phase 2.5):
+- `rip <output-dir>` — rips CD via cdparanoia, encodes to FLAC, reads
+  disc ID via libdiscid, sets tracknumber tags from position.
+- `genre <dir> [genre]` — sets or shows the genre meta-grouping tag.
+- `rename <dir>` — renames files to `NN - Title.ext` from tags.
+- `build_diff` now falls back to positional matching when no tracks
+  have tracknumber tags (freshly ripped files).
+
 Thin wrappers (compositions of the above):
 - `candidates <dir>` ≡ `read` + `search_candidates` + `score_candidates`.
 - `tag <dir> --release-id` ≡ `read` + `mb release` + `diff` + `write-tags`.
@@ -122,6 +130,7 @@ Modules:
 - `coverart.py` — Cover Art Archive client.
 - `navidrome.py` — Subsonic API client (auth, startScan; extend for
   Phase 3 ratings).
+- `ripper.py` — CD ripping (cdparanoia) + FLAC encoding.
 
 LLM-edited diffs work end-to-end:
 `diff` → hand-edit the JSON → `write-tags --diff edited.json`.
