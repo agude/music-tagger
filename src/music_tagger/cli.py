@@ -662,6 +662,82 @@ def _nd(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
 
+def _genre(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger genre",
+        description="Set or show the genre tag on all tracks in an album directory.",
+    )
+    parser.add_argument("path", type=Path, help="Album directory.")
+    parser.add_argument("genre", nargs="?", default=None, help="Genre to set. Omit to show current genre.")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing.")
+    parser.add_argument("--log", type=Path, default=None, help="Append changes to this log file.")
+    args = parser.parse_args(argv)
+
+    target: Path = args.path.resolve()
+    if not target.is_dir():
+        print(f"Error: {target} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    album = read_album(target)
+    if not album.tracks:
+        print(f"Error: no audio files in {target}.", file=sys.stderr)
+        sys.exit(1)
+
+    if args.genre is None:
+        genres = {t.tags.get("genre", "") for t in album.tracks}
+        genres.discard("")
+        if genres:
+            for g in sorted(genres):
+                print(g)
+        else:
+            print("(no genre set)")
+        return
+
+    from .tags import TagChange, write_tags
+
+    count = 0
+    for track in album.tracks:
+        old = track.tags.get("genre", "")
+        if old == args.genre:
+            continue
+        change = TagChange(field="genre", old_value=old, new_value=args.genre)
+        if args.dry_run:
+            old_display = old or "(empty)"
+            print(f"  {track.path.name}: genre: {old_display} → {args.genre}")
+        else:
+            timestamp = TagChange(
+                field="music_tagger_updated",
+                old_value=track.tags.get("music_tagger_updated", ""),
+                new_value=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+            write_tags(track, [change, timestamp])
+            count += 1
+
+    if args.dry_run:
+        print(f"\n(dry run — {len(album.tracks)} tracks)")
+    else:
+        print(f"Set genre={args.genre} on {count} track(s).")
+
+    if args.log and not args.dry_run and count > 0:
+        _write_genre_log(args.log, album, args.genre, count)
+
+
+def _write_genre_log(log_path: Path, album: AlbumTags, genre: str, count: int) -> None:
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        f"## Genre: {genre}",
+        f"",
+        f"- **Date:** {timestamp}",
+        f"- **Album:** {album.artist} — {album.album}",
+        f"- **Tracks:** {count}",
+        f"",
+        "---",
+        "",
+    ]
+    with open(log_path, "a") as f:
+        f.write("\n".join(lines))
+
+
 def _tag(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger tag",
@@ -725,6 +801,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("scan", help="Generate a checklist of albums needing attention.")
     sub.add_parser("candidates", help="Show MusicBrainz candidates for an album.")
     sub.add_parser("tag", help="Apply tags from a chosen MusicBrainz release.")
+    sub.add_parser("genre", help="Set or show the genre meta-grouping tag.")
 
     args, remaining = parser.parse_known_args(argv)
 
@@ -754,6 +831,8 @@ def main(argv: list[str] | None = None) -> None:
         _print_candidates(remaining)
     elif args.command == "tag":
         _tag(remaining)
+    elif args.command == "genre":
+        _genre(remaining)
     else:
         parser.print_help()
         sys.exit(1)

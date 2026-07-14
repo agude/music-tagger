@@ -86,7 +86,3 @@ Tag field names follow
 ```
 uv run pytest tests/ -v
 ```
-
-## License
-
-MIT

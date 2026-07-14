@@ -5,7 +5,7 @@ This is an interactive tool — Claude Code is the operator, not the end user.
 
 ## How it works
 
-Three CLI subcommands, driven by Claude Code in conversation:
+Key CLI subcommands, driven by Claude Code in conversation:
 
 1. `uv run music-tagger scan <library-root> -o checklist.md` — finds albums
    with split or missing MusicBrainz IDs, writes a markdown checklist.
@@ -17,6 +17,11 @@ Three CLI subcommands, driven by Claude Code in conversation:
    — fetches the chosen release from MusicBrainz, computes a field-by-field
    diff against current tags, and writes if not `--dry-run`. Appends all
    changes to the log file for auditing.
+
+4. `uv run music-tagger genre <album-dir> [genre] [--dry-run] [--log changes.log]`
+   — sets the genre meta-grouping tag on all tracks. Omit genre to show the
+   current value. These are broad browsing categories (e.g. "Retro Rock",
+   "Classical", "Rap", "Broadway"), not musicological genres.
 
 ## Library workflow
 
