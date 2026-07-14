@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from music_tagger.cli import (
     _diff, _is_album_dir, _match, _mb_discid, _mb_release, _mb_search,
-    _print_diff, _read, _scan, _toc, _write_tags,
+    _print_diff, _read, _rename, _scan, _toc, _write_tags,
 )
 from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album
@@ -539,3 +539,63 @@ class TestTagCommand:
 
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "dry run" in captured.out
+
+
+class TestRenameCommand:
+    def test_dry_run(self, capsys: object, flac_album: Path) -> None:
+        for f in sorted(flac_album.glob("*.flac")):
+            f.rename(f.parent / f"track{f.stem[:2]}.flac")
+
+        _rename([str(flac_album), "--dry-run"])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "track01.flac -> 01 - Desperado.flac" in captured.out
+        assert "dry run" in captured.out
+        assert (flac_album / "track01.flac").exists()
+
+    def test_renames_files(self, flac_album: Path, capsys: object) -> None:
+        for f in sorted(flac_album.glob("*.flac")):
+            f.rename(f.parent / f"track{f.stem[:2]}.flac")
+
+        _rename([str(flac_album)])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "Renamed 3 file(s)" in captured.out
+        assert (flac_album / "01 - Desperado.flac").exists()
+        assert (flac_album / "02 - Twenty-One.flac").exists()
+        assert (flac_album / "03 - Out of Control.flac").exists()
+
+    def test_skips_already_correct(self, flac_album: Path, capsys: object) -> None:
+        # Fixtures are named "NN - Track N.flac" but title tag is different,
+        # so they do get renamed. Rename them to match their title tags first.
+        for f in sorted(flac_album.glob("*.flac")):
+            from mutagen.flac import FLAC
+            audio = FLAC(str(f))
+            title = audio["TITLE"][0]
+            num = int(audio["TRACKNUMBER"][0])
+            correct_name = f"{num:02d} - {title}.flac"
+            if f.name != correct_name:
+                f.rename(f.parent / correct_name)
+
+        _rename([str(flac_album)])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "Renamed 0 file(s)" in captured.out
+
+    def test_skips_missing_title(self, flac_album: Path, capsys: object) -> None:
+        from mutagen.flac import FLAC
+        target = sorted(flac_album.glob("*.flac"))[0]
+        audio = FLAC(str(target))
+        del audio["TITLE"]
+        audio.save()
+        _rename([str(flac_album)])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "skipped (missing title or tracknumber)" in captured.out
+
+    def test_sanitizes_unsafe_chars(self, flac_album: Path, capsys: object) -> None:
+        from mutagen.flac import FLAC
+        target = sorted(flac_album.glob("*.flac"))[0]
+        target.rename(flac_album / "track01.flac")
+        audio = FLAC(str(flac_album / "track01.flac"))
+        audio["TITLE"] = ["What:Is/This?"]
+        audio.save()
+        _rename([str(flac_album)])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert (flac_album / "01 - What-Is-This-.flac").exists()

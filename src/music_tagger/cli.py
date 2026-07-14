@@ -738,6 +738,65 @@ def _write_genre_log(log_path: Path, album: AlbumTags, genre: str, count: int) -
         f.write("\n".join(lines))
 
 
+def _rename(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger rename",
+        description="Rename audio files to 'NN - Title.ext' based on tags.",
+    )
+    parser.add_argument("path", type=Path, help="Album directory.")
+    parser.add_argument("--dry-run", action="store_true", help="Show renames without executing.")
+    args = parser.parse_args(argv)
+
+    target: Path = args.path.resolve()
+    if not target.is_dir():
+        print(f"Error: {target} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    album = read_album(target)
+    if not album.tracks:
+        print(f"Error: no audio files in {target}.", file=sys.stderr)
+        sys.exit(1)
+
+    from .placement import _sanitize
+
+    count = 0
+    for track in album.tracks:
+        title = track.tags.get("title")
+        tracknumber = track.tags.get("tracknumber")
+        if not title or not tracknumber:
+            print(f"  {track.path.name}: skipped (missing title or tracknumber)")
+            continue
+
+        try:
+            num = int(tracknumber.split("/")[0])
+        except ValueError:
+            print(f"  {track.path.name}: skipped (unparseable tracknumber '{tracknumber}')")
+            continue
+
+        safe_title = _sanitize(title)
+        new_name = f"{num:02d} - {safe_title}{track.path.suffix}"
+        new_path = track.path.parent / new_name
+
+        if new_path == track.path:
+            continue
+
+        if new_path.exists():
+            print(f"  {track.path.name}: skipped ('{new_name}' already exists)")
+            continue
+
+        if args.dry_run:
+            print(f"  {track.path.name} -> {new_name}")
+        else:
+            track.path.rename(new_path)
+            print(f"  {track.path.name} -> {new_name}")
+            count += 1
+
+    if args.dry_run:
+        print(f"\n(dry run — {len(album.tracks)} tracks)")
+    else:
+        print(f"Renamed {count} file(s).")
+
+
 def _tag(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger tag",
@@ -802,6 +861,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("candidates", help="Show MusicBrainz candidates for an album.")
     sub.add_parser("tag", help="Apply tags from a chosen MusicBrainz release.")
     sub.add_parser("genre", help="Set or show the genre meta-grouping tag.")
+    sub.add_parser("rename", help="Rename files to 'NN - Title.ext' from tags.")
 
     args, remaining = parser.parse_known_args(argv)
 
@@ -833,6 +893,8 @@ def main(argv: list[str] | None = None) -> None:
         _tag(remaining)
     elif args.command == "genre":
         _genre(remaining)
+    elif args.command == "rename":
+        _rename(remaining)
     else:
         parser.print_help()
         sys.exit(1)

@@ -23,6 +23,11 @@ Key CLI subcommands, driven by Claude Code in conversation:
    current value. These are broad browsing categories (e.g. "Retro Rock",
    "Classical", "Rap", "Broadway"), not musicological genres.
 
+5. `uv run music-tagger rename <album-dir> [--dry-run]` — renames audio
+   files to `NN - Title.ext` based on their tracknumber and title tags.
+   Sanitizes filesystem-unsafe characters. Skips files missing title or
+   tracknumber tags.
+
 ## Library workflow
 
 Processing the library is staged album by album across sessions:
@@ -35,7 +40,7 @@ Processing the library is staged album by album across sessions:
    c. `tag <dir> --release-id <uuid> --log changes.log` — apply tags.
    d. `art <dir> --release-id <uuid>` — fetch cover art.
    e. `genre <dir> <group>` — set the meta-grouping tag.
-   f. Rename files to `NN - Title.flac` convention (manual or `rename`).
+   f. `rename <dir>` — rename files to `NN - Title.ext` from tags.
    g. Mark the checklist entry `- [x]`.
 4. After a batch: `nd rescan` to trigger Navidrome library scan.
 5. Repeat until done. Re-scan if needed to catch stragglers.
