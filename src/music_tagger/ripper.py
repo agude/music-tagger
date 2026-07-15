@@ -39,12 +39,11 @@ def rip_cd(
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
-        # Rip all tracks to WAV
+        # Rip all tracks to WAV (stderr streams progress to the terminal)
         subprocess.run(
             ["cdparanoia", "-B", "-d", device],
             cwd=str(tmp),
             check=True,
-            capture_output=True,
         )
 
         wav_files = sorted(tmp.glob("track*.cdda.wav"))
