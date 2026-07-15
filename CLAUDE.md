@@ -32,8 +32,7 @@ Key CLI subcommands, driven by Claude Code in conversation:
    — rips a CD to FLAC using cdparanoia + flac. Reads the disc ID via
    libdiscid for MusicBrainz lookup. Sets tracknumber tags from position
    so `tag` can match tracks. Requires system packages: `cdparanoia`,
-   `flac`, `libdiscid-dev`; Python package `discid` (optional, for disc
-   ID lookup).
+   `flac`, `libdiscid-dev`; Python package `discid` (for disc ID lookup).
 
 ## Library workflow
 
@@ -43,12 +42,15 @@ Processing the library is staged album by album across sessions:
 2. Each session: read the checklist, find the next `- [ ]` entry.
 3. Per album:
    a. `candidates <dir>` — find MB release candidates, pick one.
+      For freshly ripped files with no tags, use
+      `candidates <dir> --artist '<name>' --album '<title>'`.
    b. `tag <dir> --release-id <uuid> --dry-run` — review the diff.
    c. `tag <dir> --release-id <uuid> --log changes.log` — apply tags.
    d. `art <dir> --release-id <uuid>` — fetch cover art.
    e. `genre <dir> <group>` — set the meta-grouping tag.
    f. `rename <dir>` — rename files to `NN - Title.ext` from tags.
-   g. Mark the checklist entry `- [x]`.
+   g. `copy` — place files into the library (see placement.py).
+   h. Mark the checklist entry `- [x]`.
 4. After a batch: `nd rescan` to trigger Navidrome library scan.
 5. Repeat until done. Re-scan if needed to catch stragglers.
 
@@ -109,6 +111,19 @@ src/music_tagger/
 - `tag` (without `--dry-run`) writes metadata into files. It does not move,
   rename, or delete files. Use `--dry-run` first, review the diff, then run
   without it.
+
+## Environment setup
+
+**System packages** (for `rip` subcommand):
+- `cdparanoia` — CD audio extraction
+- `flac` — FLAC encoding
+- `libdiscid-dev` — disc ID computation (required by Python `discid` package)
+
+**Navidrome credentials** (for `nd rescan`):
+Set these environment variables (e.g. in `.env` or shell profile):
+- `NAVIDROME_URL` — Navidrome server URL (e.g. `http://localhost:4533`)
+- `NAVIDROME_USER` — Navidrome username
+- `NAVIDROME_PASSWORD` — Navidrome password
 
 ## Running tests
 
