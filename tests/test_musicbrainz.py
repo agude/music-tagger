@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from music_tagger.musicbrainz import MBRelease, MBTrack, MusicBrainzClient, _parse_recording_credits
+from music_tagger.musicbrainz import MBRelease, MBTrack, MusicBrainzClient, _build_artist_credit, _parse_recording_credits
 
 
 SEARCH_RESPONSE = {
@@ -14,6 +14,7 @@ SEARCH_RESPONSE = {
             "country": "US",
             "status": "Official",
             "barcode": "075596066624",
+            "artist-credit": [{"artist": {"id": "artist-1", "name": "Eagles"}}],
             "label-info": [
                 {
                     "catalog-number": "SD 5068",
@@ -67,6 +68,7 @@ FETCH_RESPONSE = {
                     "number": "1",
                     "title": "Doolin-Dalton",
                     "length": 209000,
+                    "artist-credit": [{"artist": {"id": "artist-1", "name": "Eagles"}}],
                     "recording": {
                         "id": "rec-id-1",
                         "title": "Doolin-Dalton",
@@ -145,6 +147,7 @@ class TestSearchReleases:
         assert len(releases) == 2
         assert releases[0].id == "release-1"
         assert releases[0].title == "Desperado"
+        assert releases[0].artist == "Eagles"
         assert releases[0].country == "US"
         assert releases[0].label == "Asylum Records"
         assert releases[0].catalognum == "SD 5068"
@@ -163,6 +166,7 @@ class TestSearchReleases:
         releases = client.search_releases("Eagles", "Desperado")
 
         assert releases[1].id == "release-2"
+        assert releases[1].artist == ""
         assert releases[1].country == "DE"
         assert releases[1].label == ""
 
@@ -193,14 +197,17 @@ class TestFetchRelease:
 
         assert release.id == "release-1"
         assert release.title == "Desperado"
+        assert release.artist == "Eagles"
         assert release.artist_id == "artist-1"
         assert release.release_group_id == "rg-1"
         assert release.track_count == 2
         assert 1 in release.discs
         assert len(release.discs[1]) == 2
         assert release.discs[1][0].title == "Doolin-Dalton"
+        assert release.discs[1][0].artist == "Eagles"
         assert release.discs[1][0].duration_ms == 209000
         assert release.discs[1][1].title == "Twenty-One"
+        assert release.discs[1][1].artist == ""
 
     def test_track_duration_secs(self) -> None:
         mock_resp = MagicMock()
@@ -267,13 +274,15 @@ class TestMBTrackSerialization:
     def test_round_trip(self) -> None:
         track = MBTrack(
             number=1, title="Song", duration_ms=200000,
-            artist_id="a1", recording_id="r1", track_id="t1",
+            artist="The Band", artist_id="a1",
+            recording_id="r1", track_id="t1",
             isrc="US1234", composer="Bach", composer_id="c1",
         )
         restored = MBTrack.from_dict(track.to_dict())
         assert restored.number == 1
         assert restored.title == "Song"
         assert restored.duration_ms == 200000
+        assert restored.artist == "The Band"
         assert restored.artist_id == "a1"
         assert restored.composer == "Bach"
 
@@ -296,13 +305,14 @@ class TestMBReleaseSerialization:
             status="Official", label="Label", catalognum="CAT-1",
             barcode="123", format="CD", track_count=2,
             discs={1: [MBTrack(number=1, title="A"), MBTrack(number=2, title="B")]},
-            artist_id="art-1", release_group_id="rg-1",
+            artist="The Artist", artist_id="art-1", release_group_id="rg-1",
             release_group_type="Album", secondary_types=["Compilation"],
             first_release_date="2019", asin="B001", script="Latn",
         )
         restored = MBRelease.from_dict(release.to_dict())
         assert restored.id == "rel-1"
         assert restored.title == "Album"
+        assert restored.artist == "The Artist"
         assert restored.track_count == 2
         assert len(restored.discs[1]) == 2
         assert restored.discs[1][0].title == "A"
@@ -389,6 +399,26 @@ class TestLookupToc:
         releases = client.lookup_toc("1 3 200000 150 15000 30000")
         assert len(releases) == 1
         assert releases[0].id == "release-toc"
+
+
+class TestBuildArtistCredit:
+    def test_single_artist(self) -> None:
+        credit = [{"artist": {"id": "a1", "name": "Eagles"}}]
+        assert _build_artist_credit(credit) == "Eagles"
+
+    def test_multi_artist_with_joinphrase(self) -> None:
+        credit = [
+            {"artist": {"id": "a1", "name": "Simon"}, "joinphrase": " & "},
+            {"artist": {"id": "a2", "name": "Garfunkel"}},
+        ]
+        assert _build_artist_credit(credit) == "Simon & Garfunkel"
+
+    def test_credited_name_overrides_artist_name(self) -> None:
+        credit = [{"name": "Snoop Dogg", "artist": {"id": "a1", "name": "Snoop Lion"}}]
+        assert _build_artist_credit(credit) == "Snoop Dogg"
+
+    def test_empty_list(self) -> None:
+        assert _build_artist_credit([]) == ""
 
 
 class TestParseRecordingCredits:

@@ -18,6 +18,7 @@ class MBTrack:
     number: int
     title: str
     duration_ms: int | None = None
+    artist: str = ""
     artist_id: str = ""
     recording_id: str = ""
     track_id: str = ""
@@ -49,7 +50,8 @@ class MBTrack:
         if self.duration_ms is not None:
             d["duration_ms"] = self.duration_ms
         for attr in (
-            "artist_id", "recording_id", "track_id", "isrc", "work_id",
+            "artist", "artist_id",
+            "recording_id", "track_id", "isrc", "work_id",
             "composer", "composer_id", "lyricist", "lyricist_id",
             "producer", "producer_id", "engineer", "engineer_id",
             "mixer", "mixer_id", "conductor", "conductor_id",
@@ -66,6 +68,7 @@ class MBTrack:
             number=data["number"],
             title=data["title"],
             duration_ms=data.get("duration_ms"),
+            artist=data.get("artist", ""),
             artist_id=data.get("artist_id", ""),
             recording_id=data.get("recording_id", ""),
             track_id=data.get("track_id", ""),
@@ -103,6 +106,7 @@ class MBRelease:
     format: str = ""
     track_count: int = 0
     discs: dict[int, list[MBTrack]] = field(default_factory=dict)
+    artist: str = ""
     artist_id: str = ""
     release_group_id: str = ""
     release_group_type: str = ""
@@ -129,7 +133,7 @@ class MBRelease:
                 str(k): [t.to_dict() for t in v] for k, v in self.discs.items()
             }
         for attr in (
-            "artist_id", "release_group_id", "release_group_type",
+            "artist", "artist_id", "release_group_id", "release_group_type",
             "first_release_date", "asin", "script",
         ):
             val = getattr(self, attr)
@@ -156,6 +160,7 @@ class MBRelease:
             format=data.get("format", ""),
             track_count=data.get("track_count", 0),
             discs=discs,
+            artist=data.get("artist", ""),
             artist_id=data.get("artist_id", ""),
             release_group_id=data.get("release_group_id", ""),
             release_group_type=data.get("release_group_type", ""),
@@ -164,6 +169,15 @@ class MBRelease:
             asin=data.get("asin", ""),
             script=data.get("script", ""),
         )
+
+
+def _build_artist_credit(credit_list: list[dict]) -> str:
+    parts = []
+    for credit in credit_list:
+        name = credit.get("name", credit.get("artist", {}).get("name", ""))
+        joinphrase = credit.get("joinphrase", "")
+        parts.append(name + joinphrase)
+    return "".join(parts)
 
 
 _CREDIT_ROLES = {
@@ -303,6 +317,7 @@ class MusicBrainzClient:
                 break
 
         artist_credit = r.get("artist-credit", [])
+        artist_name = _build_artist_credit(artist_credit)
         artist_id = ""
         if artist_credit:
             artist_obj = artist_credit[0].get("artist", {})
@@ -331,6 +346,7 @@ class MusicBrainzClient:
                     or recording.get("artist-credit")
                     or []
                 )
+                track_artist_name = _build_artist_credit(track_artist_credit)
                 track_artist_id = ""
                 if track_artist_credit:
                     track_artist_id = (
@@ -351,6 +367,7 @@ class MusicBrainzClient:
                         number=track_number,
                         title=t.get("title", recording.get("title", "")),
                         duration_ms=t.get("length") or recording.get("length"),
+                        artist=track_artist_name,
                         artist_id=track_artist_id,
                         recording_id=recording.get("id", ""),
                         track_id=t.get("id", ""),
@@ -389,6 +406,7 @@ class MusicBrainzClient:
             format=", ".join(f for f in media_formats if f),
             track_count=total_tracks,
             discs=discs,
+            artist=artist_name,
             artist_id=artist_id,
             release_group_id=release_group_id,
             release_group_type=release_group_type,
@@ -442,6 +460,8 @@ class MusicBrainzClient:
                 catnum = li["catalog-number"]
                 break
         track_count = sum(m.get("track-count", 0) for m in r.get("media", []))
+        artist_credit = r.get("artist-credit", [])
+        artist_name = _build_artist_credit(artist_credit)
         return MBRelease(
             id=r["id"],
             title=r.get("title", ""),
@@ -453,6 +473,7 @@ class MusicBrainzClient:
             barcode=r.get("barcode", ""),
             format=", ".join(f for f in media_formats if f),
             track_count=track_count,
+            artist=artist_name,
         )
 
     def close(self) -> None:
