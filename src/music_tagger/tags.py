@@ -191,7 +191,7 @@ def _most_common(values: Any) -> str:
 def _read_flac_tags(audio: FLAC) -> dict[str, str]:
     tags: dict[str, str] = {}
     for canonical, (vorbis_key, _) in FIELD_MAP.items():
-        values = audio.get(vorbis_key)
+        values = audio.get(vorbis_key)  # type: ignore[no-untyped-call]
         if values:
             tags[canonical] = values[0]
     return tags
@@ -243,7 +243,8 @@ def _write_flac_tag(audio: FLAC, canonical: str, value: str) -> None:
 
 def _write_mp3_tag(audio: MP3, canonical: str, value: str) -> None:
     if audio.tags is None:
-        audio.add_tags()
+        audio.add_tags()  # type: ignore[no-untyped-call]
+    assert audio.tags is not None
     id3_key = FIELD_MAP[canonical][1]
     if id3_key.startswith("TXXX:"):
         desc = id3_key[5:]

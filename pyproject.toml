@@ -18,6 +18,7 @@ music-tagger = "music_tagger.cli:main"
 
 [dependency-groups]
 dev = [
+    "mypy>=2.3.0",
     "pytest>=8",
     "ruff>=0.15.21",
 ]
@@ -35,3 +36,8 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["music_tagger"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true

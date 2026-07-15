@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import secrets
+from typing import Any
 
 import httpx
 
@@ -51,7 +52,7 @@ class NavidromeClient:
             self._url, self._user, self._password = _get_config()
         self._client = httpx.Client(timeout=30.0)
 
-    def start_scan(self) -> dict:
+    def start_scan(self) -> dict[str, Any]:
         params = _auth_params(self._user, self._password)
         resp = self._client.get(
             f"{self._url}/rest/startScan",
@@ -65,7 +66,7 @@ class NavidromeClient:
             raise RuntimeError(
                 f"Subsonic error {error.get('code', '?')}: {error.get('message', 'unknown')}"
             )
-        return subsonic.get("scanStatus", {})
+        return dict(subsonic.get("scanStatus", {}))
 
     def close(self) -> None:
         self._client.close()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -751,7 +752,7 @@ def _rip(argv: list[str] | None = None) -> None:
     from mutagen.flac import FLAC
 
     for i, flac_path in enumerate(result.tracks, 1):
-        audio = FLAC(str(flac_path))
+        audio = FLAC(str(flac_path))  # type: ignore[no-untyped-call]
         audio["TRACKNUMBER"] = str(i)
         audio.save()
 
@@ -999,7 +1000,7 @@ def _tag(argv: list[str] | None = None) -> None:
 _COMMANDS: dict[str, tuple[str, object]] = {}
 
 
-def _register_commands() -> dict[str, tuple[str, object]]:
+def _register_commands() -> dict[str, tuple[str, Callable[[list[str] | None], None]]]:
     """Build command table: name -> (help text, handler function)."""
     return {
         "read": ("Read album tags and durations as JSON.", _read),

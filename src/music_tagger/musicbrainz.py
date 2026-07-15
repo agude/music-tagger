@@ -190,7 +190,7 @@ class MBRelease:
         )
 
 
-def _build_artist_credit(credit_list: list[dict]) -> str:
+def _build_artist_credit(credit_list: list[dict[str, Any]]) -> str:
     parts = []
     for credit in credit_list:
         name = credit.get("name", credit.get("artist", {}).get("name", ""))
@@ -208,7 +208,7 @@ _CREDIT_ROLES = {
 }
 
 
-def _parse_recording_credits(recording: dict) -> dict[str, str]:
+def _parse_recording_credits(recording: dict[str, Any]) -> dict[str, str]:
     """Extract personnel credits from recording relationships.
 
     Returns a flat dict of field_name -> value (names joined with "; ").
@@ -461,7 +461,7 @@ class MusicBrainzClient:
         return [self._parse_search_release(r) for r in releases]
 
     @staticmethod
-    def _parse_search_release(r: dict) -> MBRelease:
+    def _parse_search_release(r: dict[str, Any]) -> MBRelease:
         media_formats = [m.get("format", "") for m in r.get("media", [])]
         label_info = r.get("label-info", [])
         label = (label_info[0].get("label") or {}).get("name", "") if label_info else ""

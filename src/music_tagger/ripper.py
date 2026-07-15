@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 @dataclass
@@ -70,7 +71,7 @@ def rip_cd(
     return RipResult(tracks=flac_paths, track_count=len(flac_paths))
 
 
-def read_disc_id(device: str = "/dev/cdrom") -> dict:
+def read_disc_id(device: str = "/dev/cdrom") -> dict[str, Any]:
     """Read disc ID and TOC from a CD using libdiscid.
 
     Returns a dict with disc_id, track_count, and tracks (list of
