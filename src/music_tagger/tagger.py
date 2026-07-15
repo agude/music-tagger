@@ -253,17 +253,29 @@ def _set_credit(tags: dict[str, str], name_field: str, name: str, id_field: str,
 
 
 def search_candidates(
-    directory: Path, mb_client: MusicBrainzClient
+    directory: Path,
+    mb_client: MusicBrainzClient,
+    *,
+    artist: str | None = None,
+    album_title: str | None = None,
 ) -> tuple[AlbumTags, list[MBRelease]]:
     """Read album tags and fetch detailed MusicBrainz candidates."""
     album = read_album(directory)
     if not album.tracks:
         raise ValueError(f"No audio files found in {directory}")
 
-    candidates = mb_client.search_releases(album.artist, album.album)
+    search_artist = artist or album.artist
+    search_album = album_title or album.album
+
+    if not search_artist and not search_album:
+        raise ValueError(
+            "No artist/album in tags and none provided via --artist/--album"
+        )
+
+    candidates = mb_client.search_releases(search_artist, search_album)
     if not candidates:
         raise ValueError(
-            f"No MusicBrainz results for '{album.artist}' - '{album.album}'"
+            f"No MusicBrainz results for '{search_artist}' - '{search_album}'"
         )
 
     detailed: list[MBRelease] = []

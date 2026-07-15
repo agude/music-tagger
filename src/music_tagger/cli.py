@@ -436,6 +436,8 @@ def _print_candidates(argv: list[str] | None = None) -> None:
         description="Read album, search MusicBrainz, and score candidates.",
     )
     parser.add_argument("path", type=Path, help="Album directory.")
+    parser.add_argument("--artist", default=None, help="Override artist name (for freshly ripped files).")
+    parser.add_argument("--album", default=None, help="Override album title (for freshly ripped files).")
     parser.add_argument(
         "-o", "--out", type=Path, default=None,
         help="Output JSON file (prints digest to stdout).",
@@ -449,7 +451,9 @@ def _print_candidates(argv: list[str] | None = None) -> None:
 
     mb_client = MusicBrainzClient()
     try:
-        album, candidates = search_candidates(target, mb_client)
+        album, candidates = search_candidates(
+            target, mb_client, artist=args.artist, album_title=args.album,
+        )
     finally:
         mb_client.close()
 
@@ -669,7 +673,7 @@ def _rip(argv: list[str] | None = None) -> None:
         print(f"  uv run music-tagger mb discid {disc_info['disc_id']}")
     else:
         print("\nNext: search MusicBrainz manually:")
-        print(f"  uv run music-tagger candidates {target}")
+        print(f"  uv run music-tagger candidates {target} --artist '<artist>' --album '<album>'")
 
 
 def _nd_rescan(argv: list[str] | None = None) -> None:
