@@ -28,11 +28,12 @@ Key CLI subcommands, driven by Claude Code in conversation:
    Sanitizes filesystem-unsafe characters. Skips files missing title or
    tracknumber tags.
 
-6. `uv run music-tagger rip <output-dir> [--device /dev/cdrom] [--no-discid]`
-   — rips a CD to FLAC using cdparanoia + flac. Reads the disc ID via
-   libdiscid for MusicBrainz lookup. Sets tracknumber tags from position
-   so `tag` can match tracks. Requires system packages: `cdparanoia`,
-   `flac`, `libdiscid-dev`; Python package `discid` (for disc ID lookup).
+6. `uv run music-tagger rip <output-dir> [--device /dev/cdrom] [--release-id <uuid>] [--unknown]`
+   — rips a CD to FLAC via whipper with AccurateRip verification.
+   Whipper handles disc ID lookup, MusicBrainz matching, and FLAC
+   encoding. Produces .log and .cue files alongside the audio.
+   Use `--release-id` to force a specific MB release, or `--unknown`
+   to rip CDs not in MusicBrainz. Requires system package: `whipper`.
 
 ## Library workflow
 
@@ -78,7 +79,7 @@ src/music_tagger/
 ├── placement.py     # Library path computation + verified copy
 ├── coverart.py      # Cover Art Archive client
 ├── navidrome.py     # Navidrome / Subsonic API client
-├── ripper.py        # CD ripping via cdparanoia + FLAC encoding
+├── ripper.py        # CD ripping via whipper (AccurateRip)
 └── cli.py           # Argparse entry point (all subcommands)
 ```
 
@@ -115,8 +116,7 @@ src/music_tagger/
 ## Environment setup
 
 **System packages** (for `rip` subcommand):
-- `cdparanoia` — CD audio extraction
-- `flac` — FLAC encoding
+- `whipper` — CD ripping with AccurateRip verification
 - `libdiscid-dev` — disc ID computation (required by Python `discid` package)
 
 **Navidrome credentials** (for `nd rescan`):

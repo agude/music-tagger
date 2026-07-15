@@ -1,11 +1,10 @@
-"""CD ripping: extract audio tracks and encode to FLAC."""
+"""CD ripping via whipper with AccurateRip verification."""
 
 from __future__ import annotations
 
 import shutil
 import subprocess
-import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +13,9 @@ from typing import Any
 class RipResult:
     tracks: list[Path]
     track_count: int
+    log_file: Path | None = None
+    cue_file: Path | None = None
+    accuraterip: list[str] = field(default_factory=list)
 
 
 def _check_tool(name: str) -> None:
@@ -24,51 +26,53 @@ def _check_tool(name: str) -> None:
 def rip_cd(
     output_dir: Path,
     device: str = "/dev/cdrom",
-    track_count: int | None = None,
+    release_id: str | None = None,
+    unknown: bool = False,
 ) -> RipResult:
-    """Rip a CD to FLAC files in output_dir.
+    """Rip a CD to FLAC files using whipper.
 
-    Uses cdparanoia for extraction and flac for encoding. Files are named
-    NN.flac (01.flac, 02.flac, ...) with no metadata tags — the caller
-    is responsible for tagging.
+    Whipper handles disc ID lookup, MusicBrainz matching, AccurateRip
+    verification, and FLAC encoding. Output files are named
+    ``NN. Title.flac`` in output_dir.
     """
-    _check_tool("cdparanoia")
-    _check_tool("flac")
+    _check_tool("whipper")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp = Path(tmpdir)
+    cmd: list[str] = [
+        "whipper",
+        "cd",
+        "-d",
+        device,
+        "rip",
+        "-O",
+        str(output_dir),
+        "--track-template",
+        "%t. %n",
+        "--disc-template",
+        "%A - %d",
+    ]
 
-        # Rip all tracks to WAV (stderr streams progress to the terminal)
-        subprocess.run(
-            ["cdparanoia", "-B", "-d", device],
-            cwd=str(tmp),
-            check=True,
-        )
+    if release_id:
+        cmd.extend(["-R", release_id])
+    if unknown:
+        cmd.extend(["-U"])
 
-        wav_files = sorted(tmp.glob("track*.cdda.wav"))
-        if not wav_files:
-            raise RuntimeError("cdparanoia produced no WAV files")
+    subprocess.run(cmd, check=True)
 
-        if track_count is not None and len(wav_files) != track_count:
-            raise RuntimeError(
-                f"Expected {track_count} tracks but cdparanoia produced {len(wav_files)}"
-            )
+    flac_paths = sorted(output_dir.glob("*.flac"))
+    if not flac_paths:
+        raise RuntimeError("whipper produced no FLAC files")
 
-        # Encode each WAV to FLAC
-        flac_paths: list[Path] = []
-        for i, wav in enumerate(wav_files, 1):
-            flac_name = f"{i:02d}.flac"
-            flac_path = output_dir / flac_name
-            subprocess.run(
-                ["flac", "--best", "--silent", str(wav), "-o", str(flac_path)],
-                check=True,
-                capture_output=True,
-            )
-            flac_paths.append(flac_path)
+    log_files = list(output_dir.glob("*.log"))
+    cue_files = list(output_dir.glob("*.cue"))
 
-    return RipResult(tracks=flac_paths, track_count=len(flac_paths))
+    return RipResult(
+        tracks=flac_paths,
+        track_count=len(flac_paths),
+        log_file=log_files[0] if log_files else None,
+        cue_file=cue_files[0] if cue_files else None,
+    )
 
 
 def read_disc_id(device: str = "/dev/cdrom") -> dict[str, Any]:

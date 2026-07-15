@@ -718,52 +718,40 @@ def _art(argv: list[str] | None = None) -> None:
 def _rip(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger rip",
-        description="Rip a CD to FLAC files with bootstrap tags.",
+        description="Rip a CD to FLAC via whipper with AccurateRip verification.",
     )
     parser.add_argument("path", type=Path, help="Output directory for FLAC files.")
     parser.add_argument(
         "--device", default="/dev/cdrom", help="CD drive device (default: /dev/cdrom)."
     )
-    parser.add_argument("--no-discid", action="store_true", help="Skip disc ID lookup.")
+    parser.add_argument("--release-id", default=None, help="MusicBrainz release ID to match.")
+    parser.add_argument(
+        "--unknown",
+        action="store_true",
+        help="Continue ripping if the CD is not in MusicBrainz.",
+    )
     args = parser.parse_args(argv)
 
-    from .ripper import read_disc_id, rip_cd
+    from .ripper import rip_cd
 
     target: Path = args.path.resolve()
 
-    # Read disc ID first (while disc is in the drive)
-    disc_info = None
-    if not args.no_discid:
-        try:
-            disc_info = read_disc_id(args.device)
-            print(f"Disc ID: {disc_info['disc_id']}")
-            print(f"Tracks: {disc_info['track_count']}")
-        except RuntimeError as e:
-            print(f"Warning: disc ID read failed: {e}", file=sys.stderr)
-            print("Continuing without disc ID.", file=sys.stderr)
-
-    # Rip and encode
-    expected = disc_info["track_count"] if disc_info else None
-    print(f"\nRipping to {target}...")
-    result = rip_cd(target, device=args.device, track_count=expected)
+    print(f"Ripping to {target}...")
+    result = rip_cd(
+        target,
+        device=args.device,
+        release_id=args.release_id,
+        unknown=args.unknown,
+    )
     print(f"Ripped {result.track_count} tracks.")
 
-    # Bootstrap tracknumber tags so `tag` can match by position
-    from mutagen.flac import FLAC
+    if result.log_file:
+        print(f"Log: {result.log_file}")
+    if result.cue_file:
+        print(f"CUE: {result.cue_file}")
 
-    for i, flac_path in enumerate(result.tracks, 1):
-        audio = FLAC(str(flac_path))  # type: ignore[no-untyped-call]
-        audio["TRACKNUMBER"] = str(i)
-        audio.save()
-
-    print(f"\nSet tracknumber tags on {result.track_count} files.")
-
-    if disc_info:
-        print(f"\nNext: look up disc ID {disc_info['disc_id']} on MusicBrainz:")
-        print(f"  uv run music-tagger mb discid {disc_info['disc_id']}")
-    else:
-        print("\nNext: search MusicBrainz manually:")
-        print(f"  uv run music-tagger candidates {target} --artist '<artist>' --album '<album>'")
+    print("\nNext: review tags and candidates:")
+    print(f"  uv run music-tagger candidates {target}")
 
 
 def _nd_rescan(argv: list[str] | None = None) -> None:

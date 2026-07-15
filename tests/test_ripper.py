@@ -22,72 +22,76 @@ class TestCheckTool:
 
 
 class TestRipCd:
-    def test_rips_and_encodes(self, tmp_path: Path) -> None:
-        def fake_cdparanoia(cmd, cwd, **kwargs):
-            # Create fake WAV files in the cwd (tmpdir)
-            cwd_path = Path(cwd)
-            for i in range(1, 4):
-                (cwd_path / f"track{i:02d}.cdda.wav").write_bytes(b"\x00" * 100)
-            return MagicMock(returncode=0)
-
-        def fake_flac(cmd, **kwargs):
-            # Create the output file
-            out_path = Path(cmd[cmd.index("-o") + 1])
-            out_path.write_bytes(b"\x00" * 50)
-            return MagicMock(returncode=0)
-
+    def test_rips_with_whipper(self, tmp_path: Path) -> None:
         output = tmp_path / "output"
 
+        def fake_whipper(cmd: list[str], **kwargs: object) -> MagicMock:
+            out = Path(cmd[cmd.index("-O") + 1])
+            out.mkdir(parents=True, exist_ok=True)
+            for i in range(1, 4):
+                (out / f"{i:02d}. Track {i}.flac").write_bytes(b"\x00" * 50)
+            (out / "Artist - Album.log").write_text("rip log")
+            (out / "Artist - Album.cue").write_text("cue sheet")
+            return MagicMock(returncode=0)
+
         with (
-            patch("shutil.which", return_value="/usr/bin/fake"),
-            patch("music_tagger.ripper.subprocess.run") as mock_run,
+            patch("shutil.which", return_value="/usr/bin/whipper"),
+            patch("music_tagger.ripper.subprocess.run", side_effect=fake_whipper),
         ):
-
-            def side_effect(cmd, **kwargs):
-                if cmd[0] == "cdparanoia":
-                    return fake_cdparanoia(cmd, **kwargs)
-                elif cmd[0] == "flac":
-                    return fake_flac(cmd, **kwargs)
-                return MagicMock(returncode=0)
-
-            mock_run.side_effect = side_effect
-            result = rip_cd(output, device="/dev/sr0", track_count=3)
+            result = rip_cd(output, device="/dev/sr0")
 
         assert result.track_count == 3
         assert len(result.tracks) == 3
         assert all(p.suffix == ".flac" for p in result.tracks)
-        assert result.tracks[0].name == "01.flac"
-        assert result.tracks[2].name == "03.flac"
+        assert result.log_file is not None
+        assert result.cue_file is not None
 
-    def test_wrong_track_count_raises(self, tmp_path: Path) -> None:
-        def fake_cdparanoia(cmd, cwd, **kwargs):
-            cwd_path = Path(cwd)
-            for i in range(1, 3):  # Only 2 tracks
-                (cwd_path / f"track{i:02d}.cdda.wav").write_bytes(b"\x00" * 100)
+    def test_passes_release_id(self, tmp_path: Path) -> None:
+        output = tmp_path / "output"
+
+        def fake_whipper(cmd: list[str], **kwargs: object) -> MagicMock:
+            out = Path(cmd[cmd.index("-O") + 1])
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "01. Track.flac").write_bytes(b"\x00" * 50)
             return MagicMock(returncode=0)
 
+        with (
+            patch("shutil.which", return_value="/usr/bin/whipper"),
+            patch("music_tagger.ripper.subprocess.run", side_effect=fake_whipper) as mock_run,
+        ):
+            rip_cd(output, release_id="abc-123")
+
+        cmd = mock_run.call_args[0][0]
+        assert "-R" in cmd
+        assert cmd[cmd.index("-R") + 1] == "abc-123"
+
+    def test_passes_unknown_flag(self, tmp_path: Path) -> None:
+        output = tmp_path / "output"
+
+        def fake_whipper(cmd: list[str], **kwargs: object) -> MagicMock:
+            out = Path(cmd[cmd.index("-O") + 1])
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "01. Track.flac").write_bytes(b"\x00" * 50)
+            return MagicMock(returncode=0)
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/whipper"),
+            patch("music_tagger.ripper.subprocess.run", side_effect=fake_whipper) as mock_run,
+        ):
+            rip_cd(output, unknown=True)
+
+        cmd = mock_run.call_args[0][0]
+        assert "-U" in cmd
+
+    def test_no_flac_files_raises(self, tmp_path: Path) -> None:
         output = tmp_path / "output"
 
         with (
-            patch("shutil.which", return_value="/usr/bin/fake"),
-            patch("music_tagger.ripper.subprocess.run") as mock_run,
+            patch("shutil.which", return_value="/usr/bin/whipper"),
+            patch("music_tagger.ripper.subprocess.run", return_value=MagicMock(returncode=0)),
+            pytest.raises(RuntimeError, match="no FLAC files"),
         ):
-            mock_run.side_effect = lambda cmd, **kw: fake_cdparanoia(cmd, **kw)
-
-            with pytest.raises(RuntimeError, match="Expected 5 tracks"):
-                rip_cd(output, track_count=5)
-
-    def test_no_wav_files_raises(self, tmp_path: Path) -> None:
-        output = tmp_path / "output"
-
-        with (
-            patch("shutil.which", return_value="/usr/bin/fake"),
-            patch("music_tagger.ripper.subprocess.run") as mock_run,
-        ):
-            mock_run.return_value = MagicMock(returncode=0)
-
-            with pytest.raises(RuntimeError, match="no WAV files"):
-                rip_cd(output)
+            rip_cd(output)
 
 
 class TestReadDiscId:
