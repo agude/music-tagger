@@ -33,11 +33,12 @@ def _make_release() -> MBRelease:
         track_count=3,
         discs={
             1: [
-                MBTrack(number=1, title="Doolin-Dalton", duration_ms=209000),
-                MBTrack(number=2, title="Twenty-One", duration_ms=187000),
-                MBTrack(number=3, title="Out of Control", duration_ms=195000),
+                MBTrack(number=1, title="Doolin-Dalton", duration_ms=209000, artist="Eagles"),
+                MBTrack(number=2, title="Twenty-One", duration_ms=187000, artist="Eagles"),
+                MBTrack(number=3, title="Out of Control", duration_ms=195000, artist="Eagles"),
             ]
         },
+        artist="Eagles",
         artist_id="artist-1",
         release_group_id="rg-1",
     )
@@ -55,14 +56,15 @@ def _make_two_disc_release() -> MBRelease:
         track_count=4,
         discs={
             1: [
-                MBTrack(number=1, title="Let's Go Crazy", duration_ms=278000),
-                MBTrack(number=2, title="Take Me With U", duration_ms=233000),
+                MBTrack(number=1, title="Let's Go Crazy", duration_ms=278000, artist="Prince"),
+                MBTrack(number=2, title="Take Me With U", duration_ms=233000, artist="Prince"),
             ],
             2: [
-                MBTrack(number=1, title="The Dance Electric", duration_ms=689000),
-                MBTrack(number=2, title="Love and Sex", duration_ms=300000),
+                MBTrack(number=1, title="The Dance Electric", duration_ms=689000, artist="Prince"),
+                MBTrack(number=2, title="Love and Sex", duration_ms=300000, artist="Prince"),
             ],
         },
+        artist="Prince",
         artist_id="artist-2",
         release_group_id="rg-2",
     )
@@ -111,6 +113,10 @@ class TestBuildNewTags:
         tags = _build_new_tags(release, track, 0, 1)
 
         assert tags["album"] == "Desperado"
+        assert tags["artist"] == "Eagles"
+        assert tags["albumartist"] == "Eagles"
+        assert tags["totaltracks"] == "3"
+        assert tags["totaldiscs"] == "1"
         assert tags["releasedate"] == "1973-04-17"
         assert tags["country"] == "US"
         assert tags["label"] == "Asylum Records"
@@ -146,19 +152,24 @@ class TestBuildNewTags:
             track_count=2,
             discs={
                 1: [
-                    MBTrack(number=1, title="Song A", artist_id="artist-a"),
-                    MBTrack(number=2, title="Song B", artist_id="artist-b"),
+                    MBTrack(number=1, title="Song A", artist="Artist A", artist_id="artist-a"),
+                    MBTrack(number=2, title="Song B", artist="Artist B", artist_id="artist-b"),
                 ]
             },
+            artist="Various Artists",
             artist_id="album-artist",
             release_group_id="rg-va",
         )
         track = TrackTags(path=Path("/music/01.flac"), tags={}, format="flac")
         tags = _build_new_tags(release, track, 0, 1)
+        assert tags["artist"] == "Artist A"
+        assert tags["albumartist"] == "Various Artists"
         assert tags["musicbrainz_artistid"] == "artist-a"
         assert tags["musicbrainz_albumartistid"] == "album-artist"
 
         tags2 = _build_new_tags(release, track, 1, 1)
+        assert tags2["artist"] == "Artist B"
+        assert tags2["albumartist"] == "Various Artists"
         assert tags2["musicbrainz_artistid"] == "artist-b"
         assert tags2["musicbrainz_albumartistid"] == "album-artist"
 
@@ -221,6 +232,8 @@ class TestBuildNewTags:
         assert tags["title"] == "The Dance Electric"
         assert tags["tracknumber"] == "1"
         assert tags["discnumber"] == "2"
+        assert tags["totaldiscs"] == "2"
+        assert tags["totaltracks"] == "2"
 
 
 class TestSearchCandidates:
@@ -260,11 +273,12 @@ class TestBuildDiff:
             track_count=3,
             discs={
                 1: [
-                    MBTrack(number=1, title="Desperado"),
-                    MBTrack(number=2, title="Twenty-One"),
-                    MBTrack(number=3, title="Out of Control"),
+                    MBTrack(number=1, title="Desperado", artist="Eagles"),
+                    MBTrack(number=2, title="Twenty-One", artist="Eagles"),
+                    MBTrack(number=3, title="Out of Control", artist="Eagles"),
                 ]
             },
+            artist="Eagles",
             date="",
             country="",
             label="",

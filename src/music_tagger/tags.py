@@ -31,6 +31,8 @@ FIELD_MAP: dict[str, tuple[str, str]] = {
     "albumartist": ("ALBUMARTIST", "TPE2"),
     "tracknumber": ("TRACKNUMBER", "TRCK"),
     "discnumber": ("DISCNUMBER", "TPOS"),
+    "totaltracks": ("TOTALTRACKS", "TXXX:TOTALTRACKS"),
+    "totaldiscs": ("TOTALDISCS", "TXXX:TOTALDISCS"),
     "date": ("DATE", "TDRC"),
     "originaldate": ("ORIGINALDATE", "TDOR"),
     "releasedate": ("RELEASEDATE", "TDRL"),

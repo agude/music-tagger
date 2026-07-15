@@ -171,6 +171,8 @@ def _build_new_tags(
 
     tags["album"] = release.title
     tags["discnumber"] = str(disc_num)
+    tags["totaldiscs"] = str(len(release.discs)) if release.discs else "1"
+    tags["totaltracks"] = str(len(disc_tracks)) if disc_tracks else str(release.track_count)
 
     if release.date:
         tags["releasedate"] = release.date
@@ -186,6 +188,14 @@ def _build_new_tags(
         tags["media"] = release.format
     if release.status:
         tags["releasestatus"] = release.status
+
+    # Artist
+    if release.artist:
+        tags["albumartist"] = release.artist
+    if mb_track and mb_track.artist:
+        tags["artist"] = mb_track.artist
+    elif release.artist:
+        tags["artist"] = release.artist
 
     # Release-level metadata
     tags["musicbrainz_albumid"] = release.id
