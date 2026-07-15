@@ -103,7 +103,9 @@ class TestArtCommand:
 
         with patch("music_tagger.cli.fetch_cover_art") as mock_fetch:
             mock_fetch.return_value = ArtResult(
-                saved=True, path=tmp_path / "cover.jpg", size_bytes=50000,
+                saved=True,
+                path=tmp_path / "cover.jpg",
+                size_bytes=50000,
             )
             _art([str(tmp_path), "--release-id", "abc-123"])
 
@@ -126,7 +128,9 @@ class TestArtCommand:
 
         with patch("music_tagger.cli.fetch_cover_art") as mock_fetch:
             mock_fetch.return_value = ArtResult(
-                saved=False, path=tmp_path / "cover.jpg", skipped=True,
+                saved=False,
+                path=tmp_path / "cover.jpg",
+                skipped=True,
             )
             _art([str(tmp_path), "--release-id", "abc-123"])
 

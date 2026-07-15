@@ -19,8 +19,19 @@ music-tagger = "music_tagger.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "ruff>=0.15.21",
 ]
 
 [build-system]
 requires = ["uv_build>=0.11.2,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["music_tagger"]

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -19,6 +19,7 @@ class TestAuthParams:
 
     def test_token_is_md5(self) -> None:
         import hashlib
+
         params = _auth_params("admin", "secret")
         expected = hashlib.md5(("secret" + params["s"]).encode()).hexdigest()
         assert params["t"] == expected
@@ -53,14 +54,18 @@ class TestNavidromeClient:
         request = httpx.Request("GET", "http://localhost:4533/rest/startScan")
         mock_resp = httpx.Response(200, json=response_data, request=request)
 
-        with patch.object(client._client, "get", return_value=mock_resp):
-            with pytest.raises(RuntimeError, match="Wrong credentials"):
-                client.start_scan()
+        with (
+            patch.object(client._client, "get", return_value=mock_resp),
+            pytest.raises(RuntimeError, match="Wrong credentials"),
+        ):
+            client.start_scan()
 
     def test_missing_env_vars(self) -> None:
-        with patch.dict("os.environ", {}, clear=True):
-            with pytest.raises(RuntimeError, match="NAVIDROME_URL"):
-                NavidromeClient()
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            pytest.raises(RuntimeError, match="NAVIDROME_URL"),
+        ):
+            NavidromeClient()
 
 
 class TestNdRescanCommand:

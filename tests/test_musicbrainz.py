@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-from music_tagger.musicbrainz import MBRelease, MBTrack, MusicBrainzClient, _build_artist_credit, _parse_recording_credits
-
+from music_tagger.musicbrainz import (
+    MBRelease,
+    MBTrack,
+    MusicBrainzClient,
+    _build_artist_credit,
+    _parse_recording_credits,
+)
 
 SEARCH_RESPONSE = {
     "releases": [
@@ -273,10 +278,16 @@ class TestFetchRelease:
 class TestMBTrackSerialization:
     def test_round_trip(self) -> None:
         track = MBTrack(
-            number=1, title="Song", duration_ms=200000,
-            artist="The Band", artist_id="a1",
-            recording_id="r1", track_id="t1",
-            isrc="US1234", composer="Bach", composer_id="c1",
+            number=1,
+            title="Song",
+            duration_ms=200000,
+            artist="The Band",
+            artist_id="a1",
+            recording_id="r1",
+            track_id="t1",
+            isrc="US1234",
+            composer="Bach",
+            composer_id="c1",
         )
         restored = MBTrack.from_dict(track.to_dict())
         assert restored.number == 1
@@ -301,13 +312,25 @@ class TestMBTrackSerialization:
 class TestMBReleaseSerialization:
     def test_round_trip(self) -> None:
         release = MBRelease(
-            id="rel-1", title="Album", date="2020", country="US",
-            status="Official", label="Label", catalognum="CAT-1",
-            barcode="123", format="CD", track_count=2,
+            id="rel-1",
+            title="Album",
+            date="2020",
+            country="US",
+            status="Official",
+            label="Label",
+            catalognum="CAT-1",
+            barcode="123",
+            format="CD",
+            track_count=2,
             discs={1: [MBTrack(number=1, title="A"), MBTrack(number=2, title="B")]},
-            artist="The Artist", artist_id="art-1", release_group_id="rg-1",
-            release_group_type="Album", secondary_types=["Compilation"],
-            first_release_date="2019", asin="B001", script="Latn",
+            artist="The Artist",
+            artist_id="art-1",
+            release_group_id="rg-1",
+            release_group_type="Album",
+            secondary_types=["Compilation"],
+            first_release_date="2019",
+            asin="B001",
+            script="Latn",
         )
         restored = MBRelease.from_dict(release.to_dict())
         assert restored.id == "rel-1"
@@ -321,8 +344,12 @@ class TestMBReleaseSerialization:
 
     def test_search_result_round_trip(self) -> None:
         release = MBRelease(
-            id="rel-2", title="Album", date="2020", country="JP",
-            track_count=10, format="CD",
+            id="rel-2",
+            title="Album",
+            date="2020",
+            country="JP",
+            track_count=10,
+            format="CD",
         )
         d = release.to_dict()
         assert "discs" not in d

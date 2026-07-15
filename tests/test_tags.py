@@ -21,7 +21,9 @@ class TestTrackTagsSerialization:
         assert restored.format == track.format
 
     def test_dict_keys(self) -> None:
-        track = TrackTags(path=Path("/a.flac"), tags={"title": "X"}, duration_secs=1.0, format="flac")
+        track = TrackTags(
+            path=Path("/a.flac"), tags={"title": "X"}, duration_secs=1.0, format="flac"
+        )
         d = track.to_dict()
         assert d["path"] == "/a.flac"
         assert d["format"] == "flac"
@@ -38,7 +40,7 @@ class TestAlbumTagsSerialization:
         assert restored.track_count == album.track_count
         assert restored.artist == album.artist
         assert restored.album == album.album
-        for orig, rest in zip(album.tracks, restored.tracks):
+        for orig, rest in zip(album.tracks, restored.tracks, strict=True):
             assert rest.path == orig.path
             assert rest.tags == orig.tags
 
@@ -209,7 +211,9 @@ class TestWriteTagsFlac:
         album = read_album(flac_album)
         track = album.tracks[0]
         new_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        changes = [TagChange(field="musicbrainz_albumid", old_value="test-album-id-1", new_value=new_id)]
+        changes = [
+            TagChange(field="musicbrainz_albumid", old_value="test-album-id-1", new_value=new_id)
+        ]
         write_tags(track, changes)
 
         album2 = read_album(flac_album)
@@ -241,7 +245,9 @@ class TestWriteTagsMp3:
         album = read_album(mp3_album)
         track = album.tracks[0]
         new_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-        changes = [TagChange(field="musicbrainz_albumid", old_value="test-album-id-1", new_value=new_id)]
+        changes = [
+            TagChange(field="musicbrainz_albumid", old_value="test-album-id-1", new_value=new_id)
+        ]
         write_tags(track, changes)
 
         album2 = read_album(mp3_album)

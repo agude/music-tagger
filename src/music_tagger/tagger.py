@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -97,7 +97,8 @@ class CandidateMatch:
 
 
 def score_candidates(
-    album: AlbumTags, candidates: list[MBRelease],
+    album: AlbumTags,
+    candidates: list[MBRelease],
 ) -> list[CandidateMatch]:
     """Score candidates by duration match against local evidence.
 
@@ -130,15 +131,17 @@ def score_candidates(
                 if dev <= 2.0:
                     within_2s += 1
 
-        results.append(CandidateMatch(
-            release=candidate,
-            stats=MatchStats(
-                track_count_match=candidate.track_count == album.track_count,
-                tracks_within_2s=within_2s,
-                tracks_compared=compared,
-                max_deviation_secs=max_dev,
-            ),
-        ))
+        results.append(
+            CandidateMatch(
+                release=candidate,
+                stats=MatchStats(
+                    track_count_match=candidate.track_count == album.track_count,
+                    tracks_within_2s=within_2s,
+                    tracks_compared=compared,
+                    max_deviation_secs=max_dev,
+                ),
+            )
+        )
 
     results.sort(key=lambda m: (-m.stats.tracks_within_2s, m.stats.max_deviation_secs))
     return results
@@ -204,7 +207,7 @@ def _build_new_tags(
     if release.release_group_id:
         tags["musicbrainz_releasegroupid"] = release.release_group_id
     if release.release_group_type:
-        types = [release.release_group_type] + release.secondary_types
+        types = [release.release_group_type, *release.secondary_types]
         tags["releasetype"] = "; ".join(types)
     if "Compilation" in release.secondary_types:
         tags["compilation"] = "1"
@@ -233,14 +236,30 @@ def _build_new_tags(
             tags["musicbrainz_workid"] = mb_track.work_id
 
         # Personnel
-        _set_credit(tags, "composer", mb_track.composer, "musicbrainz_composerid", mb_track.composer_id)
-        _set_credit(tags, "lyricist", mb_track.lyricist, "musicbrainz_lyricistid", mb_track.lyricist_id)
-        _set_credit(tags, "producer", mb_track.producer, "musicbrainz_producerid", mb_track.producer_id)
-        _set_credit(tags, "engineer", mb_track.engineer, "musicbrainz_engineerid", mb_track.engineer_id)
+        _set_credit(
+            tags, "composer", mb_track.composer, "musicbrainz_composerid", mb_track.composer_id
+        )
+        _set_credit(
+            tags, "lyricist", mb_track.lyricist, "musicbrainz_lyricistid", mb_track.lyricist_id
+        )
+        _set_credit(
+            tags, "producer", mb_track.producer, "musicbrainz_producerid", mb_track.producer_id
+        )
+        _set_credit(
+            tags, "engineer", mb_track.engineer, "musicbrainz_engineerid", mb_track.engineer_id
+        )
         _set_credit(tags, "mixer", mb_track.mixer, "musicbrainz_mixerid", mb_track.mixer_id)
-        _set_credit(tags, "conductor", mb_track.conductor, "musicbrainz_conductorid", mb_track.conductor_id)
+        _set_credit(
+            tags, "conductor", mb_track.conductor, "musicbrainz_conductorid", mb_track.conductor_id
+        )
         _set_credit(tags, "remixer", mb_track.remixer, "musicbrainz_remixerid", mb_track.remixer_id)
-        _set_credit(tags, "performer", mb_track.performers, "musicbrainz_performerid", mb_track.performer_ids)
+        _set_credit(
+            tags,
+            "performer",
+            mb_track.performers,
+            "musicbrainz_performerid",
+            mb_track.performer_ids,
+        )
 
     return tags
 
@@ -268,15 +287,11 @@ def search_candidates(
     search_album = album_title or album.album
 
     if not search_artist and not search_album:
-        raise ValueError(
-            "No artist/album in tags and none provided via --artist/--album"
-        )
+        raise ValueError("No artist/album in tags and none provided via --artist/--album")
 
     candidates = mb_client.search_releases(search_artist, search_album)
     if not candidates:
-        raise ValueError(
-            f"No MusicBrainz results for '{search_artist}' - '{search_album}'"
-        )
+        raise ValueError(f"No MusicBrainz results for '{search_artist}' - '{search_album}'")
 
     detailed: list[MBRelease] = []
     for c in candidates:
@@ -310,14 +325,11 @@ def build_diff(album: AlbumTags, release: MBRelease) -> AlbumResult:
             mb_index[(disc_num, mbt.number)] = i
 
     # Detect whether any track has a tracknumber tag
-    has_any_tracknumber = any(
-        _parse_track_number(t) is not None for t in album.tracks
-    )
+    has_any_tracknumber = any(_parse_track_number(t) is not None for t in album.tracks)
     positional = not has_any_tracknumber and len(album.tracks) > 0
     if positional:
         print(
-            f"Warning: no tracknumber tags found; matching {len(album.tracks)} "
-            f"files by position",
+            f"Warning: no tracknumber tags found; matching {len(album.tracks)} files by position",
             file=sys.stderr,
         )
 
@@ -337,7 +349,9 @@ def build_diff(album: AlbumTags, release: MBRelease) -> AlbumResult:
         if track_index is not None:
             new_tags = _build_new_tags(release, track, track_index, disc_num)
         else:
-            new_tags = _build_new_tags(release, track, len(release.discs.get(disc_num, [])), disc_num)
+            new_tags = _build_new_tags(
+                release, track, len(release.discs.get(disc_num, [])), disc_num
+            )
 
         changes = compute_diff(track, new_tags)
         diffs.append(TrackDiff(track=track, changes=changes))
@@ -347,7 +361,7 @@ def build_diff(album: AlbumTags, release: MBRelease) -> AlbumResult:
 
 def apply_changes(result: AlbumResult) -> int:
     """Write all tag changes. Returns the number of tracks modified."""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     count = 0
     for diff in result.diffs:
         if diff.changes:
@@ -356,6 +370,6 @@ def apply_changes(result: AlbumResult) -> int:
                 old_value=diff.track.tags.get("music_tagger_updated", ""),
                 new_value=now,
             )
-            write_tags(diff.track, diff.changes + [timestamp])
+            write_tags(diff.track, [*diff.changes, timestamp])
             count += 1
     return count

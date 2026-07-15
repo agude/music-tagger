@@ -203,12 +203,18 @@ class TestBuildNewTags:
             discs={
                 1: [
                     MBTrack(
-                        number=1, title="Song",
-                        recording_id="rec-1", track_id="trk-1",
-                        isrc="USEE10400287", work_id="work-1",
-                        composer="Bach", composer_id="c1",
-                        producer="George Martin", producer_id="p1",
-                        performers="John (guitar)", performer_ids="j1",
+                        number=1,
+                        title="Song",
+                        recording_id="rec-1",
+                        track_id="trk-1",
+                        isrc="USEE10400287",
+                        work_id="work-1",
+                        composer="Bach",
+                        composer_id="c1",
+                        producer="George Martin",
+                        producer_id="p1",
+                        performers="John (guitar)",
+                        performer_ids="j1",
                     ),
                 ]
             },
@@ -252,6 +258,7 @@ class TestSearchCandidates:
 
     def test_empty_dir_raises(self, tmp_path: Path) -> None:
         import pytest
+
         with pytest.raises(ValueError, match="No audio files"):
             search_candidates(tmp_path, MagicMock())
 
@@ -290,21 +297,36 @@ class TestBuildDiff:
     def test_multi_disc(self) -> None:
         release = _make_two_disc_release()
         tracks = [
-            TrackTags(path=Path("01a.flac"), tags={"discnumber": "1", "tracknumber": "1"},
-                      duration_secs=278.0, format="flac"),
-            TrackTags(path=Path("01b.flac"), tags={"discnumber": "2", "tracknumber": "1"},
-                      duration_secs=689.0, format="flac"),
-            TrackTags(path=Path("02a.flac"), tags={"discnumber": "1", "tracknumber": "2"},
-                      duration_secs=233.0, format="flac"),
-            TrackTags(path=Path("02b.flac"), tags={"discnumber": "2", "tracknumber": "2"},
-                      duration_secs=300.0, format="flac"),
+            TrackTags(
+                path=Path("01a.flac"),
+                tags={"discnumber": "1", "tracknumber": "1"},
+                duration_secs=278.0,
+                format="flac",
+            ),
+            TrackTags(
+                path=Path("01b.flac"),
+                tags={"discnumber": "2", "tracknumber": "1"},
+                duration_secs=689.0,
+                format="flac",
+            ),
+            TrackTags(
+                path=Path("02a.flac"),
+                tags={"discnumber": "1", "tracknumber": "2"},
+                duration_secs=233.0,
+                format="flac",
+            ),
+            TrackTags(
+                path=Path("02b.flac"),
+                tags={"discnumber": "2", "tracknumber": "2"},
+                duration_secs=300.0,
+                format="flac",
+            ),
         ]
         album = AlbumTags(directory=Path("/music"), tracks=tracks)
         result = build_diff(album, release)
 
         titles = [
-            next((c.new_value for c in d.changes if c.field == "title"), None)
-            for d in result.diffs
+            next((c.new_value for c in d.changes if c.field == "title"), None) for d in result.diffs
         ]
         assert titles == ["Let's Go Crazy", "The Dance Electric", "Take Me With U", "Love and Sex"]
 
@@ -355,8 +377,7 @@ class TestBuildDiff:
         result = build_diff(album, release)
 
         titles = [
-            next((c.new_value for c in d.changes if c.field == "title"), None)
-            for d in result.diffs
+            next((c.new_value for c in d.changes if c.field == "title"), None) for d in result.diffs
         ]
         assert titles == ["Doolin-Dalton", "Twenty-One", "Out of Control"]
 
@@ -365,10 +386,10 @@ class TestBuildDiff:
         file gets album-level tags only (not positional fallback)."""
         release = _make_release()
         tracks = [
-            TrackTags(path=Path("01.flac"), tags={"tracknumber": "1"},
-                      duration_secs=209.0, format="flac"),
-            TrackTags(path=Path("unknown.flac"), tags={},
-                      duration_secs=200.0, format="flac"),
+            TrackTags(
+                path=Path("01.flac"), tags={"tracknumber": "1"}, duration_secs=209.0, format="flac"
+            ),
+            TrackTags(path=Path("unknown.flac"), tags={}, duration_secs=200.0, format="flac"),
         ]
         album = AlbumTags(directory=Path("/music"), tracks=tracks)
         result = build_diff(album, release)
@@ -400,12 +421,24 @@ class TestBuildDiff:
 class TestScoreCandidates:
     def test_scores_matching_release(self) -> None:
         tracks = [
-            TrackTags(path=Path("01.flac"), tags={"tracknumber": "1", "discnumber": "1"},
-                      duration_secs=209.0, format="flac"),
-            TrackTags(path=Path("02.flac"), tags={"tracknumber": "2", "discnumber": "1"},
-                      duration_secs=187.0, format="flac"),
-            TrackTags(path=Path("03.flac"), tags={"tracknumber": "3", "discnumber": "1"},
-                      duration_secs=195.0, format="flac"),
+            TrackTags(
+                path=Path("01.flac"),
+                tags={"tracknumber": "1", "discnumber": "1"},
+                duration_secs=209.0,
+                format="flac",
+            ),
+            TrackTags(
+                path=Path("02.flac"),
+                tags={"tracknumber": "2", "discnumber": "1"},
+                duration_secs=187.0,
+                format="flac",
+            ),
+            TrackTags(
+                path=Path("03.flac"),
+                tags={"tracknumber": "3", "discnumber": "1"},
+                duration_secs=195.0,
+                format="flac",
+            ),
         ]
         album = AlbumTags(directory=Path("/music"), tracks=tracks)
         release = _make_release()
@@ -418,26 +451,42 @@ class TestScoreCandidates:
 
     def test_sorts_by_match_quality(self) -> None:
         tracks = [
-            TrackTags(path=Path("01.flac"), tags={"tracknumber": "1", "discnumber": "1"},
-                      duration_secs=209.0, format="flac"),
-            TrackTags(path=Path("02.flac"), tags={"tracknumber": "2", "discnumber": "1"},
-                      duration_secs=187.0, format="flac"),
+            TrackTags(
+                path=Path("01.flac"),
+                tags={"tracknumber": "1", "discnumber": "1"},
+                duration_secs=209.0,
+                format="flac",
+            ),
+            TrackTags(
+                path=Path("02.flac"),
+                tags={"tracknumber": "2", "discnumber": "1"},
+                duration_secs=187.0,
+                format="flac",
+            ),
         ]
         album = AlbumTags(directory=Path("/music"), tracks=tracks)
 
         good = MBRelease(
-            id="good", title="Good", track_count=2,
-            discs={1: [
-                MBTrack(number=1, title="A", duration_ms=209000),
-                MBTrack(number=2, title="B", duration_ms=187000),
-            ]},
+            id="good",
+            title="Good",
+            track_count=2,
+            discs={
+                1: [
+                    MBTrack(number=1, title="A", duration_ms=209000),
+                    MBTrack(number=2, title="B", duration_ms=187000),
+                ]
+            },
         )
         bad = MBRelease(
-            id="bad", title="Bad", track_count=2,
-            discs={1: [
-                MBTrack(number=1, title="A", duration_ms=220000),
-                MBTrack(number=2, title="B", duration_ms=200000),
-            ]},
+            id="bad",
+            title="Bad",
+            track_count=2,
+            discs={
+                1: [
+                    MBTrack(number=1, title="A", duration_ms=220000),
+                    MBTrack(number=2, title="B", duration_ms=200000),
+                ]
+            },
         )
         results = score_candidates(album, [bad, good])
         assert results[0].release.id == "good"
@@ -445,8 +494,9 @@ class TestScoreCandidates:
 
     def test_no_discs_in_candidate(self) -> None:
         tracks = [
-            TrackTags(path=Path("01.flac"), tags={"tracknumber": "1"},
-                      duration_secs=209.0, format="flac"),
+            TrackTags(
+                path=Path("01.flac"), tags={"tracknumber": "1"}, duration_secs=209.0, format="flac"
+            ),
         ]
         album = AlbumTags(directory=Path("/music"), tracks=tracks)
         release = MBRelease(id="no-discs", title="X", track_count=1)
@@ -457,8 +507,10 @@ class TestScoreCandidates:
         stats = CandidateMatch(
             release=_make_release(),
             stats=__import__("music_tagger.tagger", fromlist=["MatchStats"]).MatchStats(
-                track_count_match=True, tracks_within_2s=3,
-                tracks_compared=3, max_deviation_secs=0.5,
+                track_count_match=True,
+                tracks_within_2s=3,
+                tracks_compared=3,
+                max_deviation_secs=0.5,
             ),
         )
         d = stats.to_dict()

@@ -56,8 +56,17 @@ class PlacementPlan:
 
 
 _NON_AUDIO_EXTENSIONS = {
-    ".cue", ".log", ".toc", ".txt", ".jpg", ".jpeg", ".png",
-    ".pdf", ".nfo", ".m3u", ".accurip",
+    ".cue",
+    ".log",
+    ".toc",
+    ".txt",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".pdf",
+    ".nfo",
+    ".m3u",
+    ".accurip",
 }
 
 
@@ -70,17 +79,12 @@ def compute_placement(
 
     album_name = album.album or "Unknown Album"
     year = _extract_year(album)
-    if year:
-        album_dir_name = f"{_sanitize(album_name)} ({year})"
-    else:
-        album_dir_name = _sanitize(album_name)
+    safe = _sanitize(album_name)
+    album_dir_name = f"{safe} ({year})" if year else safe
 
     album_dir = root / artist / album_dir_name
 
-    is_multi_disc = any(
-        _parse_int(t.tags.get("discnumber", "1"), 1) > 1
-        for t in album.tracks
-    )
+    is_multi_disc = any(_parse_int(t.tags.get("discnumber", "1"), 1) > 1 for t in album.tracks)
 
     mappings: list[FileMapping] = []
     for track in album.tracks:
@@ -186,5 +190,8 @@ def copy_files(plan: PlacementPlan, dry_run: bool = False) -> CopyResult:
         total_bytes += src_size
 
     return CopyResult(
-        copied=copied, skipped=skipped, failed=failed, total_bytes=total_bytes,
+        copied=copied,
+        skipped=skipped,
+        failed=failed,
+        total_bytes=total_bytes,
     )

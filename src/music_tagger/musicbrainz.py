@@ -50,12 +50,28 @@ class MBTrack:
         if self.duration_ms is not None:
             d["duration_ms"] = self.duration_ms
         for attr in (
-            "artist", "artist_id",
-            "recording_id", "track_id", "isrc", "work_id",
-            "composer", "composer_id", "lyricist", "lyricist_id",
-            "producer", "producer_id", "engineer", "engineer_id",
-            "mixer", "mixer_id", "conductor", "conductor_id",
-            "remixer", "remixer_id", "performers", "performer_ids",
+            "artist",
+            "artist_id",
+            "recording_id",
+            "track_id",
+            "isrc",
+            "work_id",
+            "composer",
+            "composer_id",
+            "lyricist",
+            "lyricist_id",
+            "producer",
+            "producer_id",
+            "engineer",
+            "engineer_id",
+            "mixer",
+            "mixer_id",
+            "conductor",
+            "conductor_id",
+            "remixer",
+            "remixer_id",
+            "performers",
+            "performer_ids",
         ):
             val = getattr(self, attr)
             if val:
@@ -129,12 +145,15 @@ class MBRelease:
             "track_count": self.track_count,
         }
         if self.discs:
-            d["discs"] = {
-                str(k): [t.to_dict() for t in v] for k, v in self.discs.items()
-            }
+            d["discs"] = {str(k): [t.to_dict() for t in v] for k, v in self.discs.items()}
         for attr in (
-            "artist", "artist_id", "release_group_id", "release_group_type",
-            "first_release_date", "asin", "script",
+            "artist",
+            "artist_id",
+            "release_group_id",
+            "release_group_type",
+            "first_release_date",
+            "asin",
+            "script",
         ):
             val = getattr(self, attr)
             if val:
@@ -285,9 +304,7 @@ class MusicBrainzClient:
         query = f'artist:"{artist}" release:"{album}"'
         if format:
             query += f" AND format:{format}"
-        resp = self._client.get(
-            "/release/", params={"query": query, "fmt": "json", "limit": limit}
-        )
+        resp = self._client.get("/release/", params={"query": query, "fmt": "json", "limit": limit})
         resp.raise_for_status()
         data = resp.json()
         return [self._parse_search_release(r) for r in data.get("releases", [])]
@@ -341,17 +358,11 @@ class MusicBrainzClient:
             tracks = []
             for t in medium.get("tracks", []):
                 recording = t.get("recording", {})
-                track_artist_credit = (
-                    t.get("artist-credit")
-                    or recording.get("artist-credit")
-                    or []
-                )
+                track_artist_credit = t.get("artist-credit") or recording.get("artist-credit") or []
                 track_artist_name = _build_artist_credit(track_artist_credit)
                 track_artist_id = ""
                 if track_artist_credit:
-                    track_artist_id = (
-                        track_artist_credit[0].get("artist", {}).get("id", "")
-                    )
+                    track_artist_id = track_artist_credit[0].get("artist", {}).get("id", "")
 
                 isrcs = recording.get("isrcs", [])
                 credits = _parse_recording_credits(recording)

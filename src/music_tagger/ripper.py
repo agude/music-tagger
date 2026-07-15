@@ -78,21 +78,23 @@ def read_disc_id(device: str = "/dev/cdrom") -> dict:
     """
     try:
         import discid
-    except ImportError:
+    except ImportError as err:
         raise RuntimeError(
             "python 'discid' package not installed. "
             "Install: uv add discid && sudo apt-get install libdiscid-dev"
-        )
+        ) from err
 
     disc = discid.read(device)
     tracks = []
     for t in disc.tracks:
-        tracks.append({
-            "number": t.number,
-            "offset": t.offset,
-            "sectors": t.sectors,
-            "seconds": t.seconds,
-        })
+        tracks.append(
+            {
+                "number": t.number,
+                "offset": t.offset,
+                "sectors": t.sectors,
+                "seconds": t.seconds,
+            }
+        )
 
     return {
         "disc_id": disc.id,

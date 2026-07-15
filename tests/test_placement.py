@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 from music_tagger.placement import (
-    CopyResult,
     FileMapping,
     PlacementPlan,
     _sanitize,
@@ -40,14 +39,24 @@ class TestComputePlacement:
         tracks = [
             TrackTags(
                 path=Path("/rips/album/01.flac"),
-                tags={"tracknumber": "1", "title": "Song One", "albumartist": "Eagles",
-                      "album": "Desperado", "date": "1973"},
+                tags={
+                    "tracknumber": "1",
+                    "title": "Song One",
+                    "albumartist": "Eagles",
+                    "album": "Desperado",
+                    "date": "1973",
+                },
                 format="flac",
             ),
             TrackTags(
                 path=Path("/rips/album/02.flac"),
-                tags={"tracknumber": "2", "title": "Song Two", "albumartist": "Eagles",
-                      "album": "Desperado", "date": "1973"},
+                tags={
+                    "tracknumber": "2",
+                    "title": "Song Two",
+                    "albumartist": "Eagles",
+                    "album": "Desperado",
+                    "date": "1973",
+                },
                 format="flac",
             ),
         ]
@@ -64,14 +73,26 @@ class TestComputePlacement:
         tracks = [
             TrackTags(
                 path=Path("/rips/01a.flac"),
-                tags={"tracknumber": "1", "discnumber": "1", "title": "Disc 1 Track 1",
-                      "albumartist": "Prince", "album": "Purple Rain", "date": "1984"},
+                tags={
+                    "tracknumber": "1",
+                    "discnumber": "1",
+                    "title": "Disc 1 Track 1",
+                    "albumartist": "Prince",
+                    "album": "Purple Rain",
+                    "date": "1984",
+                },
                 format="flac",
             ),
             TrackTags(
                 path=Path("/rips/01b.flac"),
-                tags={"tracknumber": "1", "discnumber": "2", "title": "Disc 2 Track 1",
-                      "albumartist": "Prince", "album": "Purple Rain", "date": "1984"},
+                tags={
+                    "tracknumber": "1",
+                    "discnumber": "2",
+                    "title": "Disc 2 Track 1",
+                    "albumartist": "Prince",
+                    "album": "Purple Rain",
+                    "date": "1984",
+                },
                 format="flac",
             ),
         ]
@@ -87,8 +108,12 @@ class TestComputePlacement:
         tracks = [
             TrackTags(
                 path=Path("/rips/01.flac"),
-                tags={"tracknumber": "1", "title": "Song", "albumartist": "Artist",
-                      "album": "Album"},
+                tags={
+                    "tracknumber": "1",
+                    "title": "Song",
+                    "albumartist": "Artist",
+                    "album": "Album",
+                },
                 format="flac",
             ),
         ]
@@ -106,7 +131,13 @@ class TestComputePlacement:
         tracks = [
             TrackTags(
                 path=album_dir / "01.flac",
-                tags={"tracknumber": "1", "title": "Song", "albumartist": "A", "album": "B", "date": "2000"},
+                tags={
+                    "tracknumber": "1",
+                    "title": "Song",
+                    "albumartist": "A",
+                    "album": "B",
+                    "date": "2000",
+                },
                 format="flac",
             ),
         ]
@@ -138,8 +169,13 @@ class TestComputePlacement:
         tracks = [
             TrackTags(
                 path=Path("/rips/01.flac"),
-                tags={"tracknumber": "1", "title": "What?", "albumartist": "AC/DC",
-                      "album": "Back in Black", "date": "1980"},
+                tags={
+                    "tracknumber": "1",
+                    "title": "What?",
+                    "albumartist": "AC/DC",
+                    "album": "Back in Black",
+                    "date": "1980",
+                },
                 format="flac",
             ),
         ]
@@ -170,7 +206,10 @@ class TestPlacementPlanSerialization:
         plan = PlacementPlan(
             album_dir=Path("/music/Eagles/Desperado (1973)"),
             mappings=[
-                FileMapping(source=Path("/rips/01.flac"), dest=Path("/music/Eagles/Desperado (1973)/01. Song.flac")),
+                FileMapping(
+                    source=Path("/rips/01.flac"),
+                    dest=Path("/music/Eagles/Desperado (1973)/01. Song.flac"),
+                ),
             ],
         )
         d = plan.to_dict()
@@ -320,7 +359,9 @@ class TestPathForCommand:
         evidence_path.write_text(json.dumps(album.to_dict()))
 
         out = tmp_path / "plan.json"
-        _path_for(["--evidence", str(evidence_path), "--root", str(tmp_path / "library"), "-o", str(out)])
+        _path_for(
+            ["--evidence", str(evidence_path), "--root", str(tmp_path / "library"), "-o", str(out)]
+        )
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "Eagles" in captured.out
         assert "Desperado" in captured.out

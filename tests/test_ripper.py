@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from music_tagger.ripper import RipResult, rip_cd, read_disc_id, _check_tool
+from music_tagger.ripper import _check_tool, read_disc_id, rip_cd
 
 
 class TestCheckTool:
@@ -14,15 +14,15 @@ class TestCheckTool:
             _check_tool("ls")
 
     def test_not_found(self) -> None:
-        with patch("shutil.which", return_value=None):
-            with pytest.raises(RuntimeError, match="'fake' not found"):
-                _check_tool("fake")
+        with (
+            patch("shutil.which", return_value=None),
+            pytest.raises(RuntimeError, match="'fake' not found"),
+        ):
+            _check_tool("fake")
 
 
 class TestRipCd:
     def test_rips_and_encodes(self, tmp_path: Path) -> None:
-        wav_dir = tmp_path / "wavs"
-
         def fake_cdparanoia(cmd, cwd, **kwargs):
             # Create fake WAV files in the cwd (tmpdir)
             cwd_path = Path(cwd)
@@ -42,6 +42,7 @@ class TestRipCd:
             patch("shutil.which", return_value="/usr/bin/fake"),
             patch("music_tagger.ripper.subprocess.run") as mock_run,
         ):
+
             def side_effect(cmd, **kwargs):
                 if cmd[0] == "cdparanoia":
                     return fake_cdparanoia(cmd, **kwargs)
@@ -91,9 +92,11 @@ class TestRipCd:
 
 class TestReadDiscId:
     def test_missing_discid_package(self) -> None:
-        with patch.dict("sys.modules", {"discid": None}):
-            with pytest.raises(RuntimeError, match="discid"):
-                read_disc_id()
+        with (
+            patch.dict("sys.modules", {"discid": None}),
+            pytest.raises(RuntimeError, match="discid"),
+        ):
+            read_disc_id()
 
     def test_returns_disc_info(self) -> None:
         mock_track = MagicMock()

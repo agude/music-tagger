@@ -12,14 +12,20 @@ from typing import Any
 
 from mutagen import File as MutagenFile
 from mutagen.flac import FLAC
-from mutagen.id3 import TXXX, ID3
+from mutagen.id3 import TXXX
 from mutagen.mp3 import MP3
 
 AUDIO_EXTENSIONS = {".flac", ".mp3"}
 
 _MB_DISAMBIG_TERMS = {
-    "acoustic", "demo", "live", "radio edit", "remaster",
-    "remastered", "remix", "single edit",
+    "acoustic",
+    "demo",
+    "live",
+    "radio edit",
+    "remaster",
+    "remastered",
+    "remix",
+    "single edit",
 }
 
 # Canonical field name -> (FLAC Vorbis tag, MP3 ID3 frame)
@@ -146,7 +152,9 @@ class AlbumTags:
 
     @property
     def artist(self) -> str:
-        return _most_common(t.tags.get("albumartist") or t.tags.get("artist", "") for t in self.tracks)
+        return _most_common(
+            t.tags.get("albumartist") or t.tags.get("artist", "") for t in self.tracks
+        )
 
     @property
     def album(self) -> str:
@@ -210,9 +218,7 @@ def _read_mp3_tags(audio: MP3) -> dict[str, str]:
 def read_album(directory: Path) -> AlbumTags:
     """Read tags from all audio files in a directory."""
     album = AlbumTags(directory=directory)
-    files = sorted(
-        f for f in directory.iterdir() if f.suffix.lower() in AUDIO_EXTENSIONS
-    )
+    files = sorted(f for f in directory.iterdir() if f.suffix.lower() in AUDIO_EXTENSIONS)
     for path in files:
         audio = MutagenFile(path)
         if audio is None:
@@ -226,9 +232,7 @@ def read_album(directory: Path) -> AlbumTags:
         else:
             continue
         duration = audio.info.length if audio.info else 0.0
-        album.tracks.append(
-            TrackTags(path=path, tags=tags, duration_secs=duration, format=fmt)
-        )
+        album.tracks.append(TrackTags(path=path, tags=tags, duration_secs=duration, format=fmt))
     return album
 
 
@@ -278,9 +282,7 @@ class TagChange:
         )
 
 
-def compute_diff(
-    track: TrackTags, new_tags: dict[str, str]
-) -> list[TagChange]:
+def compute_diff(track: TrackTags, new_tags: dict[str, str]) -> list[TagChange]:
     """Compute the tag changes needed for a single track."""
     # Fields where comparison should be case-insensitive
     case_insensitive = {"releasestatus", "releasetype"}
@@ -298,7 +300,7 @@ def compute_diff(
         elif old_value == new_value:
             continue
         if field_name == "title" and old_value and new_value.startswith(old_value):
-            suffix = new_value[len(old_value):].strip()
+            suffix = new_value[len(old_value) :].strip()
             if suffix.startswith("(") and suffix.endswith(")"):
                 inner = suffix[1:-1].lower()
                 if any(t in inner for t in _MB_DISAMBIG_TERMS):

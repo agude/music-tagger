@@ -87,19 +87,25 @@ class TestParseRipDir:
         assert toc.last_track == 3
 
     def test_no_cue_raises(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="No .cue files"):
+        with pytest.raises(ValueError, match=r"No \.cue files"):
             parse_rip_dir(tmp_path)
 
 
 class TestTOCInfo:
     def test_toc_string(self) -> None:
-        toc = TOCInfo(first_track=1, last_track=3, leadout_offset=200000,
-                      track_offsets=[150, 15000, 30000])
+        toc = TOCInfo(
+            first_track=1, last_track=3, leadout_offset=200000, track_offsets=[150, 15000, 30000]
+        )
         assert toc.to_toc_string() == "1 3 200000 150 15000 30000"
 
     def test_to_dict(self) -> None:
-        toc = TOCInfo(first_track=1, last_track=2, leadout_offset=100000,
-                      track_offsets=[150, 50000], disc_id="abc123")
+        toc = TOCInfo(
+            first_track=1,
+            last_track=2,
+            leadout_offset=100000,
+            track_offsets=[150, 50000],
+            disc_id="abc123",
+        )
         d = toc.to_dict()
         assert d["first_track"] == 1
         assert d["last_track"] == 2
@@ -107,7 +113,6 @@ class TestTOCInfo:
         assert d["toc_string"] == "1 2 100000 150 50000"
 
     def test_to_dict_no_disc_id(self) -> None:
-        toc = TOCInfo(first_track=1, last_track=1, leadout_offset=0,
-                      track_offsets=[150])
+        toc = TOCInfo(first_track=1, last_track=1, leadout_offset=0, track_offsets=[150])
         d = toc.to_dict()
         assert "disc_id" not in d

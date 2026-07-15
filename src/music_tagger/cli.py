@@ -5,17 +5,16 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-from .musicbrainz import MusicBrainzClient
-from .tags import AUDIO_EXTENSIONS, AlbumTags, read_album
-from .discid import parse_rip_dir
-from .musicbrainz import MBRelease
 from .coverart import fetch_cover_art
+from .discid import parse_rip_dir
+from .musicbrainz import MBRelease, MusicBrainzClient
 from .navidrome import NavidromeClient
 from .placement import PlacementPlan, compute_placement, copy_files
 from .tagger import AlbumResult, apply_changes, build_diff, score_candidates, search_candidates
+from .tags import AUDIO_EXTENSIONS, AlbumTags, read_album
 
 
 def _output_json(data: object, out: Path | None, digest: str) -> None:
@@ -29,9 +28,7 @@ def _output_json(data: object, out: Path | None, digest: str) -> None:
 
 
 def _is_album_dir(path: Path) -> bool:
-    return any(
-        f.suffix.lower() in AUDIO_EXTENSIONS for f in path.iterdir() if f.is_file()
-    )
+    return any(f.suffix.lower() in AUDIO_EXTENSIONS for f in path.iterdir() if f.is_file())
 
 
 def _find_album_dirs(root: Path) -> list[Path]:
@@ -51,7 +48,10 @@ def _read(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("path", type=Path, help="Album directory.")
     parser.add_argument(
-        "-o", "--out", type=Path, default=None,
+        "-o",
+        "--out",
+        type=Path,
+        default=None,
         help="Output JSON file (prints digest to stdout). Without this, JSON goes to stdout.",
     )
     args = parser.parse_args(argv)
@@ -68,7 +68,8 @@ def _read(argv: list[str] | None = None) -> None:
 
     data = album.to_dict()
 
-    lines = [f"{album.artist} — {album.album} ({album.track_count} tracks, {album.tracks[0].format.upper()})"]
+    fmt = album.tracks[0].format.upper()
+    lines = [f"{album.artist} — {album.album} ({album.track_count} tracks, {fmt})"]
     for track in album.tracks:
         dur = f"{track.duration_secs:.1f}s"
         title = track.tags.get("title", track.path.name)
@@ -84,7 +85,10 @@ def _toc(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("path", type=Path, help="Rip directory containing .cue file.")
     parser.add_argument(
-        "-o", "--out", type=Path, default=None,
+        "-o",
+        "--out",
+        type=Path,
+        default=None,
         help="Output JSON file (prints digest to stdout).",
     )
     args = parser.parse_args(argv)
@@ -116,7 +120,10 @@ def _mb_search(argv: list[str] | None = None) -> None:
     parser.add_argument("--format", default="CD", help="Media format filter (default: CD).")
     parser.add_argument("--limit", type=int, default=10, help="Max results (default: 10).")
     parser.add_argument(
-        "-o", "--out", type=Path, default=None,
+        "-o",
+        "--out",
+        type=Path,
+        default=None,
         help="Output JSON file (prints digest to stdout).",
     )
     args = parser.parse_args(argv)
@@ -124,7 +131,10 @@ def _mb_search(argv: list[str] | None = None) -> None:
     mb_client = MusicBrainzClient()
     try:
         results = mb_client.search_releases(
-            args.artist, args.album, format=args.format, limit=args.limit,
+            args.artist,
+            args.album,
+            format=args.format,
+            limit=args.limit,
         )
     finally:
         mb_client.close()
@@ -133,7 +143,10 @@ def _mb_search(argv: list[str] | None = None) -> None:
 
     lines = [f'{len(results)} candidates for "{args.artist}" — "{args.album}":']
     for r in results:
-        info = f"  [{r.id}]  {r.title} ({r.date}) {r.country} / {r.label} / {r.format} / {r.track_count}t"
+        info = (
+            f"  [{r.id}]  {r.title} ({r.date})"
+            f" {r.country} / {r.label} / {r.format} / {r.track_count}t"
+        )
         lines.append(info)
     _output_json(data, args.out, "\n".join(lines))
 
@@ -145,7 +158,10 @@ def _mb_release(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("release_id", help="MusicBrainz release UUID.")
     parser.add_argument(
-        "-o", "--out", type=Path, default=None,
+        "-o",
+        "--out",
+        type=Path,
+        default=None,
         help="Output JSON file (prints digest to stdout).",
     )
     args = parser.parse_args(argv)
@@ -161,7 +177,8 @@ def _mb_release(argv: list[str] | None = None) -> None:
     disc_info = f"{len(release.discs)} disc(s)" if release.discs else "no disc info"
     lines = [
         f"{release.title} [{release.id}]",
-        f"{release.date} / {release.country} / {release.label} / {release.catalognum or '—'} / {release.format}",
+        f"{release.date} / {release.country} / {release.label}"
+        f" / {release.catalognum or '—'} / {release.format}",
         f"{release.track_count} tracks, {disc_info}",
     ]
     _output_json(data, args.out, "\n".join(lines))
@@ -173,9 +190,14 @@ def _mb_discid(argv: list[str] | None = None) -> None:
         description="Look up releases by disc ID or TOC offsets.",
     )
     parser.add_argument("discid", nargs="?", default=None, help="MusicBrainz disc ID.")
-    parser.add_argument("--toc", default=None, help="TOC string for fuzzy lookup (from `toc` command).")
     parser.add_argument(
-        "-o", "--out", type=Path, default=None,
+        "--toc", default=None, help="TOC string for fuzzy lookup (from `toc` command)."
+    )
+    parser.add_argument(
+        "-o",
+        "--out",
+        type=Path,
+        default=None,
         help="Output JSON file (prints digest to stdout).",
     )
     args = parser.parse_args(argv)
@@ -198,7 +220,10 @@ def _mb_discid(argv: list[str] | None = None) -> None:
     method = f"disc ID {args.discid}" if args.discid else "TOC fuzzy match"
     lines = [f"{len(results)} releases via {method}:"]
     for r in results:
-        lines.append(f"  [{r.id}]  {r.title} ({r.date}) {r.country} / {r.label} / {r.format} / {r.track_count}t")
+        lines.append(
+            f"  [{r.id}]  {r.title} ({r.date})"
+            f" {r.country} / {r.label} / {r.format} / {r.track_count}t"
+        )
     _output_json(data, args.out, "\n".join(lines))
 
 
@@ -237,15 +262,22 @@ def _match(argv: list[str] | None = None) -> None:
         description="Score candidates by duration match against local evidence.",
     )
     parser.add_argument(
-        "--evidence", type=Path, required=True,
+        "--evidence",
+        type=Path,
+        required=True,
         help="Evidence JSON from `read`.",
     )
     parser.add_argument(
-        "--candidates", type=Path, required=True,
+        "--candidates",
+        type=Path,
+        required=True,
         help="Candidates JSON from `mb search`.",
     )
     parser.add_argument(
-        "-o", "--out", type=Path, default=None,
+        "-o",
+        "--out",
+        type=Path,
+        default=None,
         help="Output JSON file (prints digest to stdout).",
     )
     args = parser.parse_args(argv)
@@ -274,15 +306,22 @@ def _diff(argv: list[str] | None = None) -> None:
         description="Compute tag diff between local evidence and a MusicBrainz release.",
     )
     parser.add_argument(
-        "--evidence", type=Path, required=True,
+        "--evidence",
+        type=Path,
+        required=True,
         help="Evidence JSON from `read`.",
     )
     parser.add_argument(
-        "--release", type=Path, required=True,
+        "--release",
+        type=Path,
+        required=True,
         help="Release JSON from `mb release`.",
     )
     parser.add_argument(
-        "-o", "--out", type=Path, default=None,
+        "-o",
+        "--out",
+        type=Path,
+        default=None,
         help="Output JSON file (prints digest to stdout).",
     )
     args = parser.parse_args(argv)
@@ -310,15 +349,21 @@ def _write_tags(argv: list[str] | None = None) -> None:
         description="Apply tag changes from a diff JSON.",
     )
     parser.add_argument(
-        "--diff", type=Path, required=True, dest="diff_file",
+        "--diff",
+        type=Path,
+        required=True,
+        dest="diff_file",
         help="Diff JSON from `diff` (possibly LLM-edited).",
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Show what would change without writing.",
     )
     parser.add_argument(
-        "--log", type=Path, default=None,
+        "--log",
+        type=Path,
+        default=None,
         help="Append changes to this log file.",
     )
     args = parser.parse_args(argv)
@@ -347,12 +392,12 @@ def _write_tags(argv: list[str] | None = None) -> None:
 
 
 def _write_log_entry(log_path: Path, result: AlbumResult) -> None:
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     lines = [
         f"## {result.release.title} [{result.release.id}]",
-        f"",
+        "",
         f"- **Date:** {timestamp}",
-        f"",
+        "",
     ]
     for diff in result.diffs:
         if not diff.changes:
@@ -376,11 +421,15 @@ def _scan(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("path", type=Path, help="Library root directory.")
     parser.add_argument(
-        "-o", "--output", type=Path, default=None,
+        "-o",
+        "--output",
+        type=Path,
+        default=None,
         help="Output JSON file (default: stdout).",
     )
     parser.add_argument(
-        "--all", action="store_true",
+        "--all",
+        action="store_true",
         help="Include albums that already have a consistent MB ID.",
     )
     args = parser.parse_args(argv)
@@ -442,10 +491,17 @@ def _print_candidates(argv: list[str] | None = None) -> None:
         description="Read album, search MusicBrainz, and score candidates.",
     )
     parser.add_argument("path", type=Path, help="Album directory.")
-    parser.add_argument("--artist", default=None, help="Override artist name (for freshly ripped files).")
-    parser.add_argument("--album", default=None, help="Override album title (for freshly ripped files).")
     parser.add_argument(
-        "-o", "--out", type=Path, default=None,
+        "--artist", default=None, help="Override artist name (for freshly ripped files)."
+    )
+    parser.add_argument(
+        "--album", default=None, help="Override album title (for freshly ripped files)."
+    )
+    parser.add_argument(
+        "-o",
+        "--out",
+        type=Path,
+        default=None,
         help="Output JSON file (prints digest to stdout).",
     )
     args = parser.parse_args(argv)
@@ -458,7 +514,10 @@ def _print_candidates(argv: list[str] | None = None) -> None:
     mb_client = MusicBrainzClient()
     try:
         album, candidates = search_candidates(
-            target, mb_client, artist=args.artist, album_title=args.album,
+            target,
+            mb_client,
+            artist=args.artist,
+            album_title=args.album,
         )
     finally:
         mb_client.close()
@@ -472,7 +531,7 @@ def _print_candidates(argv: list[str] | None = None) -> None:
 
     lines = [
         f"{album.artist} — {album.album}  ({album.track_count} tracks)",
-        f"",
+        "",
         f"{len(matches)} candidates scored:",
     ]
     for m in matches:
@@ -480,9 +539,10 @@ def _print_candidates(argv: list[str] | None = None) -> None:
         s = m.stats
         count_ok = "=" if s.track_count_match else "!"
         lines.append(
-            f"  [{r.id}]  {r.title} ({r.date}) {r.country} / {r.label} / {r.format}"
-            f"  {s.tracks_within_2s}/{s.tracks_compared} within 2s  max_dev={s.max_deviation_secs:.1f}s"
-            f"  count{count_ok}"
+            f"  [{r.id}]  {r.title} ({r.date})"
+            f" {r.country} / {r.label} / {r.format}"
+            f"  {s.tracks_within_2s}/{s.tracks_compared} within 2s"
+            f"  max_dev={s.max_deviation_secs:.1f}s  count{count_ok}"
         )
     _output_json(data, args.out, "\n".join(lines))
 
@@ -512,15 +572,22 @@ def _path_for(argv: list[str] | None = None) -> None:
         description="Compute library destination paths for album files.",
     )
     parser.add_argument(
-        "--evidence", type=Path, required=True,
+        "--evidence",
+        type=Path,
+        required=True,
         help="Evidence JSON from `read`.",
     )
     parser.add_argument(
-        "--root", type=Path, default=None,
+        "--root",
+        type=Path,
+        default=None,
         help="Library root (default: /mnt/synology/media/music).",
     )
     parser.add_argument(
-        "-o", "--out", type=Path, default=None,
+        "-o",
+        "--out",
+        type=Path,
+        default=None,
         help="Output JSON file (prints digest to stdout).",
     )
     args = parser.parse_args(argv)
@@ -549,15 +616,21 @@ def _copy(argv: list[str] | None = None) -> None:
         description="Copy files to library destinations per a placement plan.",
     )
     parser.add_argument(
-        "--plan", type=Path, required=True, dest="plan_file",
+        "--plan",
+        type=Path,
+        required=True,
+        dest="plan_file",
         help="Plan JSON from `path-for` (possibly LLM-edited).",
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Show what would be copied without copying.",
     )
     parser.add_argument(
-        "--log", type=Path, default=None,
+        "--log",
+        type=Path,
+        default=None,
         help="Append copy results to this log file.",
     )
     args = parser.parse_args(argv)
@@ -577,7 +650,8 @@ def _copy(argv: list[str] | None = None) -> None:
 
     size_mb = result.total_bytes / (1024 * 1024)
     if args.dry_run:
-        print(f"\n(dry run) Would copy {len(result.copied)} file(s) ({size_mb:.1f} MB) → {plan.album_dir}")
+        n = len(result.copied)
+        print(f"\n(dry run) Would copy {n} file(s) ({size_mb:.1f} MB) → {plan.album_dir}")
     else:
         print(f"Copied {len(result.copied)} file(s) ({size_mb:.1f} MB) → {plan.album_dir}")
 
@@ -589,15 +663,16 @@ def _copy(argv: list[str] | None = None) -> None:
 
 
 def _write_copy_log(log_path: Path, plan: PlacementPlan, result: object) -> None:
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     lines = [
         f"## Copy to {plan.album_dir}",
-        f"",
+        "",
         f"- **Date:** {timestamp}",
         f"- **Files:** {len(plan.mappings)}",
-        f"",
+        "",
     ]
     from .placement import CopyResult
+
     if isinstance(result, CopyResult):
         for m in result.copied:
             lines.append(f"  {m.source.name} → {m.dest}")
@@ -615,14 +690,19 @@ def _art(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("path", type=Path, help="Album directory to save cover art into.")
     parser.add_argument("--release-id", required=True, help="MusicBrainz release UUID.")
-    parser.add_argument("--full", action="store_true", help="Fetch full-size image instead of 500px.")
+    parser.add_argument(
+        "--full", action="store_true", help="Fetch full-size image instead of 500px."
+    )
     parser.add_argument("--force", action="store_true", help="Overwrite existing cover.jpg.")
     args = parser.parse_args(argv)
 
     target: Path = args.path.resolve()
 
     result = fetch_cover_art(
-        args.release_id, target, full_size=args.full, force=args.force,
+        args.release_id,
+        target,
+        full_size=args.full,
+        force=args.force,
     )
 
     if result.not_found:
@@ -640,7 +720,9 @@ def _rip(argv: list[str] | None = None) -> None:
         description="Rip a CD to FLAC files with bootstrap tags.",
     )
     parser.add_argument("path", type=Path, help="Output directory for FLAC files.")
-    parser.add_argument("--device", default="/dev/cdrom", help="CD drive device (default: /dev/cdrom).")
+    parser.add_argument(
+        "--device", default="/dev/cdrom", help="CD drive device (default: /dev/cdrom)."
+    )
     parser.add_argument("--no-discid", action="store_true", help="Skip disc ID lookup.")
     args = parser.parse_args(argv)
 
@@ -667,6 +749,7 @@ def _rip(argv: list[str] | None = None) -> None:
 
     # Bootstrap tracknumber tags so `tag` can match by position
     from mutagen.flac import FLAC
+
     for i, flac_path in enumerate(result.tracks, 1):
         audio = FLAC(str(flac_path))
         audio["TRACKNUMBER"] = str(i)
@@ -736,8 +819,12 @@ def _genre(argv: list[str] | None = None) -> None:
         description="Set or show the genre tag on all tracks in an album directory.",
     )
     parser.add_argument("path", type=Path, help="Album directory.")
-    parser.add_argument("genre", nargs="?", default=None, help="Genre to set. Omit to show current genre.")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing.")
+    parser.add_argument(
+        "genre", nargs="?", default=None, help="Genre to set. Omit to show current genre."
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would change without writing."
+    )
     parser.add_argument("--log", type=Path, default=None, help="Append changes to this log file.")
     args = parser.parse_args(argv)
 
@@ -776,7 +863,7 @@ def _genre(argv: list[str] | None = None) -> None:
             timestamp = TagChange(
                 field="music_tagger_updated",
                 old_value=track.tags.get("music_tagger_updated", ""),
-                new_value=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                new_value=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             )
             write_tags(track, [change, timestamp])
             count += 1
@@ -791,14 +878,14 @@ def _genre(argv: list[str] | None = None) -> None:
 
 
 def _write_genre_log(log_path: Path, album: AlbumTags, genre: str, count: int) -> None:
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     lines = [
         f"## Genre: {genre}",
-        f"",
+        "",
         f"- **Date:** {timestamp}",
         f"- **Album:** {album.artist} — {album.album}",
         f"- **Tracks:** {count}",
-        f"",
+        "",
         "---",
         "",
     ]
@@ -868,7 +955,7 @@ def _rename(argv: list[str] | None = None) -> None:
 def _tag(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger tag",
-        description="Fetch release, compute diff, and apply tags (wrapper over mb release + diff + write-tags).",
+        description="Fetch release, compute diff, and apply tags.",
     )
     parser.add_argument("path", type=Path, help="Album directory.")
     parser.add_argument("--release-id", required=True, help="MusicBrainz release UUID.")
@@ -942,7 +1029,7 @@ def _print_main_help() -> None:
     width = max(len(name) for name in commands)
     for name, (helptext, _) in commands.items():
         print(f"  {name:<{width}}  {helptext}")
-    print(f"\nRun 'music-tagger <command> --help' for command-specific help.")
+    print("\nRun 'music-tagger <command> --help' for command-specific help.")
 
 
 def main(argv: list[str] | None = None) -> None:

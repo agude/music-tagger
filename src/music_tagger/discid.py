@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from base64 import b64encode
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -54,7 +54,7 @@ def _compute_disc_id(first: int, last: int, leadout: int, offsets: list[int]) ->
     sha.update(f"{first:02X}".encode())
     sha.update(f"{last:02X}".encode())
 
-    all_offsets = [leadout] + list(offsets)
+    all_offsets = [leadout, *offsets]
     while len(all_offsets) < 100:
         all_offsets.append(0)
 
@@ -107,8 +107,7 @@ def parse_rip_dir(rip_dir: Path) -> TOCInfo:
     toc = parse_cue(cue_files[0])
 
     audio_files = sorted(
-        f for f in rip_dir.iterdir()
-        if f.suffix.lower() in {".flac", ".wav", ".mp3"}
+        f for f in rip_dir.iterdir() if f.suffix.lower() in {".flac", ".wav", ".mp3"}
     )
     if audio_files:
         try:
@@ -126,8 +125,10 @@ def parse_rip_dir(rip_dir: Path) -> TOCInfo:
 
     if toc.leadout_offset > 0:
         toc.disc_id = _compute_disc_id(
-            toc.first_track, toc.last_track,
-            toc.leadout_offset, toc.track_offsets,
+            toc.first_track,
+            toc.last_track,
+            toc.leadout_offset,
+            toc.track_offsets,
         )
 
     return toc
