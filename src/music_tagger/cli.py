@@ -203,25 +203,31 @@ def _mb_discid(argv: list[str] | None = None) -> None:
 
 
 def _mb(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(
-        prog="music-tagger mb",
-        description="MusicBrainz query commands.",
-    )
-    sub = parser.add_subparsers(dest="mb_command")
-    sub.add_parser("search", help="Search for candidate releases.")
-    sub.add_parser("release", help="Fetch full release detail.")
-    sub.add_parser("discid", help="Look up by disc ID or TOC.")
+    if argv is None:
+        argv = []
 
-    args, remaining = parser.parse_known_args(argv)
+    mb_commands = {
+        "search": ("Search for candidate releases.", _mb_search),
+        "release": ("Fetch full release detail.", _mb_release),
+        "discid": ("Look up by disc ID or TOC.", _mb_discid),
+    }
 
-    if args.mb_command == "search":
-        _mb_search(remaining)
-    elif args.mb_command == "release":
-        _mb_release(remaining)
-    elif args.mb_command == "discid":
-        _mb_discid(remaining)
+    if not argv or argv[0] in ("-h", "--help"):
+        print("usage: music-tagger mb <command> [options]\n")
+        print("MusicBrainz query commands.\n")
+        print("commands:")
+        for name, (helptext, _) in mb_commands.items():
+            print(f"  {name:<10}  {helptext}")
+        sys.exit(0 if argv else 1)
+
+    command = argv[0]
+    remaining = argv[1:]
+
+    if command in mb_commands:
+        _, handler = mb_commands[command]
+        handler(remaining)
     else:
-        parser.print_help()
+        print(f"music-tagger mb: unknown command '{command}'", file=sys.stderr)
         sys.exit(1)
 
 
@@ -698,19 +704,29 @@ def _nd_rescan(argv: list[str] | None = None) -> None:
 
 
 def _nd(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(
-        prog="music-tagger nd",
-        description="Navidrome commands.",
-    )
-    sub = parser.add_subparsers(dest="nd_command")
-    sub.add_parser("rescan", help="Trigger a library scan.")
+    if argv is None:
+        argv = []
 
-    args, remaining = parser.parse_known_args(argv)
+    nd_commands = {
+        "rescan": ("Trigger a library scan.", _nd_rescan),
+    }
 
-    if args.nd_command == "rescan":
-        _nd_rescan(remaining)
+    if not argv or argv[0] in ("-h", "--help"):
+        print("usage: music-tagger nd <command> [options]\n")
+        print("Navidrome commands.\n")
+        print("commands:")
+        for name, (helptext, _) in nd_commands.items():
+            print(f"  {name:<10}  {helptext}")
+        sys.exit(0 if argv else 1)
+
+    command = argv[0]
+    remaining = argv[1:]
+
+    if command in nd_commands:
+        _, handler = nd_commands[command]
+        handler(remaining)
     else:
-        parser.print_help()
+        print(f"music-tagger nd: unknown command '{command}'", file=sys.stderr)
         sys.exit(1)
 
 
@@ -893,63 +909,58 @@ def _tag(argv: list[str] | None = None) -> None:
         _write_log_entry(args.log, result)
 
 
+_COMMANDS: dict[str, tuple[str, object]] = {}
+
+
+def _register_commands() -> dict[str, tuple[str, object]]:
+    """Build command table: name -> (help text, handler function)."""
+    return {
+        "read": ("Read album tags and durations as JSON.", _read),
+        "toc": ("Parse rip artifacts for TOC / disc ID.", _toc),
+        "mb": ("MusicBrainz query commands.", _mb),
+        "match": ("Score candidates by duration match.", _match),
+        "diff": ("Compute tag diff against a MusicBrainz release.", _diff),
+        "write-tags": ("Apply tag changes from a diff JSON.", _write_tags),
+        "path-for": ("Compute library destination paths.", _path_for),
+        "copy": ("Copy files to library per a placement plan.", _copy),
+        "art": ("Fetch cover art from the Cover Art Archive.", _art),
+        "nd": ("Navidrome commands.", _nd),
+        "scan": ("Generate a checklist of albums needing attention.", _scan),
+        "candidates": ("Show MusicBrainz candidates for an album.", _print_candidates),
+        "tag": ("Apply tags from a chosen MusicBrainz release.", _tag),
+        "genre": ("Set or show the genre meta-grouping tag.", _genre),
+        "rename": ("Rename files to 'NN - Title.ext' from tags.", _rename),
+        "rip": ("Rip a CD to FLAC with bootstrap tags.", _rip),
+    }
+
+
+def _print_main_help() -> None:
+    commands = _register_commands()
+    print("usage: music-tagger <command> [options]\n")
+    print("Fix album tags using MusicBrainz.\n")
+    print("commands:")
+    width = max(len(name) for name in commands)
+    for name, (helptext, _) in commands.items():
+        print(f"  {name:<{width}}  {helptext}")
+    print(f"\nRun 'music-tagger <command> --help' for command-specific help.")
+
+
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(
-        prog="music-tagger",
-        description="Fix album tags using MusicBrainz.",
-    )
-    sub = parser.add_subparsers(dest="command")
-    sub.add_parser("read", help="Read album tags and durations as JSON.")
-    sub.add_parser("toc", help="Parse rip artifacts for TOC / disc ID.")
-    sub.add_parser("mb", help="MusicBrainz query commands.")
-    sub.add_parser("match", help="Score candidates by duration match.")
-    sub.add_parser("diff", help="Compute tag diff against a MusicBrainz release.")
-    sub.add_parser("write-tags", help="Apply tag changes from a diff JSON.")
-    sub.add_parser("path-for", help="Compute library destination paths.")
-    sub.add_parser("copy", help="Copy files to library per a placement plan.")
-    sub.add_parser("art", help="Fetch cover art from the Cover Art Archive.")
-    sub.add_parser("nd", help="Navidrome commands.")
-    sub.add_parser("scan", help="Generate a checklist of albums needing attention.")
-    sub.add_parser("candidates", help="Show MusicBrainz candidates for an album.")
-    sub.add_parser("tag", help="Apply tags from a chosen MusicBrainz release.")
-    sub.add_parser("genre", help="Set or show the genre meta-grouping tag.")
-    sub.add_parser("rename", help="Rename files to 'NN - Title.ext' from tags.")
-    sub.add_parser("rip", help="Rip a CD to FLAC with bootstrap tags.")
+    if argv is None:
+        argv = sys.argv[1:]
 
-    args, remaining = parser.parse_known_args(argv)
+    if not argv or argv[0] in ("-h", "--help"):
+        _print_main_help()
+        sys.exit(0 if argv else 1)
 
-    if args.command == "read":
-        _read(remaining)
-    elif args.command == "toc":
-        _toc(remaining)
-    elif args.command == "mb":
-        _mb(remaining)
-    elif args.command == "match":
-        _match(remaining)
-    elif args.command == "diff":
-        _diff(remaining)
-    elif args.command == "write-tags":
-        _write_tags(remaining)
-    elif args.command == "path-for":
-        _path_for(remaining)
-    elif args.command == "copy":
-        _copy(remaining)
-    elif args.command == "art":
-        _art(remaining)
-    elif args.command == "nd":
-        _nd(remaining)
-    elif args.command == "scan":
-        _scan(remaining)
-    elif args.command == "candidates":
-        _print_candidates(remaining)
-    elif args.command == "tag":
-        _tag(remaining)
-    elif args.command == "genre":
-        _genre(remaining)
-    elif args.command == "rename":
-        _rename(remaining)
-    elif args.command == "rip":
-        _rip(remaining)
+    commands = _register_commands()
+    command = argv[0]
+    remaining = argv[1:]
+
+    if command in commands:
+        _, handler = commands[command]
+        handler(remaining)
     else:
-        parser.print_help()
+        print(f"music-tagger: unknown command '{command}'", file=sys.stderr)
+        _print_main_help()
         sys.exit(1)
