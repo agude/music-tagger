@@ -136,3 +136,45 @@ class TestArtCommand:
 
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "already exists" in captured.out
+
+    def test_embed_calls_embed_cover_art(self, tmp_path: Path, capsys: object) -> None:
+        from music_tagger.cli import _art
+
+        cover = tmp_path / "cover.jpg"
+        with (
+            patch("music_tagger.cli.fetch_cover_art") as mock_fetch,
+            patch("music_tagger.cli.embed_cover_art") as mock_embed,
+        ):
+            mock_fetch.return_value = ArtResult(saved=True, path=cover, size_bytes=1024)
+            mock_embed.return_value = 3
+            _art([str(tmp_path), "--release-id", "abc-123", "--embed"])
+
+        mock_embed.assert_called_once_with(tmp_path, cover)
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "Embedded cover art into 3 file(s)" in captured.out
+
+    def test_embed_skipped_still_embeds(self, tmp_path: Path, capsys: object) -> None:
+        from music_tagger.cli import _art
+
+        cover = tmp_path / "cover.jpg"
+        with (
+            patch("music_tagger.cli.fetch_cover_art") as mock_fetch,
+            patch("music_tagger.cli.embed_cover_art") as mock_embed,
+        ):
+            mock_fetch.return_value = ArtResult(saved=False, path=cover, skipped=True)
+            mock_embed.return_value = 2
+            _art([str(tmp_path), "--release-id", "abc-123", "--embed"])
+
+        mock_embed.assert_called_once_with(tmp_path, cover)
+
+    def test_embed_not_found_skips_embed(self, tmp_path: Path, capsys: object) -> None:
+        from music_tagger.cli import _art
+
+        with (
+            patch("music_tagger.cli.fetch_cover_art") as mock_fetch,
+            patch("music_tagger.cli.embed_cover_art") as mock_embed,
+        ):
+            mock_fetch.return_value = ArtResult(saved=False, not_found=True)
+            _art([str(tmp_path), "--release-id", "abc-123", "--embed"])
+
+        mock_embed.assert_not_called()

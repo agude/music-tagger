@@ -15,7 +15,7 @@ from .musicbrainz import MBRelease, MusicBrainzClient
 from .navidrome import NavidromeClient
 from .placement import PlacementPlan, compute_placement, copy_files
 from .tagger import AlbumResult, apply_changes, build_diff, score_candidates, search_candidates
-from .tags import AUDIO_EXTENSIONS, AlbumTags, read_album
+from .tags import AUDIO_EXTENSIONS, AlbumTags, embed_cover_art, read_album
 
 
 def _output_json(data: object, out: Path | None, digest: str) -> None:
@@ -695,6 +695,9 @@ def _art(argv: list[str] | None = None) -> None:
         "--full", action="store_true", help="Fetch full-size image instead of 500px."
     )
     parser.add_argument("--force", action="store_true", help="Overwrite existing cover.jpg.")
+    parser.add_argument(
+        "--embed", action="store_true", help="Embed cover art into all audio files."
+    )
     args = parser.parse_args(argv)
 
     target: Path = args.path.resolve()
@@ -713,6 +716,10 @@ def _art(argv: list[str] | None = None) -> None:
     elif result.saved:
         size_kb = result.size_bytes / 1024
         print(f"Saved cover.jpg ({size_kb:.0f} KB) to {result.path}")
+
+    if args.embed and result.path is not None:
+        count = embed_cover_art(target, result.path)
+        print(f"Embedded cover art into {count} file(s).")
 
 
 def _rip(argv: list[str] | None = None) -> None:

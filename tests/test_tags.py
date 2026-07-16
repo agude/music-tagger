@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from music_tagger.tags import AlbumTags, TagChange, TrackTags, compute_diff, read_album, write_tags
+from music_tagger.tags import (
+    AlbumTags,
+    TagChange,
+    TrackTags,
+    compute_diff,
+    embed_cover_art,
+    read_album,
+    write_tags,
+)
 
 
 class TestTrackTagsSerialization:
@@ -225,6 +233,79 @@ class TestWriteTagsFlac:
         write_tags(track, [])
         album2 = read_album(flac_album)
         assert album2.tracks[0].tags["title"] == "Desperado"
+
+
+class TestEmbedCoverArt:
+    def test_embed_flac(self, flac_album: Path, tmp_path: Path) -> None:
+        from mutagen.flac import FLAC
+
+        image = tmp_path / "cover.jpg"
+        image.write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
+
+        count = embed_cover_art(flac_album, image)
+
+        assert count == 3
+        for path in sorted(flac_album.iterdir()):
+            if path.suffix.lower() != ".flac":
+                continue
+            audio = FLAC(path)
+            pics = audio.pictures
+            assert len(pics) == 1
+            assert pics[0].type == 3
+            assert pics[0].mime == "image/jpeg"
+            assert pics[0].data == image.read_bytes()
+
+    def test_embed_mp3(self, mp3_album: Path, tmp_path: Path) -> None:
+        from mutagen.mp3 import MP3
+
+        image = tmp_path / "cover.jpg"
+        image.write_bytes(b"\xff\xd8\xff" + b"\x00" * 100)
+
+        count = embed_cover_art(mp3_album, image)
+
+        assert count == 3
+        for path in sorted(mp3_album.iterdir()):
+            if path.suffix.lower() != ".mp3":
+                continue
+            audio = MP3(path)
+            assert audio.tags is not None
+            apic_frames = audio.tags.getall("APIC")
+            assert len(apic_frames) == 1
+            assert apic_frames[0].type == 3
+            assert apic_frames[0].mime == "image/jpeg"
+            assert apic_frames[0].data == image.read_bytes()
+
+    def test_png_mime(self, flac_album: Path, tmp_path: Path) -> None:
+        from mutagen.flac import FLAC
+
+        image = tmp_path / "cover.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+
+        embed_cover_art(flac_album, image)
+
+        audio = FLAC(sorted(flac_album.glob("*.flac"))[0])
+        assert audio.pictures[0].mime == "image/png"
+
+    def test_returns_count(self, flac_album: Path, tmp_path: Path) -> None:
+        image = tmp_path / "cover.jpg"
+        image.write_bytes(b"\xff\xd8\xff" + b"\x00" * 10)
+        count = embed_cover_art(flac_album, image)
+        assert count == 3
+
+    def test_replaces_existing(self, flac_album: Path, tmp_path: Path) -> None:
+        from mutagen.flac import FLAC
+
+        image1 = tmp_path / "cover1.jpg"
+        image1.write_bytes(b"old image data")
+        embed_cover_art(flac_album, image1)
+
+        image2 = tmp_path / "cover2.jpg"
+        image2.write_bytes(b"new image data")
+        embed_cover_art(flac_album, image2)
+
+        audio = FLAC(sorted(flac_album.glob("*.flac"))[0])
+        assert len(audio.pictures) == 1
+        assert audio.pictures[0].data == b"new image data"
 
 
 class TestWriteTagsMp3:

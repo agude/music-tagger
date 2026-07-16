@@ -48,9 +48,8 @@ Processing the library is staged album by album across sessions:
       `candidates <dir> --artist '<name>' --album '<title>'`.
    b. `tag <dir> --release-id <uuid> --dry-run` — review the diff.
    c. `tag <dir> --release-id <uuid> --log changes.log` — apply tags.
-   d. `art <dir> --release-id <uuid> --full --force` — fetch cover art.
-      Embed into FLACs manually (mutagen `FLAC.add_picture`); the `art`
-      command saves cover.jpg but does not embed.
+   d. `art <dir> --release-id <uuid> --full --force --embed` — fetch cover art
+      and embed it into all audio files in the directory.
    e. `genre <dir> <group>` — set the meta-grouping tag.
    f. `rename <dir>` — rename files to `NN - Title.ext` from tags.
    g. `copy` — place files into the library (see placement.py).

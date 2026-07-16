@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from mutagen import File as MutagenFile
-from mutagen.flac import FLAC
-from mutagen.id3 import TXXX
+from mutagen.flac import FLAC, Picture
+from mutagen.id3 import APIC, TXXX
 from mutagen.mp3 import MP3
 
 AUDIO_EXTENSIONS = {".flac", ".mp3"}
@@ -325,3 +325,33 @@ def write_tags(track: TrackTags, changes: list[TagChange]) -> None:
         elif isinstance(audio, MP3):
             _write_mp3_tag(audio, change.field, change.new_value)
     audio.save()
+
+
+def embed_cover_art(album_dir: Path, image_path: Path) -> int:
+    """Embed cover art into all audio files in album_dir. Returns count of files updated."""
+    image_data = image_path.read_bytes()
+    mime = "image/png" if image_path.suffix.lower() == ".png" else "image/jpeg"
+
+    files = sorted(f for f in album_dir.iterdir() if f.suffix.lower() in AUDIO_EXTENSIONS)
+    count = 0
+    for path in files:
+        audio = MutagenFile(path)
+        if audio is None:
+            continue
+        if isinstance(audio, FLAC):
+            audio.clear_pictures()
+            pic = Picture()
+            pic.type = 3  # Front Cover
+            pic.mime = mime
+            pic.data = image_data
+            audio.add_picture(pic)
+            audio.save()
+            count += 1
+        elif isinstance(audio, MP3):
+            if audio.tags is None:
+                audio.add_tags()
+            audio.tags.delall("APIC")
+            audio.tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=image_data))
+            audio.save()
+            count += 1
+    return count
