@@ -28,6 +28,7 @@ def rip_cd(
     device: str = "/dev/cdrom",
     release_id: str | None = None,
     unknown: bool = False,
+    eject: str = "never",
 ) -> RipResult:
     """Rip a CD to FLAC files using whipper.
 
@@ -41,6 +42,8 @@ def rip_cd(
 
     cmd: list[str] = [
         "whipper",
+        "-e",
+        eject,
         "cd",
         "-d",
         device,

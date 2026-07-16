@@ -177,6 +177,8 @@ def _build_new_tags(
     tags["totaldiscs"] = str(len(release.discs)) if release.discs else "1"
     tags["totaltracks"] = str(len(disc_tracks)) if disc_tracks else str(release.track_count)
 
+    if release.first_release_date and not track.tags.get("date"):
+        tags["date"] = release.first_release_date
     if release.date:
         tags["releasedate"] = release.date
     if release.country:

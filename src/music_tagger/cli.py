@@ -730,6 +730,12 @@ def _rip(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Continue ripping if the CD is not in MusicBrainz.",
     )
+    parser.add_argument(
+        "--eject",
+        choices=["never", "failure", "success", "always"],
+        default="never",
+        help="When to eject the disc (default: never).",
+    )
     args = parser.parse_args(argv)
 
     from .ripper import rip_cd
@@ -742,6 +748,7 @@ def _rip(argv: list[str] | None = None) -> None:
         device=args.device,
         release_id=args.release_id,
         unknown=args.unknown,
+        eject=args.eject,
     )
     print(f"Ripped {result.track_count} tracks.")
 

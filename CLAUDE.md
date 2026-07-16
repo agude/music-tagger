@@ -28,12 +28,13 @@ Key CLI subcommands, driven by Claude Code in conversation:
    Sanitizes filesystem-unsafe characters. Skips files missing title or
    tracknumber tags.
 
-6. `uv run music-tagger rip <output-dir> [--device /dev/cdrom] [--release-id <uuid>] [--unknown]`
+6. `uv run music-tagger rip <output-dir> [--device /dev/cdrom] [--release-id <uuid>] [--unknown] [--eject {never,failure,success,always}]`
    — rips a CD to FLAC via whipper with AccurateRip verification.
    Whipper handles disc ID lookup, MusicBrainz matching, and FLAC
    encoding. Produces .log and .cue files alongside the audio.
    Use `--release-id` to force a specific MB release, or `--unknown`
-   to rip CDs not in MusicBrainz. Requires system package: `whipper`.
+   to rip CDs not in MusicBrainz. `--eject` controls disc ejection
+   (default: `never`). Requires system package: `whipper`.
 
 ## Library workflow
 
@@ -47,7 +48,9 @@ Processing the library is staged album by album across sessions:
       `candidates <dir> --artist '<name>' --album '<title>'`.
    b. `tag <dir> --release-id <uuid> --dry-run` — review the diff.
    c. `tag <dir> --release-id <uuid> --log changes.log` — apply tags.
-   d. `art <dir> --release-id <uuid>` — fetch cover art.
+   d. `art <dir> --release-id <uuid> --full --force` — fetch cover art.
+      Embed into FLACs manually (mutagen `FLAC.add_picture`); the `art`
+      command saves cover.jpg but does not embed.
    e. `genre <dir> <group>` — set the meta-grouping tag.
    f. `rename <dir>` — rename files to `NN - Title.ext` from tags.
    g. `copy` — place files into the library (see placement.py).
@@ -98,7 +101,8 @@ src/music_tagger/
 ## Tag mapping details
 
 - `date` (FLAC `DATE`, MP3 `TDRC`) is the recording date — never overwritten
-  by the MB release date.
+  by the MB release date. When empty, populated from the release group's
+  `first_release_date`.
 - `releasedate` (FLAC `RELEASEDATE`, MP3 `TDRL`) gets the MB release's date.
 - `releasestatus` is compared case-insensitively (`official` == `Official`).
 - Unicode from MusicBrainz (e.g. U+2010 HYPHEN in titles) is accepted as
