@@ -20,21 +20,27 @@ Key CLI subcommands, driven by Claude Code in conversation:
 
 4. `uv run music-tagger genre <album-dir> [genre] [--dry-run] [--log changes.log]`
    — sets the genre meta-grouping tag on all tracks. Omit genre to show the
-   current value. These are broad browsing categories (e.g. "Retro Rock",
-   "Classical", "Rap", "Broadway"), not musicological genres.
+   current value. Use `genre --list` to scan the library for all genres in
+   use. Multiple genres per album are encouraged when they fit. These are
+   broad browsing categories, not musicological genres. Current genres:
+
+   Acapella, Broadway, Celtic, Celtic Folk, Children, Children Cantonese,
+   Children Spanish, Choir, Classic, Classic Jazz, Classical, DNI, Folk,
+   Folk Rock, Grunge, Jazz, Jazz Live, Live, March, Modern Rock, Piano,
+   Pop Rock, Rap, Reggae, Retro Rock, Sleep, Soft Rock, Soundtrack,
+   Soundtrack Game, Xmas, Xmas Classic, Xmas Jazz
 
 5. `uv run music-tagger rename <album-dir> [--dry-run]` — renames audio
    files to `NN - Title.ext` based on their tracknumber and title tags.
    Sanitizes filesystem-unsafe characters. Skips files missing title or
    tracknumber tags.
 
-6. `uv run music-tagger rip <output-dir> [--device /dev/cdrom] [--release-id <uuid>] [--unknown] [--eject {never,failure,success,always}]`
+6. `uv run music-tagger rip <output-dir> [--device /dev/cdrom] [--release-id <uuid>] [--unknown]`
    — rips a CD to FLAC via whipper with AccurateRip verification.
    Whipper handles disc ID lookup, MusicBrainz matching, and FLAC
    encoding. Produces .log and .cue files alongside the audio.
    Use `--release-id` to force a specific MB release, or `--unknown`
-   to rip CDs not in MusicBrainz. `--eject` controls disc ejection
-   (default: `never`). Requires system package: `whipper`.
+   to rip CDs not in MusicBrainz. Requires system package: `whipper`.
 
 ## Library workflow
 

@@ -737,12 +737,6 @@ def _rip(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Continue ripping if the CD is not in MusicBrainz.",
     )
-    parser.add_argument(
-        "--eject",
-        choices=["never", "failure", "success", "always"],
-        default="never",
-        help="When to eject the disc (default: never).",
-    )
     args = parser.parse_args(argv)
 
     from .ripper import rip_cd
@@ -755,7 +749,6 @@ def _rip(argv: list[str] | None = None) -> None:
         device=args.device,
         release_id=args.release_id,
         unknown=args.unknown,
-        eject=args.eject,
     )
     print(f"Ripped {result.track_count} tracks.")
 
@@ -816,20 +809,67 @@ def _nd(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
 
+def _scan_library_genres(root: Path) -> list[tuple[int, str]]:
+    """Scan library for all GENRE tags, return (count, genre) sorted by count descending."""
+    import subprocess
+
+    result = subprocess.run(
+        ["find", str(root), "-name", "*.flac", "-exec", "metaflac", "--show-tag=GENRE", "{}", ";"],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    counts: dict[str, int] = {}
+    for line in result.stdout.splitlines():
+        if line.upper().startswith("GENRE="):
+            genre = line.split("=", 1)[1]
+            if genre:
+                counts[genre] = counts.get(genre, 0) + 1
+    return sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+
+
+_DEFAULT_LIBRARY_ROOT = Path("/mnt/synology/media/music")
+
+
 def _genre(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger genre",
         description="Set or show the genre tag on all tracks in an album directory.",
     )
-    parser.add_argument("path", type=Path, help="Album directory.")
+    parser.add_argument("path", nargs="?", type=Path, default=None, help="Album directory.")
     parser.add_argument(
         "genre", nargs="?", default=None, help="Genre to set. Omit to show current genre."
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="List all genres in the library with track counts.",
+    )
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=_DEFAULT_LIBRARY_ROOT,
+        help=f"Library root for --list (default: {_DEFAULT_LIBRARY_ROOT}).",
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would change without writing."
     )
     parser.add_argument("--log", type=Path, default=None, help="Append changes to this log file.")
     args = parser.parse_args(argv)
+
+    if args.list:
+        genres = _scan_library_genres(args.root)
+        if not genres:
+            print("No genres found.")
+            return
+        width = len(str(genres[0][1]))
+        for genre, count in genres:
+            print(f"  {count:>{width}}  {genre}")
+        print(f"\n{len(genres)} genre(s), {sum(c for _, c in genres)} track(s)")
+        return
+
+    if args.path is None:
+        parser.error("path is required (unless using --list)")
 
     target: Path = args.path.resolve()
     if not target.is_dir():
