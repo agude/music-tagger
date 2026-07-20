@@ -24,11 +24,41 @@ Key CLI subcommands, driven by Claude Code in conversation:
    use. Multiple genres per album are encouraged when they fit. These are
    broad browsing categories, not musicological genres. Current genres:
 
-   Acapella, Broadway, Celtic, Celtic Folk, Children, Children Cantonese,
-   Children Spanish, Choir, Classic, Classic Jazz, Classical, DNI, Folk,
-   Folk Rock, Grunge, Jazz, Jazz Live, Live, March, Modern Rock, Piano,
-   Pop Rock, Rap, Reggae, Retro Rock, Sleep, Soft Rock, Soundtrack,
-   Soundtrack Game, Xmas, Xmas Classic, Xmas Jazz
+   | Genre | Meaning |
+   |---|---|
+   | Acapella | Vocal-only performances, no instruments |
+   | Broadway | Musical theatre cast recordings |
+   | Celtic | Traditional Irish/Scottish instrumental |
+   | Celtic Folk | Celtic-influenced singer-songwriter / folk |
+   | Children | English-language kids' music |
+   | Children Cantonese | Cantonese-language kids' music |
+   | Children Spanish | Spanish-language kids' music |
+   | Choir | Choral / ensemble vocal works |
+   | Classic | Pre-rock pop standards, crooners, big band vocal |
+   | Classic Jazz | Traditional / swing-era jazz |
+   | Classical | Western art music (orchestral, chamber, solo) |
+   | DNI | Do Not Include — excluded from automatic playlists (star-rated, etc.) |
+   | Folk | Acoustic singer-songwriter, Americana |
+   | Folk Rock | Folk instrumentation with rock energy (Dylan electric, Lumineers) |
+   | Grunge | Seattle-era alt-rock (Pearl Jam, Soundgarden, AIC) |
+   | Jazz | Modern / post-bop / contemporary jazz |
+   | Jazz Live | Live jazz recordings |
+   | Live | Live concert recordings (non-jazz) |
+   | March | Military and concert band marches |
+   | Modern Rock | Post-2000 alt/indie rock (Killers, Arctic Monkeys) |
+   | Piano | Solo piano or piano-focused instrumental |
+   | Pop Rock | Radio-friendly rock with pop hooks |
+   | Rap | Hip-hop and rap |
+   | Reggae | Jamaican reggae, ska, dub |
+   | Retro Rock | Classic rock era (60s–80s) |
+   | Sleep | Ambient / white noise / lullabies for sleeping |
+   | Soft Rock | Mellow, acoustic-leaning rock (James Taylor, Fleetwood Mac) |
+   | Soundtrack | Film and TV scores / soundtracks |
+   | Soundtrack Game | Video game soundtracks |
+   | Xmas | Contemporary Christmas music |
+   | Xmas Classic | Traditional / classic Christmas recordings |
+   | Xmas Jazz | Jazz Christmas albums |
+   | Y2K Rock | Late 90s / early 2000s rock (Matchbox Twenty, Third Eye Blind, Vertical Horizon) |
 
 5. `uv run music-tagger replaygain <album-dir> [--dry-run] [--skip-existing]`
    — computes ReplayGain 2.0 (EBU R128) loudness via `rsgain` and writes
