@@ -30,12 +30,18 @@ Key CLI subcommands, driven by Claude Code in conversation:
    Pop Rock, Rap, Reggae, Retro Rock, Sleep, Soft Rock, Soundtrack,
    Soundtrack Game, Xmas, Xmas Classic, Xmas Jazz
 
-5. `uv run music-tagger rename <album-dir> [--dry-run]` — renames audio
+5. `uv run music-tagger replaygain <album-dir> [--dry-run] [--skip-existing]`
+   — computes ReplayGain 2.0 (EBU R128) loudness via `rsgain` and writes
+   track + album gain/peak tags. Use `--dry-run` to preview values without
+   writing. Use `--skip-existing` to skip files already tagged.
+   Requires system package: `rsgain`.
+
+6. `uv run music-tagger rename <album-dir> [--dry-run]` — renames audio
    files to `NN - Title.ext` based on their tracknumber and title tags.
    Sanitizes filesystem-unsafe characters. Skips files missing title or
    tracknumber tags.
 
-6. `uv run music-tagger rip <output-dir> [--device /dev/cdrom] [--release-id <uuid>] [--unknown]`
+7. `uv run music-tagger rip <output-dir> [--device /dev/cdrom] [--release-id <uuid>] [--unknown]`
    — rips a CD to FLAC via whipper with AccurateRip verification.
    Whipper handles disc ID lookup, MusicBrainz matching, and FLAC
    encoding. Produces .log and .cue files alongside the audio.
@@ -58,8 +64,9 @@ Processing the library is staged album by album across sessions:
       and embed it into all audio files in the directory.
    e. `genre <dir> <group>` — set the meta-grouping tag.
    f. `rename <dir>` — rename files to `NN - Title.ext` from tags.
-   g. `copy` — place files into the library (see placement.py).
-   h. Mark the checklist entry `- [x]`.
+   g. `replaygain <dir>` — compute and write ReplayGain 2.0 tags.
+   h. `copy` — place files into the library (see placement.py).
+   i. Mark the checklist entry `- [x]`.
 4. After a batch: `nd rescan` to trigger Navidrome library scan.
 5. Repeat until done. Re-scan if needed to catch stragglers.
 
@@ -87,6 +94,7 @@ src/music_tagger/
 ├── placement.py     # Library path computation + verified copy
 ├── coverart.py      # Cover Art Archive client
 ├── navidrome.py     # Navidrome / Subsonic API client
+├── replaygain.py    # ReplayGain 2.0 tagging via rsgain
 ├── ripper.py        # CD ripping via whipper (AccurateRip)
 └── cli.py           # Argparse entry point (all subcommands)
 ```
@@ -100,6 +108,7 @@ src/music_tagger/
 - `placement.py` computes library destination paths and copies files with
   SHA-256 verification.
 - `coverart.py` fetches front cover images from the Cover Art Archive.
+- `replaygain.py` subprocess wrapper around `rsgain` for ReplayGain 2.0 tagging.
 - `navidrome.py` Subsonic API client for library scans (and future ratings).
 - `cli.py` wires the subcommands together.
 
@@ -124,9 +133,10 @@ src/music_tagger/
 
 ## Environment setup
 
-**System packages** (for `rip` subcommand):
-- `whipper` — CD ripping with AccurateRip verification
+**System packages:**
+- `whipper` — CD ripping with AccurateRip verification (for `rip`)
 - `libdiscid-dev` — disc ID computation (required by Python `discid` package)
+- `rsgain` — ReplayGain 2.0 loudness scanning and tagging (for `replaygain`)
 
 **Navidrome credentials** (for `nd rescan`):
 Set these environment variables (e.g. in `.env` or shell profile):

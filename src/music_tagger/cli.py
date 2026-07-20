@@ -995,6 +995,35 @@ def _rename(argv: list[str] | None = None) -> None:
         print(f"Renamed {count} file(s).")
 
 
+def _replaygain(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger replaygain",
+        description="Compute and write ReplayGain 2.0 tags via rsgain.",
+    )
+    parser.add_argument("path", type=Path, help="Album directory.")
+    parser.add_argument("--dry-run", action="store_true", help="Show gains without writing tags.")
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip files that already have ReplayGain tags.",
+    )
+    args = parser.parse_args(argv)
+
+    target: Path = args.path.resolve()
+    if not target.is_dir():
+        print(f"Error: {target} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    from .replaygain import scan_replaygain
+
+    result = scan_replaygain(target, dry_run=args.dry_run, skip_existing=args.skip_existing)
+
+    if args.dry_run:
+        print(f"\n(dry run — {result.track_count} tracks scanned, no tags written)")
+    else:
+        print(f"Wrote ReplayGain tags to {result.track_count} track(s).")
+
+
 def _tag(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger tag",
@@ -1060,6 +1089,7 @@ def _register_commands() -> dict[str, tuple[str, Callable[[list[str] | None], No
         "tag": ("Apply tags from a chosen MusicBrainz release.", _tag),
         "genre": ("Set or show the genre meta-grouping tag.", _genre),
         "rename": ("Rename files to 'NN - Title.ext' from tags.", _rename),
+        "replaygain": ("Compute and write ReplayGain 2.0 tags.", _replaygain),
         "rip": ("Rip a CD to FLAC with bootstrap tags.", _rip),
     }
 
