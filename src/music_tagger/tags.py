@@ -12,7 +12,7 @@ from typing import Any
 
 from mutagen import File as MutagenFile
 from mutagen.flac import FLAC, Picture
-from mutagen.id3 import APIC, TXXX
+from mutagen.id3 import APIC, POPM, TXXX
 from mutagen.mp3 import MP3
 
 AUDIO_EXTENSIONS = {".flac", ".mp3"}
@@ -117,6 +117,10 @@ FIELD_MAP: dict[str, tuple[str, str]] = {
         "MUSIC_TAGGER_UPDATED",
         "TXXX:MUSIC_TAGGER_UPDATED",
     ),
+    "fmps_rating": ("FMPS_RATING", "TXXX:FMPS_RATING"),
+    "rating": ("RATING", "TXXX:RATING"),
+    "starred": ("STARRED", "TXXX:STARRED"),
+    "starred_at": ("STARRED_AT", "TXXX:STARRED_AT"),
 }
 
 
@@ -325,6 +329,63 @@ def write_tags(track: TrackTags, changes: list[TagChange]) -> None:
         elif isinstance(audio, MP3):
             _write_mp3_tag(audio, change.field, change.new_value)
     audio.save()
+
+
+RATING_TO_POPM = {1: 1, 2: 64, 3: 128, 4: 196, 5: 255}
+
+
+def _rating_to_fmps(rating: int) -> str:
+    if not rating:
+        return ""
+    return f"{rating / 5:.1f}"
+
+
+def write_rating_to_file(
+    path: Path, rating: int, starred: str = "", dry_run: bool = False
+) -> list[TagChange]:
+    """Write rating and starred tags to an audio file. Returns changes made."""
+    audio = MutagenFile(path)
+    if audio is None:
+        return []
+
+    targets: dict[str, str] = {}
+    if rating:
+        targets["fmps_rating"] = _rating_to_fmps(rating)
+        targets["rating"] = str(rating)
+    if starred:
+        targets["starred"] = "true"
+        targets["starred_at"] = starred
+
+    if isinstance(audio, FLAC):
+        current = _read_flac_tags(audio)
+    elif isinstance(audio, MP3):
+        current = _read_mp3_tags(audio)
+    else:
+        return []
+
+    changes: list[TagChange] = []
+    for field, new_value in sorted(targets.items()):
+        old_value = current.get(field, "")
+        if old_value != new_value:
+            changes.append(TagChange(field=field, old_value=old_value, new_value=new_value))
+
+    if not changes or dry_run:
+        return changes
+
+    if isinstance(audio, FLAC):
+        for change in changes:
+            _write_flac_tag(audio, change.field, change.new_value)
+    elif isinstance(audio, MP3):
+        for change in changes:
+            _write_mp3_tag(audio, change.field, change.new_value)
+        if rating:
+            if audio.tags is None:
+                audio.add_tags()
+            audio.tags.delall("POPM")
+            audio.tags.add(POPM(email="", rating=RATING_TO_POPM.get(rating, 0), count=0))
+
+    audio.save()
+    return changes
 
 
 def embed_cover_art(album_dir: Path, image_path: Path) -> int:
