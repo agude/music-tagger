@@ -9,6 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# Secrets
+.env
+
 # Runtime artifacts
 checklist.md
 checklist-all.md
