@@ -65,18 +65,6 @@ class SongRating:
         return d
 
     @classmethod
-    def from_subsonic(cls, data: dict[str, Any]) -> SongRating:
-        return cls(
-            id=data.get("id", ""),
-            path=data.get("path", ""),
-            title=data.get("title", ""),
-            artist=data.get("artist", ""),
-            album=data.get("album", ""),
-            rating=data.get("userRating", 0),
-            starred=data.get("starred", ""),
-        )
-
-    @classmethod
     def from_native(cls, data: dict[str, Any]) -> SongRating:
         return cls(
             id=data.get("id", ""),
@@ -137,29 +125,6 @@ class NavidromeClient:
     def start_scan(self) -> dict[str, Any]:
         data = self._request("startScan")
         return dict(data.get("scanStatus", {}))
-
-    def get_starred(self) -> list[SongRating]:
-        data = self._request("getStarred2")
-        starred2 = data.get("starred2", {})
-        songs = starred2.get("song", [])
-        return [SongRating.from_subsonic(s) for s in songs]
-
-    def get_all_rated(self, page_size: int = 500) -> list[SongRating]:
-        """Paginate search3 to find all songs with a userRating."""
-        results: list[SongRating] = []
-        offset = 0
-        while True:
-            data = self._request(
-                "search3", query='""', songCount=page_size, songOffset=offset
-            )
-            songs = data.get("searchResult3", {}).get("song", [])
-            if not songs:
-                break
-            for s in songs:
-                if s.get("userRating", 0) > 0:
-                    results.append(SongRating.from_subsonic(s))
-            offset += len(songs)
-        return results
 
     def _native_headers(self) -> dict[str, str]:
         resp = self._client.post(

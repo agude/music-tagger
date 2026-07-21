@@ -19,6 +19,7 @@ from .tags import AUDIO_EXTENSIONS, AlbumTags, embed_cover_art, read_album, writ
 
 
 _DEFAULT_LIBRARY_ROOT = Path("/mnt/synology/media/music")
+_DEFAULT_RATINGS_PATH = _DEFAULT_LIBRARY_ROOT / "ratings.json"
 
 
 def _output_json(data: object, out: Path | None, digest: str) -> None:
@@ -479,6 +480,8 @@ def _write_ratings(argv: list[str] | None = None) -> None:
         print(f"\n(dry run — {len(songs)} songs, {total_files} would change)")
     else:
         print(f"Wrote rating tags to {total_files} file(s).")
+        if total_files == 0 and skipped > 0:
+            sys.exit(1)
 
     if args.log and not args.dry_run and log_lines:
         timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -852,9 +855,6 @@ def _nd_rescan(argv: list[str] | None = None) -> None:
         print(f"Scan started ({count} files scanned so far).")
     else:
         print(f"Scan complete ({count} files).")
-
-
-_DEFAULT_RATINGS_PATH = _DEFAULT_LIBRARY_ROOT / "ratings.json"
 
 
 def _nd_ratings(argv: list[str] | None = None) -> None:

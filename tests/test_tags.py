@@ -424,6 +424,25 @@ class TestWriteRatingMp3:
             assert len(popm) == 1
             assert popm[0].rating == popm_value, f"rating {star_rating} → POPM {popm_value}"
 
+    def test_starred_only_no_popm(self, mp3_album: Path) -> None:
+        from mutagen.mp3 import MP3
+
+        track_path = sorted(mp3_album.glob("*.mp3"))[0]
+        changes = write_rating_to_file(track_path, rating=0, starred="2024-03-01T00:00:00Z")
+
+        fields = {c.field for c in changes}
+        assert fields == {"starred", "starred_at"}
+
+        album = read_album(mp3_album)
+        tags = album.tracks[0].tags
+        assert tags["starred"] == "true"
+        assert tags["starred_at"] == "2024-03-01T00:00:00Z"
+        assert "rating" not in tags
+
+        audio = MP3(track_path)
+        popm_frames = audio.tags.getall("POPM")
+        assert len(popm_frames) == 0
+
     def test_dry_run(self, mp3_album: Path) -> None:
         track_path = sorted(mp3_album.glob("*.mp3"))[0]
         changes = write_rating_to_file(track_path, rating=3, dry_run=True)

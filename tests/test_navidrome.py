@@ -70,25 +70,6 @@ class TestNavidromeClient:
 
 
 class TestSongRating:
-    def test_from_subsonic_full(self) -> None:
-        data = {
-            "id": "abc123",
-            "path": "Eagles/Hotel California (1977)/01. Hotel California.flac",
-            "title": "Hotel California",
-            "artist": "Eagles",
-            "album": "Hotel California",
-            "userRating": 5,
-            "starred": "2024-01-15T10:30:00Z",
-        }
-        song = SongRating.from_subsonic(data)
-        assert song.id == "abc123"
-        assert song.path == "Eagles/Hotel California (1977)/01. Hotel California.flac"
-        assert song.title == "Hotel California"
-        assert song.artist == "Eagles"
-        assert song.album == "Hotel California"
-        assert song.rating == 5
-        assert song.starred == "2024-01-15T10:30:00Z"
-
     def test_from_native_full(self) -> None:
         data = {
             "id": "abc123",
@@ -115,19 +96,6 @@ class TestSongRating:
         song = SongRating.from_native(data)
         assert song.rating == 3
         assert song.starred == ""
-
-    def test_from_subsonic_starred_only(self) -> None:
-        data = {
-            "id": "def456",
-            "path": "Artist/Album/track.flac",
-            "title": "Track",
-            "artist": "Artist",
-            "album": "Album",
-            "starred": "2024-06-01T12:00:00Z",
-        }
-        song = SongRating.from_subsonic(data)
-        assert song.rating == 0
-        assert song.starred == "2024-06-01T12:00:00Z"
 
     def test_to_dict_omits_zero_rating_and_empty_starred(self) -> None:
         song = SongRating(
@@ -157,111 +125,6 @@ class TestSongRating:
         song = SongRating.from_dict(d)
         assert song.rating == 0
         assert song.starred == ""
-
-
-class TestGetStarred:
-    def _make_client(self) -> NavidromeClient:
-        return NavidromeClient(url="http://localhost:4533", user="admin", password="secret")
-
-    def _mock_response(self, data: dict) -> httpx.Response:  # type: ignore[type-arg]
-        request = httpx.Request("GET", "http://localhost:4533/rest/getStarred2")
-        return httpx.Response(200, json=data, request=request)
-
-    def test_returns_songs(self) -> None:
-        client = self._make_client()
-        response_data = {
-            "subsonic-response": {
-                "status": "ok",
-                "starred2": {
-                    "song": [
-                        {
-                            "id": "s1",
-                            "path": "A/B/01.flac",
-                            "title": "Song1",
-                            "artist": "Art1",
-                            "album": "Alb1",
-                            "userRating": 5,
-                            "starred": "2024-01-01T00:00:00Z",
-                        },
-                        {
-                            "id": "s2",
-                            "path": "A/B/02.flac",
-                            "title": "Song2",
-                            "artist": "Art1",
-                            "album": "Alb1",
-                            "starred": "2024-02-01T00:00:00Z",
-                        },
-                    ]
-                },
-            }
-        }
-        with patch.object(client._client, "get", return_value=self._mock_response(response_data)):
-            songs = client.get_starred()
-
-        assert len(songs) == 2
-        assert songs[0].id == "s1"
-        assert songs[0].rating == 5
-        assert songs[1].rating == 0
-
-    def test_empty_starred(self) -> None:
-        client = self._make_client()
-        response_data = {
-            "subsonic-response": {
-                "status": "ok",
-                "starred2": {},
-            }
-        }
-        with patch.object(client._client, "get", return_value=self._mock_response(response_data)):
-            songs = client.get_starred()
-
-        assert songs == []
-
-
-class TestGetAllRated:
-    def _make_client(self) -> NavidromeClient:
-        return NavidromeClient(url="http://localhost:4533", user="admin", password="secret")
-
-    def _mock_search_response(self, songs: list[dict]) -> httpx.Response:  # type: ignore[type-arg]
-        data = {
-            "subsonic-response": {
-                "status": "ok",
-                "searchResult3": {"song": songs},
-            }
-        }
-        request = httpx.Request("GET", "http://localhost:4533/rest/search3")
-        return httpx.Response(200, json=data, request=request)
-
-    def _mock_empty_response(self) -> httpx.Response:
-        return self._mock_search_response([])
-
-    def test_filters_rated_songs(self) -> None:
-        client = self._make_client()
-        songs = [
-            {"id": "s1", "path": "a.flac", "title": "A", "artist": "X", "album": "Y", "userRating": 4},
-            {"id": "s2", "path": "b.flac", "title": "B", "artist": "X", "album": "Y"},
-            {"id": "s3", "path": "c.flac", "title": "C", "artist": "X", "album": "Y", "userRating": 2},
-        ]
-        responses = [self._mock_search_response(songs), self._mock_empty_response()]
-        with patch.object(client._client, "get", side_effect=responses):
-            result = client.get_all_rated(page_size=500)
-
-        assert len(result) == 2
-        assert result[0].id == "s1"
-        assert result[1].id == "s3"
-
-    def test_paginates(self) -> None:
-        client = self._make_client()
-        page1 = [{"id": "s1", "path": "a.flac", "title": "A", "artist": "X", "album": "Y", "userRating": 3}]
-        page2 = [{"id": "s2", "path": "b.flac", "title": "B", "artist": "X", "album": "Y", "userRating": 5}]
-        responses = [
-            self._mock_search_response(page1),
-            self._mock_search_response(page2),
-            self._mock_empty_response(),
-        ]
-        with patch.object(client._client, "get", side_effect=responses):
-            result = client.get_all_rated(page_size=1)
-
-        assert len(result) == 2
 
 
 class TestGetAllRatings:

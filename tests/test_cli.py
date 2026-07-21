@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from music_tagger.cli import (
     _diff,
     _is_album_dir,
@@ -787,7 +789,7 @@ class TestWriteRatings:
         album = read_album(flac_album)
         assert "rating" not in album.tracks[0].tags
 
-    def test_skips_missing_files(self, flac_album: Path, capsys: object) -> None:
+    def test_skips_missing_files_exits_nonzero(self, flac_album: Path, capsys: object) -> None:
         ratings = [
             {
                 "id": "s1",
@@ -801,7 +803,8 @@ class TestWriteRatings:
         ratings_file = flac_album.parent / "ratings.json"
         ratings_file.write_text(json.dumps(ratings))
 
-        _write_ratings(["--from", str(ratings_file), "--root", str(flac_album.parent)])
+        with pytest.raises(SystemExit, match="1"):
+            _write_ratings(["--from", str(ratings_file), "--root", str(flac_album.parent)])
 
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "Skipped 1" in captured.err
