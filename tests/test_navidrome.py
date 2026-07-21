@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import call, patch
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -142,7 +142,10 @@ class TestGetAllRatings:
     def test_returns_rated_and_starred(self) -> None:
         client = self._make_client()
         songs = [
-            {"id": "s1", "path": "a.flac", "title": "A", "artist": "X", "album": "Y", "rating": 5, "starredAt": "2024-01-01"},
+            {
+                "id": "s1", "path": "a.flac", "title": "A", "artist": "X",
+                "album": "Y", "rating": 5, "starredAt": "2024-01-01",
+            },
             {"id": "s2", "path": "b.flac", "title": "B", "artist": "X", "album": "Y", "rating": 0},
             {"id": "s3", "path": "c.flac", "title": "C", "artist": "X", "album": "Y", "rating": 3},
         ]
@@ -160,9 +163,15 @@ class TestGetAllRatings:
 
     def test_paginates(self) -> None:
         client = self._make_client()
-        page1 = [{"id": "s1", "path": "a.flac", "title": "A", "artist": "X", "album": "Y", "rating": 4}]
-        page2 = [{"id": "s2", "path": "b.flac", "title": "B", "artist": "X", "album": "Y", "rating": 2}]
-        responses = [self._mock_song_page(page1), self._mock_song_page(page2), self._mock_song_page([])]
+        s1 = {"id": "s1", "path": "a.flac", "title": "A", "artist": "X", "album": "Y", "rating": 4}
+        s2 = {"id": "s2", "path": "b.flac", "title": "B", "artist": "X", "album": "Y", "rating": 2}
+        page1 = [s1]
+        page2 = [s2]
+        responses = [
+            self._mock_song_page(page1),
+            self._mock_song_page(page2),
+            self._mock_song_page([]),
+        ]
         with (
             patch.object(client._client, "post", return_value=self._mock_login()),
             patch.object(client._client, "get", side_effect=responses),

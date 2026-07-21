@@ -364,10 +364,10 @@ def write_rating_to_file(
         return []
 
     changes: list[TagChange] = []
-    for field, new_value in sorted(targets.items()):
-        old_value = current.get(field, "")
+    for tag_name, new_value in sorted(targets.items()):
+        old_value = current.get(tag_name, "")
         if old_value != new_value:
-            changes.append(TagChange(field=field, old_value=old_value, new_value=new_value))
+            changes.append(TagChange(field=tag_name, old_value=old_value, new_value=new_value))
 
     if not changes or dry_run:
         return changes

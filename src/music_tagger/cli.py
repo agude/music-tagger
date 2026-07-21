@@ -17,7 +17,6 @@ from .placement import PlacementPlan, compute_placement, copy_files
 from .tagger import AlbumResult, apply_changes, build_diff, score_candidates, search_candidates
 from .tags import AUDIO_EXTENSIONS, AlbumTags, embed_cover_art, read_album, write_rating_to_file
 
-
 _DEFAULT_LIBRARY_ROOT = Path("/mnt/synology/media/music")
 _DEFAULT_RATINGS_PATH = _DEFAULT_LIBRARY_ROOT / "ratings.json"
 
@@ -485,7 +484,7 @@ def _write_ratings(argv: list[str] | None = None) -> None:
 
     if args.log and not args.dry_run and log_lines:
         timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-        header = [f"## Rating tags", "", f"- **Date:** {timestamp}", ""]
+        header = ["## Rating tags", "", f"- **Date:** {timestamp}", ""]
         with open(args.log, "a") as f:
             f.write("\n".join(header + log_lines + ["", "---", ""]))
 
