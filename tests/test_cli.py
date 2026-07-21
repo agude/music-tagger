@@ -16,6 +16,7 @@ from music_tagger.cli import (
     _rename,
     _scan,
     _toc,
+    _write_ratings,
     _write_tags,
 )
 from music_tagger.musicbrainz import MBRelease, MBTrack
@@ -734,3 +735,73 @@ class TestRenameCommand:
         _rename([str(flac_album)])
         capsys.readouterr()  # type: ignore[attr-defined]
         assert (flac_album / "01 - What-Is-This-.flac").exists()
+
+
+class TestWriteRatings:
+    def test_writes_to_flac(self, flac_album: Path, capsys: object) -> None:
+        ratings = [
+            {
+                "id": "s1",
+                "path": "album_flac/01 - Track 1.flac",
+                "title": "T1",
+                "artist": "A",
+                "album": "Al",
+                "rating": 4,
+                "starred": "2024-01-01T00:00:00Z",
+            },
+        ]
+        ratings_file = flac_album.parent / "ratings.json"
+        ratings_file.write_text(json.dumps(ratings))
+
+        _write_ratings(["--from", str(ratings_file), "--root", str(flac_album.parent)])
+
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "1 file(s)" in captured.out
+
+        album = read_album(flac_album)
+        assert album.tracks[0].tags["fmps_rating"] == "0.8"
+        assert album.tracks[0].tags["rating"] == "4"
+        assert album.tracks[0].tags["starred"] == "true"
+
+    def test_dry_run(self, flac_album: Path, capsys: object) -> None:
+        ratings = [
+            {
+                "id": "s1",
+                "path": "album_flac/01 - Track 1.flac",
+                "title": "T1",
+                "artist": "A",
+                "album": "Al",
+                "rating": 3,
+            },
+        ]
+        ratings_file = flac_album.parent / "ratings.json"
+        ratings_file.write_text(json.dumps(ratings))
+
+        _write_ratings(
+            ["--from", str(ratings_file), "--root", str(flac_album.parent), "--dry-run"]
+        )
+
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "dry run" in captured.out
+
+        album = read_album(flac_album)
+        assert "rating" not in album.tracks[0].tags
+
+    def test_skips_missing_files(self, flac_album: Path, capsys: object) -> None:
+        ratings = [
+            {
+                "id": "s1",
+                "path": "nonexistent/track.flac",
+                "title": "T1",
+                "artist": "A",
+                "album": "Al",
+                "rating": 5,
+            },
+        ]
+        ratings_file = flac_album.parent / "ratings.json"
+        ratings_file.write_text(json.dumps(ratings))
+
+        _write_ratings(["--from", str(ratings_file), "--root", str(flac_album.parent)])
+
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "Skipped 1" in captured.err

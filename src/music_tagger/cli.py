@@ -15,7 +15,7 @@ from .musicbrainz import MBRelease, MusicBrainzClient
 from .navidrome import NavidromeClient, SongRating
 from .placement import PlacementPlan, compute_placement, copy_files
 from .tagger import AlbumResult, apply_changes, build_diff, score_candidates, search_candidates
-from .tags import AUDIO_EXTENSIONS, AlbumTags, embed_cover_art, read_album
+from .tags import AUDIO_EXTENSIONS, AlbumTags, embed_cover_art, read_album, write_rating_to_file
 
 
 def _output_json(data: object, out: Path | None, digest: str) -> None:
@@ -413,6 +413,75 @@ def _write_log_entry(log_path: Path, result: AlbumResult) -> None:
 
     with open(log_path, "a") as f:
         f.write("\n".join(lines))
+
+
+def _write_ratings(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger write-ratings",
+        description="Write rating and starred tags to audio files from a ratings JSON.",
+    )
+    parser.add_argument(
+        "--from",
+        type=Path,
+        required=True,
+        dest="from_file",
+        help="Ratings JSON (from `nd ratings`).",
+    )
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=_DEFAULT_LIBRARY_ROOT,
+        help=f"Library root to resolve paths (default: {_DEFAULT_LIBRARY_ROOT}).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would change without writing.",
+    )
+    parser.add_argument(
+        "--log",
+        type=Path,
+        default=None,
+        help="Append changes to this log file.",
+    )
+    args = parser.parse_args(argv)
+
+    songs = [SongRating.from_dict(s) for s in json.loads(args.from_file.read_text())]
+
+    total_files = 0
+    skipped = 0
+    log_lines: list[str] = []
+
+    for song in songs:
+        path = args.root / song.path
+        if not path.exists():
+            skipped += 1
+            continue
+
+        changes = write_rating_to_file(path, song.rating, song.starred, dry_run=args.dry_run)
+        if changes:
+            total_files += 1
+            if args.dry_run:
+                print(f"  {song.path}:")
+                for c in changes:
+                    old = c.old_value or "(empty)"
+                    print(f"    {c.field}: {old} → {c.new_value}")
+            if args.log:
+                log_lines.append(f"  {song.path}: {', '.join(c.field for c in changes)}")
+
+    if skipped:
+        print(f"Skipped {skipped} file(s) (not found).", file=sys.stderr)
+
+    if args.dry_run:
+        print(f"\n(dry run — {len(songs)} songs, {total_files} would change)")
+    else:
+        print(f"Wrote rating tags to {total_files} file(s).")
+
+    if args.log and not args.dry_run and log_lines:
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        header = [f"## Rating tags", "", f"- **Date:** {timestamp}", ""]
+        with open(args.log, "a") as f:
+            f.write("\n".join(header + log_lines + ["", "---", ""]))
 
 
 def _scan(argv: list[str] | None = None) -> None:
@@ -1169,6 +1238,7 @@ def _register_commands() -> dict[str, tuple[str, Callable[[list[str] | None], No
         "match": ("Score candidates by duration match.", _match),
         "diff": ("Compute tag diff against a MusicBrainz release.", _diff),
         "write-tags": ("Apply tag changes from a diff JSON.", _write_tags),
+        "write-ratings": ("Write rating/starred tags to audio files.", _write_ratings),
         "path-for": ("Compute library destination paths.", _path_for),
         "copy": ("Copy files to library per a placement plan.", _copy),
         "art": ("Fetch cover art from the Cover Art Archive.", _art),

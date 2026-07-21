@@ -3,12 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from music_tagger.tags import (
+    RATING_TO_POPM,
     AlbumTags,
     TagChange,
     TrackTags,
+    _rating_to_fmps,
     compute_diff,
     embed_cover_art,
     read_album,
+    write_rating_to_file,
     write_tags,
 )
 
@@ -333,3 +336,98 @@ class TestWriteTagsMp3:
 
         album2 = read_album(mp3_album)
         assert album2.tracks[0].tags["musicbrainz_albumid"] == new_id
+
+
+class TestRatingToFmps:
+    def test_values(self) -> None:
+        assert _rating_to_fmps(1) == "0.2"
+        assert _rating_to_fmps(2) == "0.4"
+        assert _rating_to_fmps(3) == "0.6"
+        assert _rating_to_fmps(4) == "0.8"
+        assert _rating_to_fmps(5) == "1.0"
+
+    def test_zero(self) -> None:
+        assert _rating_to_fmps(0) == ""
+
+
+class TestWriteRatingFlac:
+    def test_writes_rating_tags(self, flac_album: Path) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        changes = write_rating_to_file(track_path, rating=4, starred="2024-01-15T10:00:00Z")
+
+        assert len(changes) == 4
+        fields = {c.field for c in changes}
+        assert fields == {"fmps_rating", "rating", "starred", "starred_at"}
+
+        album = read_album(flac_album)
+        tags = album.tracks[0].tags
+        assert tags["fmps_rating"] == "0.8"
+        assert tags["rating"] == "4"
+        assert tags["starred"] == "true"
+        assert tags["starred_at"] == "2024-01-15T10:00:00Z"
+
+    def test_rating_only(self, flac_album: Path) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        changes = write_rating_to_file(track_path, rating=3)
+
+        fields = {c.field for c in changes}
+        assert fields == {"fmps_rating", "rating"}
+
+        album = read_album(flac_album)
+        assert album.tracks[0].tags["rating"] == "3"
+        assert "starred" not in album.tracks[0].tags
+
+    def test_no_changes_when_same(self, flac_album: Path) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        write_rating_to_file(track_path, rating=5)
+        changes = write_rating_to_file(track_path, rating=5)
+        assert changes == []
+
+    def test_dry_run(self, flac_album: Path) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        changes = write_rating_to_file(track_path, rating=4, dry_run=True)
+
+        assert len(changes) > 0
+        album = read_album(flac_album)
+        assert "rating" not in album.tracks[0].tags
+
+
+class TestWriteRatingMp3:
+    def test_writes_rating_and_popm(self, mp3_album: Path) -> None:
+        from mutagen.mp3 import MP3
+
+        track_path = sorted(mp3_album.glob("*.mp3"))[0]
+        changes = write_rating_to_file(track_path, rating=5, starred="2024-06-01T00:00:00Z")
+
+        fields = {c.field for c in changes}
+        assert fields == {"fmps_rating", "rating", "starred", "starred_at"}
+
+        album = read_album(mp3_album)
+        tags = album.tracks[0].tags
+        assert tags["fmps_rating"] == "1.0"
+        assert tags["rating"] == "5"
+        assert tags["starred"] == "true"
+
+        audio = MP3(track_path)
+        popm_frames = audio.tags.getall("POPM")
+        assert len(popm_frames) == 1
+        assert popm_frames[0].rating == RATING_TO_POPM[5]
+
+    def test_popm_values(self, mp3_album: Path) -> None:
+        from mutagen.mp3 import MP3
+
+        track_path = sorted(mp3_album.glob("*.mp3"))[0]
+        for star_rating, popm_value in RATING_TO_POPM.items():
+            write_rating_to_file(track_path, rating=star_rating)
+            audio = MP3(track_path)
+            popm = audio.tags.getall("POPM")
+            assert len(popm) == 1
+            assert popm[0].rating == popm_value, f"rating {star_rating} → POPM {popm_value}"
+
+    def test_dry_run(self, mp3_album: Path) -> None:
+        track_path = sorted(mp3_album.glob("*.mp3"))[0]
+        changes = write_rating_to_file(track_path, rating=3, dry_run=True)
+
+        assert len(changes) > 0
+        album = read_album(mp3_album)
+        assert "rating" not in album.tracks[0].tags
