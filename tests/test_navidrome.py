@@ -98,9 +98,7 @@ class TestSongRating:
         assert song.starred == ""
 
     def test_to_dict_omits_zero_rating_and_empty_starred(self) -> None:
-        song = SongRating(
-            id="x", path="p", title="t", artist="a", album="al", rating=0, starred=""
-        )
+        song = SongRating(id="x", path="p", title="t", artist="a", album="al", rating=0, starred="")
         d = song.to_dict()
         assert "rating" not in d
         assert "starred" not in d
@@ -143,8 +141,13 @@ class TestGetAllRatings:
         client = self._make_client()
         songs = [
             {
-                "id": "s1", "path": "a.flac", "title": "A", "artist": "X",
-                "album": "Y", "rating": 5, "starredAt": "2024-01-01",
+                "id": "s1",
+                "path": "a.flac",
+                "title": "A",
+                "artist": "X",
+                "album": "Y",
+                "rating": 5,
+                "starredAt": "2024-01-01",
             },
             {"id": "s2", "path": "b.flac", "title": "B", "artist": "X", "album": "Y", "rating": 0},
             {"id": "s3", "path": "c.flac", "title": "C", "artist": "X", "album": "Y", "rating": 3},

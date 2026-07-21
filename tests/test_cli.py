@@ -779,9 +779,7 @@ class TestWriteRatings:
         ratings_file = flac_album.parent / "ratings.json"
         ratings_file.write_text(json.dumps(ratings))
 
-        _write_ratings(
-            ["--from", str(ratings_file), "--root", str(flac_album.parent), "--dry-run"]
-        )
+        _write_ratings(["--from", str(ratings_file), "--root", str(flac_album.parent), "--dry-run"])
 
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "dry run" in captured.out
