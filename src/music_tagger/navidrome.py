@@ -114,7 +114,7 @@ class NavidromeClient:
         )
         resp.raise_for_status()
         data = resp.json()
-        subsonic = data.get("subsonic-response", {})
+        subsonic: dict[str, Any] = data.get("subsonic-response", {})
         if subsonic.get("status") != "ok":
             error = subsonic.get("error", {})
             raise RuntimeError(

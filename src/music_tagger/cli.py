@@ -972,7 +972,7 @@ def _nd(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
 
-def _scan_library_genres(root: Path) -> list[tuple[int, str]]:
+def _scan_library_genres(root: Path) -> list[tuple[str, int]]:
     """Scan library for all GENRE tags, return (count, genre) sorted by count descending."""
     import subprocess
 
@@ -1042,10 +1042,10 @@ def _genre(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     if args.genre is None:
-        genres = {t.tags.get("genre", "") for t in album.tracks}
-        genres.discard("")
-        if genres:
-            for g in sorted(genres):
+        current_genres = {t.tags.get("genre", "") for t in album.tracks}
+        current_genres.discard("")
+        if current_genres:
+            for g in sorted(current_genres):
                 print(g)
         else:
             print("(no genre set)")

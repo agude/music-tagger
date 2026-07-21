@@ -380,7 +380,8 @@ def write_rating_to_file(
             _write_mp3_tag(audio, change.field, change.new_value)
         if rating:
             if audio.tags is None:
-                audio.add_tags()
+                audio.add_tags()  # type: ignore[no-untyped-call]
+            assert audio.tags is not None
             audio.tags.delall("POPM")
             audio.tags.add(POPM(email="", rating=RATING_TO_POPM.get(rating, 0), count=0))
 
@@ -400,17 +401,18 @@ def embed_cover_art(album_dir: Path, image_path: Path) -> int:
         if audio is None:
             continue
         if isinstance(audio, FLAC):
-            audio.clear_pictures()
-            pic = Picture()
+            audio.clear_pictures()  # type: ignore[no-untyped-call]
+            pic = Picture()  # type: ignore[no-untyped-call]
             pic.type = 3  # Front Cover
             pic.mime = mime
             pic.data = image_data
-            audio.add_picture(pic)
+            audio.add_picture(pic)  # type: ignore[no-untyped-call]
             audio.save()
             count += 1
         elif isinstance(audio, MP3):
             if audio.tags is None:
-                audio.add_tags()
+                audio.add_tags()  # type: ignore[no-untyped-call]
+            assert audio.tags is not None
             audio.tags.delall("APIC")
             audio.tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=image_data))
             audio.save()
