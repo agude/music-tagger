@@ -1103,6 +1103,7 @@ def _rename(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("path", type=Path, help="Album directory.")
     parser.add_argument("--dry-run", action="store_true", help="Show renames without executing.")
+    parser.add_argument("--log", type=Path, default=None, help="Append changes to this log file.")
     args = parser.parse_args(argv)
 
     target: Path = args.path.resolve()
@@ -1117,7 +1118,7 @@ def _rename(argv: list[str] | None = None) -> None:
 
     from .placement import _sanitize
 
-    count = 0
+    renames: list[tuple[str, str]] = []
     for track in album.tracks:
         title = track.tags.get("title")
         tracknumber = track.tags.get("tracknumber")
@@ -1147,12 +1148,32 @@ def _rename(argv: list[str] | None = None) -> None:
         else:
             track.path.rename(new_path)
             print(f"  {track.path.name} -> {new_name}")
-            count += 1
+            renames.append((track.path.name, new_name))
 
     if args.dry_run:
         print(f"\n(dry run — {len(album.tracks)} tracks)")
     else:
-        print(f"Renamed {count} file(s).")
+        print(f"Renamed {len(renames)} file(s).")
+
+    if args.log and not args.dry_run and renames:
+        _write_rename_log(args.log, album, renames)
+
+
+def _write_rename_log(log_path: Path, album: AlbumTags, renames: list[tuple[str, str]]) -> None:
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        "## Rename",
+        "",
+        f"- **Date:** {timestamp}",
+        f"- **Album:** {album.artist} — {album.album}",
+        f"- **Files:** {len(renames)}",
+        "",
+    ]
+    for old, new in renames:
+        lines.append(f"- `{old}` → `{new}`")
+    lines += ["", "---", ""]
+    with open(log_path, "a") as f:
+        f.write("\n".join(lines))
 
 
 def _replaygain(argv: list[str] | None = None) -> None:
