@@ -12,7 +12,7 @@ from pathlib import Path
 from .coverart import fetch_cover_art
 from .discid import parse_rip_dir
 from .musicbrainz import MBRelease, MusicBrainzClient
-from .navidrome import NavidromeClient
+from .navidrome import NavidromeClient, SongRating
 from .placement import PlacementPlan, compute_placement, copy_files
 from .tagger import AlbumResult, apply_changes, build_diff, score_candidates, search_candidates
 from .tags import AUDIO_EXTENSIONS, AlbumTags, embed_cover_art, read_album
@@ -782,12 +782,101 @@ def _nd_rescan(argv: list[str] | None = None) -> None:
         print(f"Scan complete ({count} files).")
 
 
+def _nd_ratings(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger nd ratings",
+        description="Export rated and starred songs from Navidrome as JSON.",
+    )
+    parser.add_argument(
+        "-o",
+        "--out",
+        type=Path,
+        default=None,
+        help="Output JSON file (prints digest to stdout).",
+    )
+    args = parser.parse_args(argv)
+
+    client = NavidromeClient()
+    try:
+        songs = client.get_all_ratings()
+    finally:
+        client.close()
+
+    data = [s.to_dict() for s in songs]
+
+    rated = sum(1 for s in songs if s.rating)
+    starred = sum(1 for s in songs if s.starred)
+    lines = [
+        f"{len(songs)} song(s): {rated} rated, {starred} starred",
+    ]
+    if songs:
+        sample = songs[0]
+        lines.append(f"  e.g. {sample.artist} — {sample.title}")
+
+    _output_json(data, args.out, "\n".join(lines))
+
+
+def _nd_set_rating(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger nd set-rating",
+        description="Push ratings and stars from JSON back into Navidrome.",
+    )
+    parser.add_argument(
+        "--from",
+        type=Path,
+        required=True,
+        dest="from_file",
+        help="Ratings JSON (from `nd ratings`).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be set without making changes.",
+    )
+    args = parser.parse_args(argv)
+
+    songs = [SongRating.from_dict(s) for s in json.loads(args.from_file.read_text())]
+
+    if args.dry_run:
+        for s in songs:
+            parts = []
+            if s.rating:
+                parts.append(f"rating={s.rating}")
+            if s.starred:
+                parts.append("starred")
+            if parts:
+                print(f"  {s.artist} — {s.title}: {', '.join(parts)}")
+        print(f"\n(dry run — {len(songs)} song(s))")
+        return
+
+    client = NavidromeClient()
+    try:
+        rated = 0
+        starred = 0
+        for s in songs:
+            if not s.id:
+                print(f"  skipped (no id): {s.artist} — {s.title}", file=sys.stderr)
+                continue
+            if s.rating:
+                client.set_rating(s.id, s.rating)
+                rated += 1
+            if s.starred:
+                client.star(s.id)
+                starred += 1
+    finally:
+        client.close()
+
+    print(f"Set {rated} rating(s) and {starred} star(s).")
+
+
 def _nd(argv: list[str] | None = None) -> None:
     if argv is None:
         argv = []
 
-    nd_commands = {
+    nd_commands: dict[str, tuple[str, Callable[[list[str] | None], None]]] = {
         "rescan": ("Trigger a library scan.", _nd_rescan),
+        "ratings": ("Export rated/starred songs as JSON.", _nd_ratings),
+        "set-rating": ("Push ratings/stars back into Navidrome.", _nd_set_rating),
     }
 
     if not argv or argv[0] in ("-h", "--help"):
