@@ -77,6 +77,18 @@ class SongRating:
         )
 
     @classmethod
+    def from_native(cls, data: dict[str, Any]) -> SongRating:
+        return cls(
+            id=data.get("id", ""),
+            path=data.get("path", ""),
+            title=data.get("title", ""),
+            artist=data.get("artist", ""),
+            album=data.get("album", ""),
+            rating=data.get("rating", 0),
+            starred=data.get("starredAt", "") or "",
+        )
+
+    @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SongRating:
         return cls(
             id=data.get("id", ""),
@@ -149,22 +161,48 @@ class NavidromeClient:
             offset += len(songs)
         return results
 
+    def _native_headers(self) -> dict[str, str]:
+        resp = self._client.post(
+            f"{self._url}/auth/login",
+            json={"username": self._user, "password": self._password},
+        )
+        resp.raise_for_status()
+        return {"x-nd-authorization": f"Bearer {resp.json()['token']}"}
+
     def get_all_ratings(self, page_size: int = 500) -> list[SongRating]:
-        """Get all rated and/or starred songs, merging getStarred2 and search3."""
-        by_id: dict[str, SongRating] = {}
+        """Get all rated and/or starred songs with real filesystem paths.
 
-        for song in self.get_starred():
-            by_id[song.id] = song
+        Uses the Navidrome native API (not the Subsonic API) because the
+        Subsonic path field is a virtual path constructed from tags, not
+        the real filesystem path.
+        """
+        headers = self._native_headers()
+        results: list[SongRating] = []
+        offset = 0
 
-        for song in self.get_all_rated(page_size=page_size):
-            existing = by_id.get(song.id)
-            if existing:
-                if not existing.rating and song.rating:
-                    existing.rating = song.rating
-            else:
-                by_id[song.id] = song
+        while True:
+            resp = self._client.get(
+                f"{self._url}/api/song",
+                headers=headers,
+                params={
+                    "_sort": "path",
+                    "_order": "ASC",
+                    "_start": str(offset),
+                    "_end": str(offset + page_size),
+                },
+            )
+            resp.raise_for_status()
+            songs = resp.json()
+            if not songs:
+                break
+            for s in songs:
+                if s.get("rating", 0) or s.get("starredAt"):
+                    results.append(SongRating.from_native(s))
+            if len(songs) < page_size:
+                break
+            offset += len(songs)
 
-        return sorted(by_id.values(), key=lambda s: s.path)
+        return results
 
     def set_rating(self, song_id: str, rating: int) -> None:
         self._request("setRating", id=song_id, rating=rating)

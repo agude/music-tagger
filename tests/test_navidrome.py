@@ -89,6 +89,33 @@ class TestSongRating:
         assert song.rating == 5
         assert song.starred == "2024-01-15T10:30:00Z"
 
+    def test_from_native_full(self) -> None:
+        data = {
+            "id": "abc123",
+            "path": "Eagles/Hotel California (1977)/01. Hotel California.flac",
+            "title": "Hotel California",
+            "artist": "Eagles",
+            "album": "Hotel California",
+            "rating": 5,
+            "starredAt": "2024-01-15T10:30:00Z",
+        }
+        song = SongRating.from_native(data)
+        assert song.rating == 5
+        assert song.starred == "2024-01-15T10:30:00Z"
+
+    def test_from_native_no_starred(self) -> None:
+        data = {
+            "id": "x",
+            "path": "p",
+            "title": "t",
+            "artist": "a",
+            "album": "al",
+            "rating": 3,
+        }
+        song = SongRating.from_native(data)
+        assert song.rating == 3
+        assert song.starred == ""
+
     def test_from_subsonic_starred_only(self) -> None:
         data = {
             "id": "def456",
@@ -241,62 +268,69 @@ class TestGetAllRatings:
     def _make_client(self) -> NavidromeClient:
         return NavidromeClient(url="http://localhost:4533", user="admin", password="secret")
 
-    def test_merges_starred_and_rated(self) -> None:
+    def _mock_login(self) -> httpx.Response:
+        request = httpx.Request("POST", "http://localhost:4533/auth/login")
+        return httpx.Response(200, json={"token": "fake-jwt"}, request=request)
+
+    def _mock_song_page(self, songs: list[dict]) -> httpx.Response:  # type: ignore[type-arg]
+        request = httpx.Request("GET", "http://localhost:4533/api/song")
+        return httpx.Response(200, json=songs, request=request)
+
+    def test_returns_rated_and_starred(self) -> None:
         client = self._make_client()
-        starred = [
-            SongRating(id="s1", path="a.flac", title="A", artist="X", album="Y", rating=5, starred="2024-01-01"),
-        ]
-        rated = [
-            SongRating(id="s1", path="a.flac", title="A", artist="X", album="Y", rating=5),
-            SongRating(id="s2", path="b.flac", title="B", artist="X", album="Y", rating=3),
+        songs = [
+            {"id": "s1", "path": "a.flac", "title": "A", "artist": "X", "album": "Y", "rating": 5, "starredAt": "2024-01-01"},
+            {"id": "s2", "path": "b.flac", "title": "B", "artist": "X", "album": "Y", "rating": 0},
+            {"id": "s3", "path": "c.flac", "title": "C", "artist": "X", "album": "Y", "rating": 3},
         ]
         with (
-            patch.object(client, "get_starred", return_value=starred),
-            patch.object(client, "get_all_rated", return_value=rated),
+            patch.object(client._client, "post", return_value=self._mock_login()),
+            patch.object(client._client, "get", return_value=self._mock_song_page(songs)),
         ):
-            result = client.get_all_ratings()
+            result = client.get_all_ratings(page_size=500)
 
         assert len(result) == 2
-        by_id = {s.id: s for s in result}
-        assert by_id["s1"].starred == "2024-01-01"
-        assert by_id["s1"].rating == 5
-        assert by_id["s2"].rating == 3
-        assert by_id["s2"].starred == ""
+        assert result[0].id == "s1"
+        assert result[0].rating == 5
+        assert result[0].starred == "2024-01-01"
+        assert result[1].id == "s3"
 
-    def test_starred_without_rating_gets_rating_from_search(self) -> None:
+    def test_paginates(self) -> None:
         client = self._make_client()
-        starred = [
-            SongRating(id="s1", path="a.flac", title="A", artist="X", album="Y", rating=0, starred="2024-01-01"),
-        ]
-        rated = [
-            SongRating(id="s1", path="a.flac", title="A", artist="X", album="Y", rating=4),
+        page1 = [{"id": "s1", "path": "a.flac", "title": "A", "artist": "X", "album": "Y", "rating": 4}]
+        page2 = [{"id": "s2", "path": "b.flac", "title": "B", "artist": "X", "album": "Y", "rating": 2}]
+        responses = [self._mock_song_page(page1), self._mock_song_page(page2), self._mock_song_page([])]
+        with (
+            patch.object(client._client, "post", return_value=self._mock_login()),
+            patch.object(client._client, "get", side_effect=responses),
+        ):
+            result = client.get_all_ratings(page_size=1)
+
+        assert len(result) == 2
+
+    def test_stops_on_short_page(self) -> None:
+        client = self._make_client()
+        page = [
+            {"id": "s1", "path": "a.flac", "title": "A", "artist": "X", "album": "Y", "rating": 3},
+            {"id": "s2", "path": "b.flac", "title": "B", "artist": "X", "album": "Y", "rating": 0},
         ]
         with (
-            patch.object(client, "get_starred", return_value=starred),
-            patch.object(client, "get_all_rated", return_value=rated),
+            patch.object(client._client, "post", return_value=self._mock_login()),
+            patch.object(client._client, "get", return_value=self._mock_song_page(page)),
         ):
-            result = client.get_all_ratings()
+            result = client.get_all_ratings(page_size=500)
 
         assert len(result) == 1
-        assert result[0].rating == 4
-        assert result[0].starred == "2024-01-01"
 
-    def test_sorted_by_path(self) -> None:
+    def test_empty_library(self) -> None:
         client = self._make_client()
-        starred = [
-            SongRating(id="s2", path="z.flac", title="Z", artist="X", album="Y", starred="2024-01-01"),
-        ]
-        rated = [
-            SongRating(id="s1", path="a.flac", title="A", artist="X", album="Y", rating=3),
-        ]
         with (
-            patch.object(client, "get_starred", return_value=starred),
-            patch.object(client, "get_all_rated", return_value=rated),
+            patch.object(client._client, "post", return_value=self._mock_login()),
+            patch.object(client._client, "get", return_value=self._mock_song_page([])),
         ):
             result = client.get_all_ratings()
 
-        assert result[0].path == "a.flac"
-        assert result[1].path == "z.flac"
+        assert result == []
 
 
 class TestSetRating:
