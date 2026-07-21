@@ -18,6 +18,9 @@ from .tagger import AlbumResult, apply_changes, build_diff, score_candidates, se
 from .tags import AUDIO_EXTENSIONS, AlbumTags, embed_cover_art, read_album, write_rating_to_file
 
 
+_DEFAULT_LIBRARY_ROOT = Path("/mnt/synology/media/music")
+
+
 def _output_json(data: object, out: Path | None, digest: str) -> None:
     """Write JSON to file (printing digest to stdout) or JSON to stdout."""
     text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
@@ -423,9 +426,9 @@ def _write_ratings(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--from",
         type=Path,
-        required=True,
+        default=_DEFAULT_RATINGS_PATH,
         dest="from_file",
-        help="Ratings JSON (from `nd ratings`).",
+        help=f"Ratings JSON (default: {_DEFAULT_RATINGS_PATH}).",
     )
     parser.add_argument(
         "--root",
@@ -851,6 +854,9 @@ def _nd_rescan(argv: list[str] | None = None) -> None:
         print(f"Scan complete ({count} files).")
 
 
+_DEFAULT_RATINGS_PATH = _DEFAULT_LIBRARY_ROOT / "ratings.json"
+
+
 def _nd_ratings(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger nd ratings",
@@ -860,8 +866,8 @@ def _nd_ratings(argv: list[str] | None = None) -> None:
         "-o",
         "--out",
         type=Path,
-        default=None,
-        help="Output JSON file (prints digest to stdout).",
+        default=_DEFAULT_RATINGS_PATH,
+        help=f"Output JSON file (default: {_DEFAULT_RATINGS_PATH}).",
     )
     args = parser.parse_args(argv)
 
@@ -893,9 +899,9 @@ def _nd_set_rating(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--from",
         type=Path,
-        required=True,
+        default=_DEFAULT_RATINGS_PATH,
         dest="from_file",
-        help="Ratings JSON (from `nd ratings`).",
+        help=f"Ratings JSON (default: {_DEFAULT_RATINGS_PATH}).",
     )
     parser.add_argument(
         "--dry-run",
@@ -984,9 +990,6 @@ def _scan_library_genres(root: Path) -> list[tuple[int, str]]:
             if genre:
                 counts[genre] = counts.get(genre, 0) + 1
     return sorted(counts.items(), key=lambda x: (-x[1], x[0]))
-
-
-_DEFAULT_LIBRARY_ROOT = Path("/mnt/synology/media/music")
 
 
 def _genre(argv: list[str] | None = None) -> None:

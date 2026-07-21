@@ -419,20 +419,6 @@ class TestNdRatingsCommand:
             ),
         ]
 
-    def test_stdout_json(self, capsys: object) -> None:
-        from music_tagger.cli import _nd_ratings
-
-        songs = self._make_songs()
-        with patch("music_tagger.cli.NavidromeClient") as mock_cls:
-            mock_cls.return_value.get_all_ratings.return_value = songs
-            _nd_ratings([])
-
-        captured = capsys.readouterr()  # type: ignore[attr-defined]
-        data = json.loads(captured.out)
-        assert len(data) == 2
-        assert data[0]["id"] == "s1"
-        assert data[0]["rating"] == 5
-
     def test_out_file(self, tmp_path: object, capsys: object) -> None:
         from pathlib import Path
 
@@ -446,21 +432,25 @@ class TestNdRatingsCommand:
 
         data = json.loads(out.read_text())
         assert len(data) == 2
+        assert data[0]["id"] == "s1"
+        assert data[0]["rating"] == 5
 
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "2 song(s)" in captured.out
         assert "1 rated" in captured.out
         assert "2 starred" in captured.out
 
-    def test_empty(self, capsys: object) -> None:
+    def test_empty(self, tmp_path: object, capsys: object) -> None:
+        from pathlib import Path
+
         from music_tagger.cli import _nd_ratings
 
+        out = Path(str(tmp_path)) / "ratings.json"
         with patch("music_tagger.cli.NavidromeClient") as mock_cls:
             mock_cls.return_value.get_all_ratings.return_value = []
-            _nd_ratings([])
+            _nd_ratings(["-o", str(out)])
 
-        captured = capsys.readouterr()  # type: ignore[attr-defined]
-        data = json.loads(captured.out)
+        data = json.loads(out.read_text())
         assert data == []
 
 
