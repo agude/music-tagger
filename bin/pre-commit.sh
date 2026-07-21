@@ -14,6 +14,6 @@ uv run ruff check --fix $STAGED_PY
 git add $STAGED_PY
 
 uv run mypy src/music_tagger/ || exit 1
-uv run pytest tests/ -q || exit 1
+uv run pytest tests/ -q --tb=short || exit 1
 
 exit 0
