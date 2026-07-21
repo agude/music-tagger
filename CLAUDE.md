@@ -80,23 +80,16 @@ Key CLI subcommands, driven by Claude Code in conversation:
 
 ## Library workflow
 
+**For ripping a new CD**, use the `rip-album` skill — it handles the full
+pipeline automatically (rip → candidates → tag → art → genre → rename →
+ReplayGain → copy).
+
 Processing the library is staged album by album across sessions:
 
 1. Run `scan` once to generate the checklist.
 2. Each session: read the checklist, find the next `- [ ]` entry.
-3. Per album:
-   a. `candidates <dir>` — find MB release candidates, pick one.
-      For freshly ripped files with no tags, use
-      `candidates <dir> --artist '<name>' --album '<title>'`.
-   b. `tag <dir> --release-id <uuid> --dry-run` — review the diff.
-   c. `tag <dir> --release-id <uuid> --log changes.log` — apply tags.
-   d. `art <dir> --release-id <uuid> --full --force --embed` — fetch cover art
-      and embed it into all audio files in the directory.
-   e. `genre <dir> <group>` — set the meta-grouping tag.
-   f. `rename <dir>` — rename files to `NN - Title.ext` from tags.
-   g. `replaygain <dir>` — compute and write ReplayGain 2.0 tags.
-   h. `copy` — place files into the library (see placement.py).
-   i. Mark the checklist entry `- [x]`.
+3. Per album: candidates → tag → art → genre → rename → ReplayGain → copy.
+   Mark the checklist entry `- [x]` when done.
 4. After a batch: `nd rescan` to trigger Navidrome library scan.
 5. Repeat until done. Re-scan if needed to catch stragglers.
 
