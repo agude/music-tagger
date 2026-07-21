@@ -40,7 +40,7 @@ Create a temp staging directory:
 STAGING=$(mktemp -d /tmp/rip-XXXXXX)
 ```
 
-Launch the rip in the background:
+Rip the CD (this is slow — run in background and wait for completion):
 
 ```bash
 uv run music-tagger rip "$STAGING" --device <device>
@@ -129,7 +129,7 @@ uv run music-tagger genre "$STAGING" "Genre One" "Genre Two" --log ~/Projects/mu
 ## Step 6: Rename
 
 ```bash
-uv run music-tagger rename "$STAGING"
+uv run music-tagger rename "$STAGING" --log ~/Projects/music-tagger/changes.log
 ```
 
 ## Step 7: ReplayGain
@@ -140,19 +140,20 @@ uv run music-tagger replaygain "$STAGING"
 
 ## Step 8: Copy to library
 
-Compute placement and copy:
+Build evidence, compute placement, then copy:
 
 ```bash
-uv run music-tagger read "$STAGING"
-uv run music-tagger path-for "$STAGING"
-uv run music-tagger copy "$STAGING" --dry-run
+uv run music-tagger read "$STAGING" -o "$STAGING/evidence.json"
+uv run music-tagger path-for --evidence "$STAGING/evidence.json" -o "$STAGING/plan.json"
+uv run music-tagger copy --plan "$STAGING/plan.json" --dry-run
 ```
 
-Review the dry-run output to confirm the destination path looks correct,
-then:
+Review the dry-run output. Confirm the artist/album directory names are
+correct and the destination does not collide with an existing album (unless
+replacing it intentionally). Then apply:
 
 ```bash
-uv run music-tagger copy "$STAGING"
+uv run music-tagger copy --plan "$STAGING/plan.json" --log ~/Projects/music-tagger/changes.log
 ```
 
 ## Step 9: Cleanup

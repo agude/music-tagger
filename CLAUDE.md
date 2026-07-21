@@ -22,43 +22,8 @@ Key CLI subcommands, driven by Claude Code in conversation:
    — sets the genre meta-grouping tag on all tracks. Omit genre to show the
    current value. Use `genre --list` to scan the library for all genres in
    use. Multiple genres per album are encouraged when they fit. These are
-   broad browsing categories, not musicological genres. Current genres:
-
-   | Genre | Meaning |
-   |---|---|
-   | Acapella | Vocal-only performances, no instruments |
-   | Broadway | Musical theatre cast recordings |
-   | Celtic | Traditional Irish/Scottish instrumental |
-   | Celtic Folk | Celtic-influenced singer-songwriter / folk |
-   | Children | English-language kids' music |
-   | Children Cantonese | Cantonese-language kids' music |
-   | Children Spanish | Spanish-language kids' music |
-   | Choir | Choral / ensemble vocal works |
-   | Classic | Pre-rock pop standards, crooners, big band vocal |
-   | Classic Jazz | Traditional / swing-era jazz |
-   | Classical | Western art music (orchestral, chamber, solo) |
-   | DNI | Do Not Include — excluded from automatic playlists (star-rated, etc.) |
-   | Folk | Acoustic singer-songwriter, Americana |
-   | Folk Rock | Folk instrumentation with rock energy (Dylan electric, Lumineers) |
-   | Grunge | Seattle-era alt-rock (Pearl Jam, Soundgarden, AIC) |
-   | Jazz | Modern / post-bop / contemporary jazz |
-   | Jazz Live | Live jazz recordings |
-   | Live | Live concert recordings (non-jazz) |
-   | March | Military and concert band marches |
-   | Modern Rock | Post-2000 alt/indie rock (Killers, Arctic Monkeys) |
-   | Piano | Solo piano or piano-focused instrumental |
-   | Pop Rock | Radio-friendly rock with pop hooks |
-   | Rap | Hip-hop and rap |
-   | Reggae | Jamaican reggae, ska, dub |
-   | Retro Rock | Classic rock era (60s–80s) |
-   | Sleep | Ambient / white noise / lullabies for sleeping |
-   | Soft Rock | Mellow, acoustic-leaning rock (James Taylor, Fleetwood Mac) |
-   | Soundtrack | Film and TV scores / soundtracks |
-   | Soundtrack Game | Video game soundtracks |
-   | Xmas | Contemporary Christmas music |
-   | Xmas Classic | Traditional / classic Christmas recordings |
-   | Xmas Jazz | Jazz Christmas albums |
-   | Y2K Rock | Late 90s / early 2000s rock (Matchbox Twenty, Third Eye Blind, Vertical Horizon) |
+   broad browsing categories, not musicological genres. The canonical list
+   is in `.claude/rip-album/references/genre-list.md`.
 
 5. `uv run music-tagger replaygain <album-dir> [--dry-run] [--skip-existing]`
    — computes ReplayGain 2.0 (EBU R128) loudness via `rsgain` and writes
@@ -66,7 +31,7 @@ Key CLI subcommands, driven by Claude Code in conversation:
    writing. Use `--skip-existing` to skip files already tagged.
    Requires system package: `rsgain`.
 
-6. `uv run music-tagger rename <album-dir> [--dry-run]` — renames audio
+6. `uv run music-tagger rename <album-dir> [--dry-run] [--log changes.log]` — renames audio
    files to `NN - Title.ext` based on their tracknumber and title tags.
    Sanitizes filesystem-unsafe characters. Skips files missing title or
    tracknumber tags.
@@ -84,12 +49,14 @@ Key CLI subcommands, driven by Claude Code in conversation:
 pipeline automatically (rip → candidates → tag → art → genre → rename →
 ReplayGain → copy).
 
+**For fixing existing library albums**, use the `fix-album` skill — it
+handles candidates → tag → art → genre → rename → ReplayGain in-place.
+
 Processing the library is staged album by album across sessions:
 
 1. Run `scan` once to generate the checklist.
 2. Each session: read the checklist, find the next `- [ ]` entry.
-3. Per album: candidates → tag → art → genre → rename → ReplayGain → copy.
-   Mark the checklist entry `- [x]` when done.
+3. Per album: run the `fix-album` skill. It marks the checklist when done.
 4. After a batch: `nd rescan` to trigger Navidrome library scan.
 5. Repeat until done. Re-scan if needed to catch stragglers.
 
