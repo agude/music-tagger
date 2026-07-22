@@ -1,3 +1,5 @@
+set dotenv-load := true
+
 default:
     @just --list
 
@@ -14,3 +16,11 @@ lint:
 
 test:
     uv run pytest tests/ -v
+
+# Dump rated/starred songs from Navidrome into ratings.json
+dump-ratings:
+    uv run music-tagger nd ratings
+
+# Write rating/starred tags from ratings.json into FLAC files
+sync-ratings:
+    uv run music-tagger write-ratings --log changes.log
