@@ -23,7 +23,7 @@ Key CLI subcommands, driven by Claude Code in conversation:
    current value. Use `genre --list` to scan the library for all genres in
    use. Multiple genres per album are encouraged when they fit. These are
    broad browsing categories, not musicological genres. The canonical list
-   is in `.claude/rip-album/references/genre-list.md`.
+   is in `.claude/skills/rip-album/references/genre-list.md`.
 
 5. `uv run music-tagger replaygain <album-dir> [--dry-run] [--skip-existing]`
    — computes ReplayGain 2.0 (EBU R128) loudness via `rsgain` and writes
