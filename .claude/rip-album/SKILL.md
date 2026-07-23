@@ -140,12 +140,14 @@ uv run music-tagger replaygain "$STAGING"
 
 ## Step 8: Copy to library
 
-Build evidence, compute placement, then copy:
+Build evidence, compute placement, then copy. Create the working JSON
+files outside `$STAGING` so they don't get copied to the library:
 
 ```bash
-uv run music-tagger read "$STAGING" -o "$STAGING/evidence.json"
-uv run music-tagger path-for --evidence "$STAGING/evidence.json" -o "$STAGING/plan.json"
-uv run music-tagger copy --plan "$STAGING/plan.json" --dry-run
+WORK=$(mktemp -d /tmp/rip-work-XXXXXX)
+uv run music-tagger read "$STAGING" -o "$WORK/evidence.json"
+uv run music-tagger path-for --evidence "$WORK/evidence.json" -o "$WORK/plan.json"
+uv run music-tagger copy --plan "$WORK/plan.json" --dry-run
 ```
 
 Review the dry-run output. Confirm the artist/album directory names are
@@ -153,15 +155,15 @@ correct and the destination does not collide with an existing album (unless
 replacing it intentionally). Then apply:
 
 ```bash
-uv run music-tagger copy --plan "$STAGING/plan.json" --log ~/Projects/music-tagger/changes.log
+uv run music-tagger copy --plan "$WORK/plan.json" --log ~/Projects/music-tagger/changes.log
 ```
 
 ## Step 9: Cleanup
 
-Remove the staging directory:
+Remove the staging and working directories:
 
 ```bash
-rm -rf "$STAGING"
+rm -rf "$STAGING" "$WORK"
 ```
 
 ## Step 10: Checklist

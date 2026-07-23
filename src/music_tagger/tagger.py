@@ -279,6 +279,7 @@ def search_candidates(
     *,
     artist: str | None = None,
     album_title: str | None = None,
+    barcode: str | None = None,
 ) -> tuple[AlbumTags, list[MBRelease]]:
     """Read album tags and fetch detailed MusicBrainz candidates."""
     album = read_album(directory)
@@ -291,7 +292,7 @@ def search_candidates(
     if not search_artist and not search_album:
         raise ValueError("No artist/album in tags and none provided via --artist/--album")
 
-    candidates = mb_client.search_releases(search_artist, search_album)
+    candidates = mb_client.search_releases(search_artist, search_album, barcode=barcode)
     if not candidates:
         raise ValueError(f"No MusicBrainz results for '{search_artist}' - '{search_album}'")
 

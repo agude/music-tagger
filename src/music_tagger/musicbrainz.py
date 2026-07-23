@@ -298,12 +298,15 @@ class MusicBrainzClient:
         self._last_request = time.monotonic()
 
     def search_releases(
-        self, artist: str, album: str, format: str = "CD", limit: int = 10
+        self, artist: str, album: str, format: str = "CD", limit: int = 10,
+        barcode: str | None = None,
     ) -> list[MBRelease]:
         self._rate_limit()
         query = f'artist:"{artist}" release:"{album}"'
         if format:
             query += f" AND format:{format}"
+        if barcode:
+            query += f" AND barcode:{barcode}"
         resp = self._client.get("/release/", params={"query": query, "fmt": "json", "limit": limit})
         resp.raise_for_status()
         data = resp.json()
