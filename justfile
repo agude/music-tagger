@@ -10,12 +10,30 @@ hooks-install:
     @chmod +x .git/hooks/pre-commit
     @echo "Pre-commit hook installed."
 
+# Install dependencies
+sync:
+    uv sync --dev
+
+# All read-only static checks
 lint:
     uv run ruff check src/ tests/
     uv run ruff format --check src/ tests/
 
-test:
-    uv run pytest tests/ -v
+# Apply formatting and safe lint fixes
+format:
+    uv run ruff format src/ tests/
+    uv run ruff check --fix src/ tests/
+
+# Type check
+type-check:
+    uv run mypy src/music_tagger/
+
+# Run tests
+test *args:
+    uv run pytest tests/ -v {{ args }}
+
+# Everything CI runs
+check: lint type-check test
 
 # Dump rated/starred songs from Navidrome into ratings.json
 dump-ratings:

@@ -1,6 +1,6 @@
 [project]
 name = "music-tagger"
-version = "0.1.0"
+dynamic = ["version"]
 description = "LLM-assisted music tag cleanup using MusicBrainz"
 readme = "README.md"
 authors = [
@@ -20,12 +20,19 @@ music-tagger = "music_tagger.cli:main"
 dev = [
     "mypy>=2.3.0",
     "pytest>=8",
+    "pytest-cov>=6.0",
     "ruff>=0.15.21",
 ]
 
 [build-system]
-requires = ["uv_build>=0.11.2,<0.12.0"]
-build-backend = "uv_build"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/music_tagger/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/music_tagger"]
 
 [tool.ruff]
 target-version = "py312"
@@ -41,3 +48,20 @@ known-first-party = ["music_tagger"]
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
+# Without these, tests/ has no __init__.py so mypy resolves the files as
+# top-level modules and a `tests.*` override would never match.
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The standard is 90; this repo sits at ~84 today. The gate is set to the
+# current floor so coverage can only ratchet upward, not to bless 84 as
+# the target.
+addopts = "--cov=music_tagger --cov-fail-under=83"
