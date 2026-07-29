@@ -572,9 +572,7 @@ def _print_candidates(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--album", default=None, help="Override album title (for freshly ripped files)."
     )
-    parser.add_argument(
-        "--barcode", default=None, help="Filter results by barcode (UPC/EAN)."
-    )
+    parser.add_argument("--barcode", default=None, help="Filter results by barcode (UPC/EAN).")
     parser.add_argument(
         "-o",
         "--out",

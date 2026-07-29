@@ -1,0 +1,14 @@
+# Thin caller: runs the full pipeline on push and pull request. The jobs live
+# in ci.yml so any future release workflow runs that same pipeline rather
+# than a copy of it.
+name: Tests
+
+on: [push, pull_request]
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml

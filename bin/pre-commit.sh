@@ -1,19 +1,32 @@
 #!/bin/bash
 #
-# Pre-commit hook: auto-formats and lints staged Python files with ruff.
+# Pre-commit hook: runs the repo's read-only checks via the task runner.
+#
+# This script deliberately contains no tool commands. `just lint` is the one
+# definition of what "clean" means; the hook, CI, and the developer all call
+# it. Install with `just hooks-install`.
 
-STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.py$' || true)
+STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.py$' || true)
 
-if [ -z "$STAGED_PY" ]; then
+if [ -z "$STAGED" ]; then
     exit 0
 fi
 
-uv run ruff format $STAGED_PY
-uv run ruff check --fix $STAGED_PY
+if ! command -v just >/dev/null 2>&1; then
+    echo "❌ just is not on PATH; cannot run the pre-commit checks." >&2
+    echo "   Install just, or commit with --no-verify if you accept the risk." >&2
+    exit 1
+fi
 
-git add $STAGED_PY
+echo "---"
+echo "Running lint on staged Python files..."
+echo "---"
 
-uv run mypy src/music_tagger/ || exit 1
-uv run pytest tests/ -q --tb=short || exit 1
+if ! just lint; then
+    echo "---"
+    echo "❌ Lint failed. Run 'just format' to fix what is fixable."
+    exit 1
+fi
 
+echo "✅ Lint passed."
 exit 0
