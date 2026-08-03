@@ -65,9 +65,11 @@ _NON_AUDIO_EXTENSIONS = {
     ".png",
     ".pdf",
     ".nfo",
-    ".m3u",
     ".accurip",
 }
+# Deliberately excludes ".m3u": whipper writes a per-album playlist that
+# Navidrome would import as a junk playlist. Curated playlists live in
+# /mnt/synology/media/music/playlists, which is where Navidrome reads them.
 
 
 def compute_placement(
