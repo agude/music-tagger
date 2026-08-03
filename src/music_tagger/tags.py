@@ -12,7 +12,7 @@ from typing import Any
 
 from mutagen import File as MutagenFile
 from mutagen.flac import FLAC, Picture
-from mutagen.id3 import APIC, POPM, TXXX
+from mutagen.id3 import APIC, POPM, TCON, TXXX
 from mutagen.mp3 import MP3
 
 AUDIO_EXTENSIONS = {".flac", ".mp3"}
@@ -329,6 +329,55 @@ def write_tags(track: TrackTags, changes: list[TagChange]) -> None:
         elif isinstance(audio, MP3):
             _write_mp3_tag(audio, change.field, change.new_value)
     audio.save()
+
+
+def read_genres(path: Path) -> list[str]:
+    """Read every genre value from a file.
+
+    Genre is the only multi-valued field in the schema. `_read_flac_tags` keeps
+    just the first value, which is enough for matching but would silently drop
+    the rest on a write-back, so genre edits go through this instead.
+    """
+    audio = MutagenFile(path)
+    if audio is None:
+        return []
+    if isinstance(audio, FLAC):
+        return [str(v) for v in audio.get("GENRE", [])]  # type: ignore[no-untyped-call]
+    if isinstance(audio, MP3) and audio.tags is not None:
+        return [str(t) for frame in audio.tags.getall("TCON") for t in frame.text]
+    return []
+
+
+def write_genres(path: Path, genres: list[str], *, timestamp: str = "") -> bool:
+    """Replace the genre tag with `genres`, one tag value each. True if written.
+
+    FLAC gets repeated GENRE comments; MP3 gets a single multi-value TCON frame.
+    Both are what Navidrome reads natively, so no delimiter is involved.
+    """
+    audio = MutagenFile(path)
+    if audio is None:
+        return False
+    if isinstance(audio, FLAC):
+        if genres:
+            audio["GENRE"] = genres
+        elif "GENRE" in audio:
+            del audio["GENRE"]  # type: ignore[no-untyped-call]
+    elif isinstance(audio, MP3):
+        if audio.tags is None:
+            audio.add_tags()  # type: ignore[no-untyped-call]
+        assert audio.tags is not None
+        audio.tags.delall("TCON")
+        if genres:
+            audio.tags.add(TCON(text=genres))
+    else:
+        return False
+    if timestamp:
+        if isinstance(audio, FLAC):
+            _write_flac_tag(audio, "music_tagger_updated", timestamp)
+        else:
+            _write_mp3_tag(audio, "music_tagger_updated", timestamp)
+    audio.save()
+    return True
 
 
 RATING_TO_POPM = {1: 1, 2: 64, 3: 128, 4: 196, 5: 255}
