@@ -107,8 +107,14 @@ src/music_tagger/
   ID3v2 frames, and MP4/M4A atoms. Field names follow Navidrome's
   `mappings.yaml` conventions. M4A is **read-only except for genre**:
   `read_genres`/`write_genres` handle it fully, but `write_tags` raises
-  `NotImplementedError` rather than silently writing nothing. M4A also has
-  no standard star-rating atom, so rating sync does not cover it.
+  `NotImplementedError` rather than silently writing nothing.
+- **M4A ratings**: MP4 has no standard star field and the conventions
+  collide — the freeform `RATING` atom is 0-100 in MusicBee/EZ CD, while
+  this tool writes `RATING` as 1-5 for FLAC and MP3. Writing 1-5 into an
+  M4A would read back as unrated. So M4A gets `FMPS_RATING` (0.0-1.0,
+  scale-free), `STARRED`, `STARRED_AT` as `----:com.apple.iTunes:` freeform
+  atoms, plus the native `rate` atom (0-100) for third-party readers, and
+  deliberately no bare `RATING`.
 - `musicbrainz.py` searches and fetches releases. Rate-limited to 1 req/sec.
 - `tagger.py` builds the target tags from an MB release and computes diffs.
   Handles multi-disc albums by parsing `discnumber` tags.

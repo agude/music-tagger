@@ -29,7 +29,18 @@ MP4_MAP: dict[str, str] = {
     "genre": "\xa9gen",
     "composer": "\xa9wrt",
     "musicbrainz_albumid": "----:com.apple.iTunes:MusicBrainz Album Id",
+    "fmps_rating": "----:com.apple.iTunes:FMPS_RATING",
+    "starred": "----:com.apple.iTunes:STARRED",
+    "starred_at": "----:com.apple.iTunes:STARRED_AT",
 }
+
+# MP4 has no standard star-rating field, and the conventions collide: the
+# freeform RATING atom is 0-100 in MusicBee/EZ CD, while this tool writes
+# RATING as 1-5 for FLAC and MP3. Writing 1-5 into an M4A would read back as
+# unrated or one star under the 0-100 reading, so `rating` is deliberately
+# absent from MP4_MAP. FMPS_RATING (0.0-1.0) is scale-free and carries the
+# value; the native `rate` atom carries 0-100 for third-party readers.
+MP4_RATE_ATOM = "rate"
 
 _MB_DISAMBIG_TERMS = {
     "acoustic",
@@ -460,6 +471,9 @@ def write_rating_to_file(
         current = _read_flac_tags(audio)
     elif isinstance(audio, MP3):
         current = _read_mp3_tags(audio)
+    elif isinstance(audio, MP4):
+        current = _read_mp4_tags(audio)
+        targets.pop("rating", None)  # see MP4_RATE_ATOM: scales collide
     else:
         return []
 
@@ -484,6 +498,12 @@ def write_rating_to_file(
             assert audio.tags is not None
             audio.tags.delall("POPM")
             audio.tags.add(POPM(email="", rating=RATING_TO_POPM.get(rating, 0), count=0))
+    elif isinstance(audio, MP4):
+        for change in changes:
+            audio[MP4_MAP[change.field]] = [change.new_value.encode("utf-8")]
+        if rating:
+            # mutagen renders `rate` as a text atom, so the 0-100 value is a string.
+            audio[MP4_RATE_ATOM] = [str(rating * 20)]
 
     audio.save()
     return changes

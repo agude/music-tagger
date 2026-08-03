@@ -586,3 +586,62 @@ class TestWriteTagsUnsupportedFormat:
         track = read_album(m4a_album).tracks[0]
         with pytest.raises(NotImplementedError, match="not supported"):
             write_tags(track, [TagChange(field="title", old_value="a", new_value="b")])
+
+
+class TestRatingM4a:
+    def test_writes_fmps_and_rate_atom(self, m4a_album: Path) -> None:
+        from mutagen.mp4 import MP4
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        changes = write_rating_to_file(track_path, rating=4, starred="2026-08-03T10:00:00Z")
+
+        fields = {c.field for c in changes}
+        assert fields == {"fmps_rating", "starred", "starred_at"}
+
+        a = MP4(track_path)
+        assert bytes(a["----:com.apple.iTunes:FMPS_RATING"][0]).decode() == "0.8"
+        assert bytes(a["----:com.apple.iTunes:STARRED"][0]).decode() == "true"
+        assert a["rate"] == ["80"]
+
+    def test_omits_bare_rating_atom(self, m4a_album: Path) -> None:
+        """RATING is 1-5 here but 0-100 in MusicBee; writing it would misread."""
+        from mutagen.mp4 import MP4
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        write_rating_to_file(track_path, rating=5)
+
+        assert "----:com.apple.iTunes:RATING" not in MP4(track_path)
+
+    def test_rate_atom_scale(self, m4a_album: Path) -> None:
+        from mutagen.mp4 import MP4
+
+        for stars, expected in ((1, 20), (3, 60), (5, 100)):
+            track_path = sorted(m4a_album.glob("*.m4a"))[0]
+            write_rating_to_file(track_path, rating=stars)
+            assert MP4(track_path)["rate"] == [str(expected)]
+
+    def test_idempotent(self, m4a_album: Path) -> None:
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        write_rating_to_file(track_path, rating=4, starred="2026-08-03T10:00:00Z")
+        again = write_rating_to_file(track_path, rating=4, starred="2026-08-03T10:00:00Z")
+
+        assert again == []
+
+    def test_starred_only_no_rating(self, m4a_album: Path) -> None:
+        from mutagen.mp4 import MP4
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        write_rating_to_file(track_path, rating=0, starred="2026-08-03T10:00:00Z")
+
+        a = MP4(track_path)
+        assert "rate" not in a
+        assert bytes(a["----:com.apple.iTunes:STARRED"][0]).decode() == "true"
+
+    def test_dry_run(self, m4a_album: Path) -> None:
+        from mutagen.mp4 import MP4
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        changes = write_rating_to_file(track_path, rating=3, dry_run=True)
+
+        assert changes
+        assert "----:com.apple.iTunes:FMPS_RATING" not in MP4(track_path)
