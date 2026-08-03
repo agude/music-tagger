@@ -103,8 +103,12 @@ src/music_tagger/
 └── cli.py           # Argparse entry point (all subcommands)
 ```
 
-- `tags.py` provides a unified interface over FLAC Vorbis Comments and MP3
-  ID3v2 frames. Field names follow Navidrome's `mappings.yaml` conventions.
+- `tags.py` provides a unified interface over FLAC Vorbis Comments, MP3
+  ID3v2 frames, and MP4/M4A atoms. Field names follow Navidrome's
+  `mappings.yaml` conventions. M4A is **read-only except for genre**:
+  `read_genres`/`write_genres` handle it fully, but `write_tags` raises
+  `NotImplementedError` rather than silently writing nothing. M4A also has
+  no standard star-rating atom, so rating sync does not cover it.
 - `musicbrainz.py` searches and fetches releases. Rate-limited to 1 req/sec.
 - `tagger.py` builds the target tags from an MB release and computes diffs.
   Handles multi-disc albums by parsing `discnumber` tags.

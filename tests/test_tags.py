@@ -527,3 +527,62 @@ class TestReadGenresEdgeCases:
         junk = tmp_path / "notes.txt"
         junk.write_text("not audio")
         assert write_genres(junk, ["Jazz"]) is False
+
+
+class TestGenresM4a:
+    def test_reads_native_multivalue(self, m4a_album: Path) -> None:
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        assert read_genres(track_path) == ["Retro Rock", "Folk Rock"]
+
+    def test_writes_separate_atom_values(self, m4a_album: Path) -> None:
+        from mutagen.mp4 import MP4
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        assert write_genres(track_path, ["Pop Rock", "Y2K Rock"]) is True
+
+        assert MP4(track_path)["\xa9gen"] == ["Pop Rock", "Y2K Rock"]
+        assert read_genres(track_path) == ["Pop Rock", "Y2K Rock"]
+
+    def test_empty_list_clears(self, m4a_album: Path) -> None:
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        write_genres(track_path, [])
+        assert read_genres(track_path) == []
+
+    def test_stamps_timestamp(self, m4a_album: Path) -> None:
+        from mutagen.mp4 import MP4
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        write_genres(track_path, ["Jazz"], timestamp="2026-08-03T00:00:00Z")
+
+        stamp = MP4(track_path)["----:com.apple.iTunes:MUSIC_TAGGER_UPDATED"]
+        assert bytes(stamp[0]).decode() == "2026-08-03T00:00:00Z"
+
+
+class TestReadAlbumM4a:
+    def test_track_count_and_format(self, m4a_album: Path) -> None:
+        album = read_album(m4a_album)
+        assert album.track_count == 3
+        assert {t.format for t in album.tracks} == {"m4a"}
+
+    def test_artist_and_album(self, m4a_album: Path) -> None:
+        album = read_album(m4a_album)
+        assert album.artist == "Eagles"
+        assert album.album == "Desperado"
+
+    def test_freeform_atom_decoded_to_str(self, m4a_album: Path) -> None:
+        """---- atoms come back as MP4FreeForm bytes, not str."""
+        tags = read_album(m4a_album).tracks[0].tags
+        assert tags["musicbrainz_albumid"] == "test-album-id-1"
+
+    def test_genre_flattened_to_first_value(self, m4a_album: Path) -> None:
+        tags = read_album(m4a_album).tracks[0].tags
+        assert tags["genre"] == "Retro Rock"
+
+
+class TestWriteTagsUnsupportedFormat:
+    def test_m4a_raises_rather_than_silently_skipping(self, m4a_album: Path) -> None:
+        import pytest
+
+        track = read_album(m4a_album).tracks[0]
+        with pytest.raises(NotImplementedError, match="not supported"):
+            write_tags(track, [TagChange(field="title", old_value="a", new_value="b")])

@@ -22,3 +22,11 @@ def mp3_album(tmp_path: Path) -> Path:
     dest = tmp_path / "album_mp3"
     shutil.copytree(FIXTURES / "album_mp3", dest)
     return dest
+
+
+@pytest.fixture()
+def m4a_album(tmp_path: Path) -> Path:
+    """Copy the M4A fixture album to a temp dir so tests can mutate it."""
+    dest = tmp_path / "album_m4a"
+    shutil.copytree(FIXTURES / "album_m4a", dest)
+    return dest
