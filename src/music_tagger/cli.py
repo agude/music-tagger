@@ -1104,7 +1104,7 @@ def _genre(argv: list[str] | None = None) -> None:
         print(f"Set genre={applied} on {count} track(s).")
 
     if args.log and not args.dry_run and count > 0:
-        _write_genre_log(args.log, album, "; ".join(applied), count)
+        _write_genre_log(args.log, album, str(applied), count)
 
 
 def _write_genre_log(log_path: Path, album: AlbumTags, genre: str, count: int) -> None:

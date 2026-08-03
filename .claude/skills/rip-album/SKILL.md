@@ -29,8 +29,9 @@ Collect these from the user before starting:
 **Validate genre** against `${CLAUDE_SKILL_DIR}/references/genre-list.md`
 before proceeding. If the value is not on the list, stop and tell the user.
 
-Multiple genres are allowed (space-separated in the genre command). Validate
-each one individually.
+Multiple genres are allowed — pass each as its own quoted argument, e.g.
+`genre "<dir>" "Pop Rock" "Y2K Rock"`. They are stored as separate tag
+values; never join them into one string. Validate each one individually.
 
 ## Step 1: Rip
 
