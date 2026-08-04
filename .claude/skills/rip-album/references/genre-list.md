@@ -6,6 +6,7 @@ value not on this list.
 | Genre | Meaning |
 |---|---|
 | Acapella | Vocal-only performances, no instruments |
+| Bootleg | Unofficial live recordings, often low fidelity |
 | Broadway | Musical theatre cast recordings |
 | Celtic | Traditional Irish/Scottish instrumental |
 | Celtic Folk | Celtic-influenced singer-songwriter / folk |
@@ -16,6 +17,7 @@ value not on this list.
 | Classic | Pre-rock pop standards, crooners, big band vocal |
 | Classic Jazz | Traditional / swing-era jazz |
 | Classical | Western art music (orchestral, chamber, solo) |
+| Comedy | Comedy and novelty songs (Weird Al, Jonathan Coulton) |
 | DNI | Do Not Include — excluded from automatic playlists |
 | Folk | Acoustic singer-songwriter, Americana |
 | Folk Rock | Folk instrumentation with rock energy |

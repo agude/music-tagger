@@ -22,12 +22,22 @@ Key CLI subcommands, driven by Claude Code in conversation:
    diff against current tags, and writes if not `--dry-run`. Appends all
    changes to the log file for auditing.
 
-4. `uv run music-tagger genre <album-dir> [genre] [--dry-run] [--log changes.log]`
-   — sets the genre meta-grouping tag on all tracks. Omit genre to show the
-   current value. Use `genre --list` to scan the library for all genres in
-   use. Multiple genres per album are encouraged when they fit. These are
-   broad browsing categories, not musicological genres. The canonical list
-   is in `.claude/skills/rip-album/references/genre-list.md`.
+4. `uv run music-tagger genre <album-dir> [genre ...] [--dry-run] [--log changes.log]`
+   — sets the genre meta-grouping tags on all tracks. Pass each genre as its
+   own argument; they are written as separate tag values, never as one
+   delimited string. Omit them to show the current genres. Use `--add` and
+   `--remove` to edit incrementally without restating the rest, and
+   `genre --list` to scan the library for all genres in use. Multiple genres
+   per album are encouraged when they fit. These are broad browsing
+   categories, not musicological genres. Values are validated against
+   `.claude/skills/rip-album/references/genre-list.md`, the canonical list;
+   `--force` overrides for a deliberate addition.
+
+   ```bash
+   genre <dir> "Pop Rock" "Y2K Rock"   # replace with exactly these two
+   genre <dir> --add "Live"            # keep what is there, add one
+   genre <dir> --remove "Live"         # drop one
+   ```
 
 5. `uv run music-tagger replaygain <album-dir> [--dry-run] [--skip-existing]`
    — computes ReplayGain 2.0 (EBU R128) loudness via `rsgain` and writes
@@ -93,8 +103,18 @@ src/music_tagger/
 └── cli.py           # Argparse entry point (all subcommands)
 ```
 
-- `tags.py` provides a unified interface over FLAC Vorbis Comments and MP3
-  ID3v2 frames. Field names follow Navidrome's `mappings.yaml` conventions.
+- `tags.py` provides a unified interface over FLAC Vorbis Comments, MP3
+  ID3v2 frames, and MP4/M4A atoms. Field names follow Navidrome's
+  `mappings.yaml` conventions. M4A is **read-only except for genre**:
+  `read_genres`/`write_genres` handle it fully, but `write_tags` raises
+  `NotImplementedError` rather than silently writing nothing.
+- **M4A ratings**: MP4 has no standard star field and the conventions
+  collide — the freeform `RATING` atom is 0-100 in MusicBee/EZ CD, while
+  this tool writes `RATING` as 1-5 for FLAC and MP3. Writing 1-5 into an
+  M4A would read back as unrated. So M4A gets `FMPS_RATING` (0.0-1.0,
+  scale-free), `STARRED`, `STARRED_AT` as `----:com.apple.iTunes:` freeform
+  atoms, plus the native `rate` atom (0-100) for third-party readers, and
+  deliberately no bare `RATING`.
 - `musicbrainz.py` searches and fetches releases. Rate-limited to 1 req/sec.
 - `tagger.py` builds the target tags from an MB release and computes diffs.
   Handles multi-disc albums by parsing `discnumber` tags.

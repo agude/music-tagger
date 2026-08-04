@@ -12,10 +12,35 @@ from typing import Any
 
 from mutagen import File as MutagenFile
 from mutagen.flac import FLAC, Picture
-from mutagen.id3 import APIC, POPM, TXXX
+from mutagen.id3 import APIC, POPM, TCON, TXXX
 from mutagen.mp3 import MP3
+from mutagen.mp4 import MP4
 
-AUDIO_EXTENSIONS = {".flac", ".mp3"}
+AUDIO_EXTENSIONS = {".flac", ".mp3", ".m4a"}
+
+# MP4 atoms, for reading only. Genre is the one MP4 field this tool writes;
+# see write_tags, which refuses the rest rather than silently dropping them.
+MP4_MAP: dict[str, str] = {
+    "title": "\xa9nam",
+    "artist": "\xa9ART",
+    "albumartist": "aART",
+    "album": "\xa9alb",
+    "date": "\xa9day",
+    "genre": "\xa9gen",
+    "composer": "\xa9wrt",
+    "musicbrainz_albumid": "----:com.apple.iTunes:MusicBrainz Album Id",
+    "fmps_rating": "----:com.apple.iTunes:FMPS_RATING",
+    "starred": "----:com.apple.iTunes:STARRED",
+    "starred_at": "----:com.apple.iTunes:STARRED_AT",
+}
+
+# MP4 has no standard star-rating field, and the conventions collide: the
+# freeform RATING atom is 0-100 in MusicBee/EZ CD, while this tool writes
+# RATING as 1-5 for FLAC and MP3. Writing 1-5 into an M4A would read back as
+# unrated or one star under the 0-100 reading, so `rating` is deliberately
+# absent from MP4_MAP. FMPS_RATING (0.0-1.0) is scale-free and carries the
+# value; the native `rate` atom carries 0-100 for third-party readers.
+MP4_RATE_ATOM = "rate"
 
 _MB_DISAMBIG_TERMS = {
     "acoustic",
@@ -219,6 +244,24 @@ def _read_mp3_tags(audio: MP3) -> dict[str, str]:
     return tags
 
 
+def _read_mp4_tags(audio: MP4) -> dict[str, str]:
+    """Read the string-valued MP4 atoms.
+
+    Skips trkn/disk (tuples, not strings) and anything else whose atom type
+    would not survive the dict[str, str] contract.
+    """
+    tags: dict[str, str] = {}
+    for canonical, atom in MP4_MAP.items():
+        values = audio.get(atom)  # type: ignore[no-untyped-call]
+        if not values:
+            continue
+        first = values[0]
+        tags[canonical] = (
+            bytes(first).decode("utf-8", "replace") if isinstance(first, bytes) else str(first)
+        )
+    return tags
+
+
 def read_album(directory: Path) -> AlbumTags:
     """Read tags from all audio files in a directory."""
     album = AlbumTags(directory=directory)
@@ -233,6 +276,9 @@ def read_album(directory: Path) -> AlbumTags:
         elif isinstance(audio, MP3):
             tags = _read_mp3_tags(audio)
             fmt = "mp3"
+        elif isinstance(audio, MP4):
+            tags = _read_mp4_tags(audio)
+            fmt = "m4a"
         else:
             continue
         duration = audio.info.length if audio.info else 0.0
@@ -321,14 +367,79 @@ def write_tags(track: TrackTags, changes: list[TagChange]) -> None:
     audio = MutagenFile(track.path)
     if audio is None:
         return
+    if not isinstance(audio, FLAC | MP3):
+        # M4A is readable and its genre is writable via write_genres, but the
+        # general field map has no MP4 write path. Fail loudly rather than
+        # reporting success after writing nothing.
+        raise NotImplementedError(
+            f"writing tags to {track.path.suffix} is not supported: {track.path}"
+        )
     for change in changes:
         if change.field not in FIELD_MAP:
             continue
         if isinstance(audio, FLAC):
             _write_flac_tag(audio, change.field, change.new_value)
-        elif isinstance(audio, MP3):
+        else:
             _write_mp3_tag(audio, change.field, change.new_value)
     audio.save()
+
+
+def read_genres(path: Path) -> list[str]:
+    """Read every genre value from a file.
+
+    Genre is the only multi-valued field in the schema. `_read_flac_tags` keeps
+    just the first value, which is enough for matching but would silently drop
+    the rest on a write-back, so genre edits go through this instead.
+    """
+    audio = MutagenFile(path)
+    if audio is None:
+        return []
+    if isinstance(audio, FLAC):
+        return [str(v) for v in audio.get("GENRE", [])]  # type: ignore[no-untyped-call]
+    if isinstance(audio, MP3) and audio.tags is not None:
+        return [str(t) for frame in audio.tags.getall("TCON") for t in frame.text]
+    if isinstance(audio, MP4):
+        return [str(v) for v in audio.get("\xa9gen", [])]  # type: ignore[no-untyped-call]
+    return []
+
+
+def write_genres(path: Path, genres: list[str], *, timestamp: str = "") -> bool:
+    """Replace the genre tag with `genres`, one tag value each. True if written.
+
+    FLAC gets repeated GENRE comments; MP3 gets a single multi-value TCON frame.
+    Both are what Navidrome reads natively, so no delimiter is involved.
+    """
+    audio = MutagenFile(path)
+    if audio is None:
+        return False
+    if isinstance(audio, FLAC):
+        if genres:
+            audio["GENRE"] = genres
+        elif "GENRE" in audio:
+            del audio["GENRE"]  # type: ignore[no-untyped-call]
+    elif isinstance(audio, MP3):
+        if audio.tags is None:
+            audio.add_tags()  # type: ignore[no-untyped-call]
+        assert audio.tags is not None
+        audio.tags.delall("TCON")
+        if genres:
+            audio.tags.add(TCON(text=genres))
+    elif isinstance(audio, MP4):
+        if genres:
+            audio["\xa9gen"] = genres
+        elif "\xa9gen" in audio:
+            del audio["\xa9gen"]  # type: ignore[no-untyped-call]
+    else:
+        return False
+    if timestamp:
+        if isinstance(audio, FLAC):
+            _write_flac_tag(audio, "music_tagger_updated", timestamp)
+        elif isinstance(audio, MP3):
+            _write_mp3_tag(audio, "music_tagger_updated", timestamp)
+        else:
+            audio["----:com.apple.iTunes:MUSIC_TAGGER_UPDATED"] = [timestamp.encode()]
+    audio.save()
+    return True
 
 
 RATING_TO_POPM = {1: 1, 2: 64, 3: 128, 4: 196, 5: 255}
@@ -360,6 +471,9 @@ def write_rating_to_file(
         current = _read_flac_tags(audio)
     elif isinstance(audio, MP3):
         current = _read_mp3_tags(audio)
+    elif isinstance(audio, MP4):
+        current = _read_mp4_tags(audio)
+        targets.pop("rating", None)  # see MP4_RATE_ATOM: scales collide
     else:
         return []
 
@@ -384,6 +498,12 @@ def write_rating_to_file(
             assert audio.tags is not None
             audio.tags.delall("POPM")
             audio.tags.add(POPM(email="", rating=RATING_TO_POPM.get(rating, 0), count=0))
+    elif isinstance(audio, MP4):
+        for change in changes:
+            audio[MP4_MAP[change.field]] = [change.new_value.encode("utf-8")]
+        if rating:
+            # mutagen renders `rate` as a text atom, so the 0-100 value is a string.
+            audio[MP4_RATE_ATOM] = [str(rating * 20)]
 
     audio.save()
     return changes

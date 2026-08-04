@@ -11,6 +11,8 @@ from music_tagger.tags import (
     compute_diff,
     embed_cover_art,
     read_album,
+    read_genres,
+    write_genres,
     write_rating_to_file,
     write_tags,
 )
@@ -450,3 +452,196 @@ class TestWriteRatingMp3:
         assert len(changes) > 0
         album = read_album(mp3_album)
         assert "rating" not in album.tracks[0].tags
+
+
+class TestGenresFlac:
+    def test_writes_separate_tag_values(self, flac_album: Path) -> None:
+        from mutagen.flac import FLAC
+
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        assert write_genres(track_path, ["Pop Rock", "Y2K Rock"]) is True
+
+        # Two distinct GENRE comments, not one delimited string.
+        assert FLAC(track_path)["GENRE"] == ["Pop Rock", "Y2K Rock"]
+        assert read_genres(track_path) == ["Pop Rock", "Y2K Rock"]
+
+    def test_replaces_existing(self, flac_album: Path) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        write_genres(track_path, ["Retro Rock", "Folk Rock"])
+        write_genres(track_path, ["Jazz"])
+
+        assert read_genres(track_path) == ["Jazz"]
+
+    def test_empty_list_clears(self, flac_album: Path) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        write_genres(track_path, ["Jazz"])
+        write_genres(track_path, [])
+
+        assert read_genres(track_path) == []
+
+    def test_stamps_timestamp(self, flac_album: Path) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        write_genres(track_path, ["Jazz"], timestamp="2026-08-03T00:00:00Z")
+
+        album = read_album(flac_album)
+        assert album.tracks[0].tags["music_tagger_updated"] == "2026-08-03T00:00:00Z"
+
+    def test_read_album_keeps_first_value_only(self, flac_album: Path) -> None:
+        """read_album flattens genre; read_genres is why edits must not use it."""
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        write_genres(track_path, ["Retro Rock", "Folk Rock"])
+
+        assert read_album(flac_album).tracks[0].tags["genre"] == "Retro Rock"
+        assert read_genres(track_path) == ["Retro Rock", "Folk Rock"]
+
+
+class TestGenresMp3:
+    def test_writes_single_multivalue_frame(self, mp3_album: Path) -> None:
+        from mutagen.mp3 import MP3
+
+        track_path = sorted(mp3_album.glob("*.mp3"))[0]
+        assert write_genres(track_path, ["Pop Rock", "Y2K Rock"]) is True
+
+        frames = MP3(track_path).tags.getall("TCON")
+        assert len(frames) == 1
+        assert frames[0].text == ["Pop Rock", "Y2K Rock"]
+        assert read_genres(track_path) == ["Pop Rock", "Y2K Rock"]
+
+    def test_replaces_existing(self, mp3_album: Path) -> None:
+        track_path = sorted(mp3_album.glob("*.mp3"))[0]
+        write_genres(track_path, ["Retro Rock", "Folk Rock"])
+        write_genres(track_path, ["Jazz"])
+
+        assert read_genres(track_path) == ["Jazz"]
+
+    def test_empty_list_clears(self, mp3_album: Path) -> None:
+        track_path = sorted(mp3_album.glob("*.mp3"))[0]
+        write_genres(track_path, ["Jazz"])
+        write_genres(track_path, [])
+
+        assert read_genres(track_path) == []
+
+
+class TestReadGenresEdgeCases:
+    def test_non_audio_returns_false(self, tmp_path: Path) -> None:
+        junk = tmp_path / "notes.txt"
+        junk.write_text("not audio")
+        assert write_genres(junk, ["Jazz"]) is False
+
+
+class TestGenresM4a:
+    def test_reads_native_multivalue(self, m4a_album: Path) -> None:
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        assert read_genres(track_path) == ["Retro Rock", "Folk Rock"]
+
+    def test_writes_separate_atom_values(self, m4a_album: Path) -> None:
+        from mutagen.mp4 import MP4
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        assert write_genres(track_path, ["Pop Rock", "Y2K Rock"]) is True
+
+        assert MP4(track_path)["\xa9gen"] == ["Pop Rock", "Y2K Rock"]
+        assert read_genres(track_path) == ["Pop Rock", "Y2K Rock"]
+
+    def test_empty_list_clears(self, m4a_album: Path) -> None:
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        write_genres(track_path, [])
+        assert read_genres(track_path) == []
+
+    def test_stamps_timestamp(self, m4a_album: Path) -> None:
+        from mutagen.mp4 import MP4
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        write_genres(track_path, ["Jazz"], timestamp="2026-08-03T00:00:00Z")
+
+        stamp = MP4(track_path)["----:com.apple.iTunes:MUSIC_TAGGER_UPDATED"]
+        assert bytes(stamp[0]).decode() == "2026-08-03T00:00:00Z"
+
+
+class TestReadAlbumM4a:
+    def test_track_count_and_format(self, m4a_album: Path) -> None:
+        album = read_album(m4a_album)
+        assert album.track_count == 3
+        assert {t.format for t in album.tracks} == {"m4a"}
+
+    def test_artist_and_album(self, m4a_album: Path) -> None:
+        album = read_album(m4a_album)
+        assert album.artist == "Eagles"
+        assert album.album == "Desperado"
+
+    def test_freeform_atom_decoded_to_str(self, m4a_album: Path) -> None:
+        """---- atoms come back as MP4FreeForm bytes, not str."""
+        tags = read_album(m4a_album).tracks[0].tags
+        assert tags["musicbrainz_albumid"] == "test-album-id-1"
+
+    def test_genre_flattened_to_first_value(self, m4a_album: Path) -> None:
+        tags = read_album(m4a_album).tracks[0].tags
+        assert tags["genre"] == "Retro Rock"
+
+
+class TestWriteTagsUnsupportedFormat:
+    def test_m4a_raises_rather_than_silently_skipping(self, m4a_album: Path) -> None:
+        import pytest
+
+        track = read_album(m4a_album).tracks[0]
+        with pytest.raises(NotImplementedError, match="not supported"):
+            write_tags(track, [TagChange(field="title", old_value="a", new_value="b")])
+
+
+class TestRatingM4a:
+    def test_writes_fmps_and_rate_atom(self, m4a_album: Path) -> None:
+        from mutagen.mp4 import MP4
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        changes = write_rating_to_file(track_path, rating=4, starred="2026-08-03T10:00:00Z")
+
+        fields = {c.field for c in changes}
+        assert fields == {"fmps_rating", "starred", "starred_at"}
+
+        a = MP4(track_path)
+        assert bytes(a["----:com.apple.iTunes:FMPS_RATING"][0]).decode() == "0.8"
+        assert bytes(a["----:com.apple.iTunes:STARRED"][0]).decode() == "true"
+        assert a["rate"] == ["80"]
+
+    def test_omits_bare_rating_atom(self, m4a_album: Path) -> None:
+        """RATING is 1-5 here but 0-100 in MusicBee; writing it would misread."""
+        from mutagen.mp4 import MP4
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        write_rating_to_file(track_path, rating=5)
+
+        assert "----:com.apple.iTunes:RATING" not in MP4(track_path)
+
+    def test_rate_atom_scale(self, m4a_album: Path) -> None:
+        from mutagen.mp4 import MP4
+
+        for stars, expected in ((1, 20), (3, 60), (5, 100)):
+            track_path = sorted(m4a_album.glob("*.m4a"))[0]
+            write_rating_to_file(track_path, rating=stars)
+            assert MP4(track_path)["rate"] == [str(expected)]
+
+    def test_idempotent(self, m4a_album: Path) -> None:
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        write_rating_to_file(track_path, rating=4, starred="2026-08-03T10:00:00Z")
+        again = write_rating_to_file(track_path, rating=4, starred="2026-08-03T10:00:00Z")
+
+        assert again == []
+
+    def test_starred_only_no_rating(self, m4a_album: Path) -> None:
+        from mutagen.mp4 import MP4
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        write_rating_to_file(track_path, rating=0, starred="2026-08-03T10:00:00Z")
+
+        a = MP4(track_path)
+        assert "rate" not in a
+        assert bytes(a["----:com.apple.iTunes:STARRED"][0]).decode() == "true"
+
+    def test_dry_run(self, m4a_album: Path) -> None:
+        from mutagen.mp4 import MP4
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        changes = write_rating_to_file(track_path, rating=3, dry_run=True)
+
+        assert changes
+        assert "----:com.apple.iTunes:FMPS_RATING" not in MP4(track_path)

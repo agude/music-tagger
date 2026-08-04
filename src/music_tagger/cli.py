@@ -1000,7 +1000,19 @@ def _genre(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("path", nargs="?", type=Path, default=None, help="Album directory.")
     parser.add_argument(
-        "genre", nargs="?", default=None, help="Genre to set. Omit to show current genre."
+        "genres",
+        nargs="*",
+        default=None,
+        help="Genres to set, replacing what is there. Omit to show current genres.",
+    )
+    parser.add_argument(
+        "--add", action="append", default=[], metavar="GENRE", help="Add a genre, keeping the rest."
+    )
+    parser.add_argument(
+        "--remove", action="append", default=[], metavar="GENRE", help="Remove a genre."
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Allow genres that are not on the canonical list."
     )
     parser.add_argument(
         "--list",
@@ -1043,43 +1055,56 @@ def _genre(argv: list[str] | None = None) -> None:
         print(f"Error: no audio files in {target}.", file=sys.stderr)
         sys.exit(1)
 
-    if args.genre is None:
-        current_genres = {t.tags.get("genre", "") for t in album.tracks}
-        current_genres.discard("")
-        if current_genres:
-            for g in sorted(current_genres):
-                print(g)
-        else:
+    from .genres import GENRE_LIST_PATH, load_canonical
+    from .tags import read_genres, write_genres
+
+    if not args.genres and not args.add and not args.remove:
+        current = {g for track in album.tracks for g in read_genres(track.path)}
+        for g in sorted(current):
+            print(g)
+        if not current:
             print("(no genre set)")
         return
 
-    from .tags import TagChange, write_tags
+    if args.genres and (args.add or args.remove):
+        parser.error("give genres to set, or --add/--remove, not both")
 
+    canonical = load_canonical()
+    if not args.force:
+        if not canonical:
+            print(f"Warning: {GENRE_LIST_PATH} not found — genres unvalidated.", file=sys.stderr)
+        elif unknown := [g for g in list(args.genres) + list(args.add) if g not in canonical]:
+            print(f"Error: not on the canonical list: {', '.join(unknown)}", file=sys.stderr)
+            print(f"See {GENRE_LIST_PATH}, or pass --force.", file=sys.stderr)
+            sys.exit(1)
+
+    stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     count = 0
     for track in album.tracks:
-        old = track.tags.get("genre", "")
-        if old == args.genre:
-            continue
-        change = TagChange(field="genre", old_value=old, new_value=args.genre)
-        if args.dry_run:
-            old_display = old or "(empty)"
-            print(f"  {track.path.name}: genre: {old_display} → {args.genre}")
+        old = read_genres(track.path)
+        if args.genres:
+            new = list(dict.fromkeys(args.genres))
         else:
-            timestamp = TagChange(
-                field="music_tagger_updated",
-                old_value=track.tags.get("music_tagger_updated", ""),
-                new_value=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            )
-            write_tags(track, [change, timestamp])
-            count += 1
+            new = [g for g in old if g not in args.remove]
+            new += [g for g in args.add if g not in new]
+        if new == old:
+            continue
+        if args.dry_run:
+            # List repr, not a joined string: one delimited value and two
+            # separate values must not render identically.
+            print(f"  {track.path.name}: {old} → {new}")
+        else:
+            write_genres(track.path, new, timestamp=stamp)
+        count += 1
 
+    applied = sorted({g for track in album.tracks for g in read_genres(track.path)})
     if args.dry_run:
-        print(f"\n(dry run — {len(album.tracks)} tracks)")
+        print(f"\n(dry run — {count} of {len(album.tracks)} tracks would change)")
     else:
-        print(f"Set genre={args.genre} on {count} track(s).")
+        print(f"Set genre={applied} on {count} track(s).")
 
     if args.log and not args.dry_run and count > 0:
-        _write_genre_log(args.log, album, args.genre, count)
+        _write_genre_log(args.log, album, str(applied), count)
 
 
 def _write_genre_log(log_path: Path, album: AlbumTags, genre: str, count: int) -> None:
