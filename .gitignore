@@ -9,6 +9,13 @@ wheels/
 # Virtual environments
 .venv
 
+# Test and lint caches
+.coverage
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+
 # Secrets
 .env
 
@@ -19,3 +26,8 @@ checklist.json
 changes.log
 issues.md
 notes/
+
+# Undo records from one-off library migrations. Dated, kept locally until
+# the change is confirmed good, then deleted.
+*-migration-*.json
+*-cleanup-*.json
