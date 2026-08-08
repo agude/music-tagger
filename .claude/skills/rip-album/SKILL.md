@@ -4,7 +4,7 @@ description: >
   Rip a CD to FLAC via whipper, tag from MusicBrainz, embed cover art, set
   genre, rename, compute ReplayGain, and copy to the music library. Use when
   the user asks to rip a CD or process a new album from disc.
-allowed-tools: "Bash Read Edit"
+allowed-tools: "Bash Read Edit AskUserQuestion"
 ---
 
 # Rip Album
@@ -22,16 +22,19 @@ Collect these from the user before starting:
 | Artist | yes | `Matchbox 20` |
 | Album title | yes | `Yourself or Someone Like You` |
 | Barcode | no | `075679272126` |
-| Genre | yes | `Y2K Rock` |
+| Genre | no | `Y2K Rock` |
 | Release ID | no | MB release UUID if already known |
 | Device | no | `/dev/cdrom` (default) |
 
-**Validate genre** against `${CLAUDE_SKILL_DIR}/references/genre-list.md`
-before proceeding. If the value is not on the list, stop and tell the user.
+**Genre selection:** If the user provided genres, validate each one against
+`${CLAUDE_SKILL_DIR}/references/genre-list.md`. If they did not, read the
+genre list, pick the 2–4 best fits for the artist and album, and present
+them as a multi-select `AskUserQuestion` for confirmation. The user can
+deselect bad picks or add their own via "Other."
 
 Multiple genres are allowed — pass each as its own quoted argument, e.g.
 `genre "<dir>" "Pop Rock" "Y2K Rock"`. They are stored as separate tag
-values; never join them into one string. Validate each one individually.
+values; never join them into one string.
 
 ## Step 1: Rip
 
