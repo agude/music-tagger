@@ -136,8 +136,44 @@ src/music_tagger/
 - Unicode from MusicBrainz (e.g. U+2010 HYPHEN in titles) is accepted as
   canonical.
 
+## Format differences that bite
+
+- **Multi-value semantics differ by container.** MP4's `©gen` is natively
+  list-valued, same as Vorbis comments. MP3 is the awkward one: a single
+  `TCON` frame with null-separated values, which only works in ID3v2.4.
+- **Types, not keys, are the trap.** MP4 `trkn` is `[(1, 3)]` and `----`
+  freeform atoms return `MP4FreeForm` bytes; neither fits the `dict[str, str]`
+  contract. `MP4_MAP` therefore covers only string-valued atoms.
+- **Audit every consumer before widening `AUDIO_EXTENSIONS`.** Adding `.m4a`
+  reached `replaygain.py` (fine — `rsgain` supports M4A) and `embed_cover_art`
+  (skips M4A, no `covr` support). Anything that globs the shared constant
+  inherits the new format whether or not it can handle it.
+
+## Never return an empty change list for an unhandled case
+
+Three bugs of the same shape surfaced in a single session: a code path returns
+an empty result for a case it does not handle, and the caller counts that
+identically to "nothing needed doing."
+
+- `write_rating_to_file` returned `[]` for M4A, so a full export reported
+  success having written nothing.
+- `read_album` accepting M4A made `tag` *appear* to work while `write_tags`
+  fell through. It now raises.
+
+**Report unsupported input explicitly** — "N files skipped, unsupported
+format" — and never let "unsupported" and "already correct" produce the same
+output. `write_tags` raising `NotImplementedError` for M4A is the pattern.
+
 ## Safety
 
+- **Whipper's `.m3u` must never reach the library.** `compute_placement()`
+  once copied it because `.m3u` was in `_NON_AUDIO_EXTENSIONS`, and Navidrome
+  imported each one as a junk playlist. It was dropped from that set in commit
+  `85f2584` with a comment explaining why; do not re-add it.
+- **The skills must pass `--log` on every mutating step.** For a long time they
+  did not: `changes.log` had 448 sections and zero `## Genre:` entries, so no
+  genre change in the library had an audit trail. `rename` gained a `--log`
+  flag specifically to close the last gap.
 - `scan` and `candidates` are read-only. Safe to run directly against the
   live library.
 - `tag --dry-run` is read-only. Safe to run directly against the live library.
@@ -157,6 +193,15 @@ Set these environment variables (e.g. in `.env` or shell profile):
 - `NAVIDROME_URL` — Navidrome server URL (e.g. `http://localhost:4533`)
 - `NAVIDROME_USER` — Navidrome username
 - `NAVIDROME_PASSWORD` — Navidrome password
+
+Store the password **unquoted** in `.env` — most loaders treat quotes as
+literal characters. The plaintext never goes over the wire: `_auth_params`
+generates a random salt per request and sends `t=md5(password+salt)&s=<salt>`,
+hashing fresh each call.
+
+**The CLI does not load `.env` itself.** Only the `just` recipes do
+(`set dotenv-load := true`), so a bare `music-tagger nd ratings` fails with
+"Set NAVIDROME_URL…". Use the recipes.
 
 ## Operations
 
