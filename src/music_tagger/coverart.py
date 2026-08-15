@@ -20,6 +20,27 @@ class ArtResult:
     not_found: bool = False
 
 
+def use_local_cover(
+    source: Path,
+    dest_dir: Path,
+    filename: str = "cover.jpg",
+    force: bool = False,
+) -> ArtResult:
+    dest = dest_dir / filename
+
+    if dest.exists() and not force:
+        return ArtResult(saved=False, path=dest, skipped=True)
+
+    if not source.is_file():
+        return ArtResult(saved=False, not_found=True)
+
+    import shutil
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, dest)
+    return ArtResult(saved=True, path=dest, size_bytes=dest.stat().st_size)
+
+
 def fetch_cover_art(
     release_id: str,
     dest_dir: Path,

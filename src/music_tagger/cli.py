@@ -9,7 +9,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .coverart import fetch_cover_art
+from .coverart import fetch_cover_art, use_local_cover
 from .discid import parse_rip_dir
 from .musicbrainz import MBRelease, MusicBrainzClient
 from .navidrome import NavidromeClient, SongRating
@@ -763,10 +763,13 @@ def _write_copy_log(log_path: Path, plan: PlacementPlan, result: object) -> None
 def _art(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger art",
-        description="Fetch cover art from the Cover Art Archive.",
+        description="Fetch cover art from the Cover Art Archive, or use a local image.",
     )
     parser.add_argument("path", type=Path, help="Album directory to save cover art into.")
-    parser.add_argument("--release-id", required=True, help="MusicBrainz release UUID.")
+    parser.add_argument("--release-id", default=None, help="MusicBrainz release UUID.")
+    parser.add_argument(
+        "--cover-file", type=Path, default=None, help="Use a local image instead of fetching."
+    )
     parser.add_argument(
         "--full", action="store_true", help="Fetch full-size image instead of 500px."
     )
@@ -776,17 +779,30 @@ def _art(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
+    if not args.release_id and not args.cover_file:
+        parser.error("provide --release-id or --cover-file")
+
     target: Path = args.path.resolve()
 
-    result = fetch_cover_art(
-        args.release_id,
-        target,
-        full_size=args.full,
-        force=args.force,
-    )
+    if args.cover_file:
+        result = use_local_cover(
+            args.cover_file.resolve(),
+            target,
+            force=args.force,
+        )
+    else:
+        result = fetch_cover_art(
+            args.release_id,
+            target,
+            full_size=args.full,
+            force=args.force,
+        )
 
     if result.not_found:
-        print("No cover art available for this release.")
+        if args.cover_file:
+            print(f"Cover file not found: {args.cover_file}")
+        else:
+            print("No cover art available for this release.")
     elif result.skipped:
         print(f"cover.jpg already exists at {result.path} (use --force to overwrite).")
     elif result.saved:
@@ -1291,7 +1307,7 @@ def _register_commands() -> dict[str, tuple[str, Callable[[list[str] | None], No
         "write-ratings": ("Write rating/starred tags to audio files.", _write_ratings),
         "path-for": ("Compute library destination paths.", _path_for),
         "copy": ("Copy files to library per a placement plan.", _copy),
-        "art": ("Fetch cover art from the Cover Art Archive.", _art),
+        "art": ("Fetch or install cover art for an album.", _art),
         "nd": ("Navidrome commands.", _nd),
         "scan": ("Generate a checklist of albums needing attention.", _scan),
         "candidates": ("Show MusicBrainz candidates for an album.", _print_candidates),

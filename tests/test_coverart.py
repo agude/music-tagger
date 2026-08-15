@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
-from music_tagger.coverart import ArtResult, fetch_cover_art
+from music_tagger.coverart import ArtResult, fetch_cover_art, use_local_cover
 
 
 def _mock_response(status_code: int = 200, content: bytes = b"JPEGDATA") -> httpx.Response:
@@ -178,3 +178,120 @@ class TestArtCommand:
             _art([str(tmp_path), "--release-id", "abc-123", "--embed"])
 
         mock_embed.assert_not_called()
+
+
+class TestUseLocalCover:
+    def test_copies_file(self, tmp_path: Path) -> None:
+        source = tmp_path / "input.jpg"
+        source.write_bytes(b"LOCALCOVER")
+        dest_dir = tmp_path / "album"
+        dest_dir.mkdir()
+
+        result = use_local_cover(source, dest_dir)
+
+        assert result.saved is True
+        assert result.path == dest_dir / "cover.jpg"
+        assert result.path.read_bytes() == b"LOCALCOVER"
+        assert result.size_bytes == 10
+
+    def test_skips_existing(self, tmp_path: Path) -> None:
+        source = tmp_path / "input.jpg"
+        source.write_bytes(b"NEW")
+        dest_dir = tmp_path / "album"
+        dest_dir.mkdir()
+        existing = dest_dir / "cover.jpg"
+        existing.write_bytes(b"OLD")
+
+        result = use_local_cover(source, dest_dir)
+
+        assert result.saved is False
+        assert result.skipped is True
+        assert existing.read_bytes() == b"OLD"
+
+    def test_force_overwrites(self, tmp_path: Path) -> None:
+        source = tmp_path / "input.jpg"
+        source.write_bytes(b"NEW")
+        dest_dir = tmp_path / "album"
+        dest_dir.mkdir()
+        existing = dest_dir / "cover.jpg"
+        existing.write_bytes(b"OLD")
+
+        result = use_local_cover(source, dest_dir, force=True)
+
+        assert result.saved is True
+        assert existing.read_bytes() == b"NEW"
+
+    def test_source_not_found(self, tmp_path: Path) -> None:
+        source = tmp_path / "nonexistent.jpg"
+        dest_dir = tmp_path / "album"
+        dest_dir.mkdir()
+
+        result = use_local_cover(source, dest_dir)
+
+        assert result.saved is False
+        assert result.not_found is True
+
+    def test_creates_dest_directory(self, tmp_path: Path) -> None:
+        source = tmp_path / "input.jpg"
+        source.write_bytes(b"DATA")
+        dest_dir = tmp_path / "nested" / "album"
+
+        result = use_local_cover(source, dest_dir)
+
+        assert result.saved is True
+        assert dest_dir.exists()
+
+
+class TestArtCommandCoverFile:
+    def test_cover_file_uses_local(self, tmp_path: Path, capsys: object) -> None:
+        from music_tagger.cli import _art
+
+        source = tmp_path / "my_cover.jpg"
+        source.write_bytes(b"BIGIMAGE" * 1000)
+
+        with patch("music_tagger.cli.use_local_cover") as mock_local:
+            mock_local.return_value = ArtResult(
+                saved=True,
+                path=tmp_path / "cover.jpg",
+                size_bytes=8000,
+            )
+            _art([str(tmp_path), "--cover-file", str(source)])
+
+        mock_local.assert_called_once()
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "Saved cover.jpg" in captured.out
+
+    def test_cover_file_not_found(self, tmp_path: Path, capsys: object) -> None:
+        from music_tagger.cli import _art
+
+        with patch("music_tagger.cli.use_local_cover") as mock_local:
+            mock_local.return_value = ArtResult(saved=False, not_found=True)
+            _art([str(tmp_path), "--cover-file", "/nonexistent.jpg"])
+
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "Cover file not found" in captured.out
+
+    def test_no_release_id_or_cover_file_errors(self, tmp_path: Path) -> None:
+        import pytest
+
+        from music_tagger.cli import _art
+
+        with pytest.raises(SystemExit):
+            _art([str(tmp_path)])
+
+    def test_cover_file_with_embed(self, tmp_path: Path, capsys: object) -> None:
+        from music_tagger.cli import _art
+
+        source = tmp_path / "my_cover.jpg"
+        source.write_bytes(b"DATA")
+        cover = tmp_path / "cover.jpg"
+
+        with (
+            patch("music_tagger.cli.use_local_cover") as mock_local,
+            patch("music_tagger.cli.embed_cover_art") as mock_embed,
+        ):
+            mock_local.return_value = ArtResult(saved=True, path=cover, size_bytes=4)
+            mock_embed.return_value = 5
+            _art([str(tmp_path), "--cover-file", str(source), "--embed"])
+
+        mock_embed.assert_called_once_with(tmp_path, cover)
