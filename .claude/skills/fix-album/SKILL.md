@@ -1,151 +1,121 @@
 ---
 name: fix-album
 description: >
-  Fix tags on an existing library album: identify the MusicBrainz release,
-  apply tags, embed cover art, set genre, rename files, and compute
-  ReplayGain. Use when processing albums from the scan checklist.
-allowed-tools: "Bash Read Edit AskUserQuestion"
+  Fixes tags on an existing library album: identifies the MusicBrainz
+  release, applies tags, embeds cover art, sets genre, renames files, and
+  computes ReplayGain. Use when processing albums from the scan checklist or
+  when the user asks to fix, retag, or clean up an album in the library.
+allowed-tools: "Bash Read AskUserQuestion"
 ---
 
 # Fix Album
 
-Process a single album already in the music library. The album directory
-exists at its current library path — files are edited in-place, no copy
-step.
+Process one album in place in the library. The CLI performs every
+mechanical step and writes `changes.log`. The operator makes four
+decisions: the release, the cover, the genres, and approval of anything a
+gate stops on. Do not edit tags, JSON, or the checklist by hand.
 
-Collect all inputs before starting, then execute each step without pausing
-for user input (unless a safety gate fires).
+## 1. Pick the album
 
-## Inputs
+If the user named an album directory, use it. Otherwise:
 
-Collect these from the user (or read from the checklist entry) before
-starting:
+```bash
+uv run music-tagger checklist next
+```
 
-| Input | Required | Default |
-|---|---|---|
-| Album directory | yes | from checklist |
-| Genre | no | — |
-| Release ID | no | found via candidates |
+`Next:` is the album directory. `Checklist complete.` means there is
+nothing left; stop.
 
-**Genre selection:** If the user provided genres, validate each one against
-`${CLAUDE_SKILL_DIR}/references/genre-list.md`. If they did not, read the
-genre list, pick the 2–4 best fits for the artist and album, and present
-them as a multi-select `AskUserQuestion` for confirmation. The user can
-deselect bad picks or add their own via "Other."
+## 2. Choose the release
 
-Multiple genres are allowed — pass each as its own quoted argument, e.g.
-`genre "<dir>" "Pop Rock" "Y2K Rock"`. They are stored as separate tag
-values; never join them into one string.
-
-## Step 1: Identify release
-
-**If the user provided a release ID:** skip to Step 2.
-
-**Otherwise:**
+Skip this step if the user gave a release ID.
 
 ```bash
 uv run music-tagger candidates "<album-dir>"
 ```
 
-Existing tags provide the search seeds automatically. If results are poor,
-retry with explicit `--artist` and `--album` flags.
+The table lists every candidate, ranked: exact track count, then `partial`,
+then mismatched counts; within each group by tracks within 2s, `on-files`,
+CD, US, and earliest date. The ranking is advice. Decide:
 
-### Selection logic
+- **One clear row** (track counts equal, nearly every track within 2s, the
+  next rows clearly worse): use it. Confirm with the user only when it is
+  not `on-files`.
+- **Several rows tie on durations** (editions that differ only in country,
+  label, or barcode): prefer `on-files`, then the ranking. Show the top 2–3
+  rows and ask with `AskUserQuestion`.
+- **Only `partial` rows fit** (the files are a subset of the release): use
+  the best one when every local track is within 2s.
+- **`No candidates found.`, or no row fits:** retry once with `--artist` and
+  `--album` (alternate spelling, leading "The", soundtrack subtitle). If
+  nothing fits, do not guess. Tell the user the search terms tried, record
+  the skip, and stop:
 
-1. Count the tracks in the album directory.
-2. Filter candidates to releases with a matching track count.
-3. Compare track durations — a good match has most tracks within 2 seconds.
-4. If existing files already have a `musicbrainz_albumid` tag, prefer that
-   release if it appears in the filtered results.
-5. Among remaining candidates, prefer CD media, then US releases.
-6. Break ties by earliest release date.
+  ```bash
+  uv run music-tagger checklist skip "<album-dir>" --reason "<why>"
+  ```
 
-Present the chosen release to the user for confirmation. If multiple strong
-candidates remain, show the top 2-3 and ask.
-
-**MusicBrainz 503 errors:** retry once after 5 seconds.
-
-## Step 2: Tag
-
-### Dry run
+## 3. Choose the cover
 
 ```bash
-uv run music-tagger tag "<album-dir>" --release-id <uuid> --dry-run
+uv run music-tagger art "<album-dir>" --release-id <uuid> --preview
 ```
 
-### Safety gate
+It prints `Candidate:` (a temp file, not in the album) and `Current:`, each
+with dimensions. View both images with Read, then pick one:
 
-The dry run ends with a gate verdict, and its exit code matches:
+- **Candidate shows this release's artwork** and is not lower quality than
+  the current cover: `--cover-file "<candidate path>"`.
+- **Current cover is correct** and the candidate is wrong, a different
+  edition, or lower quality: `--keep-cover`.
+- **Neither is right, or exit 1 (`No cover art available`):** ask the user
+  for an image path and pass `--cover-file "<path>"`.
 
-| Exit | Verdict | Action |
+## 4. Choose genres
+
+If the user gave genres, use them. Otherwise read
+`${CLAUDE_SKILL_DIR}/references/genre-list.md`, pick the 2–4 best fits for
+the artist and album, and confirm with a multi-select `AskUserQuestion`.
+`apply` rejects genres that are not on the list. Pass `--force-genre` only
+when the user deliberately adds a new genre.
+
+## 5. Apply
+
+```bash
+uv run music-tagger apply "<album-dir>" --release-id <uuid> \
+  --cover-file "<image>" --genre "<Genre One>" --genre "<Genre Two>"
+```
+
+Use `--keep-cover` in place of `--cover-file` when step 3 chose it. `apply`
+runs tag, art, genre, rename, and ReplayGain; logs every change; and marks
+the checklist entry done. Gates stop it before anything is written, so
+rerunning with added flags is safe.
+
+| Exit | Output | Action |
 | --- | --- | --- |
-| 0 | `Gate: auto` | Apply. |
-| 3 | `Gate: review` | Show the user the listed overwrites. After they confirm, apply with `--approve-overwrites`. If they reject them, the release is probably wrong: return to release selection. |
-| 4 | `Gate: blocked` | Unresolved ISRC conflicts. See below. |
+| 0 | `Done.` | Report. |
+| 3 | `Gate: review` and the overwrites | Show the user the listed overwrites. If they approve, rerun with `--approve-overwrites`. If they reject them, the release is probably wrong: return to step 2. |
+| 4 | `Gate: blocked` and `ISRC conflict` lines | Resolve the ISRC conflicts below, then rerun. |
+| Other | `apply stopped at <step>` | Report the error and the step. Do not work around it. |
 
-The gate passes changes that fill empty fields, change only IDs or release
-metadata, or change only case, Unicode punctuation, or whitespace. It stops
-only for real changes to a non-empty `title`, `artist`, `album`,
-`albumartist`, or `date`.
+**ISRC conflicts.** The source of an existing library code is unknown: it
+may have been read from the CD or set by another tagger. Show the user a
+table of each conflicting file, its code, and the MusicBrainz codes. Then
+ask with `AskUserQuestion`:
 
-`Warning: ... unverified` lines on stderr do not block writes. List each
-unverified code in the final summary.
+- **Keep file codes (Recommended):** absence from MusicBrainz does not prove
+  a code is wrong. Rerun with `--isrc keep`. Kept codes are locked, so later
+  runs do not raise them again.
+- **Use MusicBrainz codes:** rerun with `--isrc musicbrainz`. It resolves
+  tracks where MusicBrainz lists exactly one code. For a track with several,
+  ask which code to use and add `--isrc-code [DISC-]TRACK=CODE`.
 
-**Exit 4 (`Gate: blocked`):** unresolved ISRC conflicts. The source of an
-existing library code is unknown: it may have been read from the CD or set
-by another tagger. Show the user a table of each conflicting file, its code,
-and the MusicBrainz codes. Then ask with `AskUserQuestion`:
+**Locked fields.** Lines such as `title: X (locked; release has Y)` mean an
+earlier decision is protected. They are expected. Do not pass
+`--ignore-locks` unless the user asks.
 
-- **Keep file codes (Recommended):** absence from MusicBrainz does not
-  prove a code is wrong. Add `--isrc keep`. Kept codes are locked, so later
-  `tag` runs do not raise them again.
-- **Use MusicBrainz codes:** add `--isrc musicbrainz`. It resolves tracks
-  where MusicBrainz lists exactly one code. For a track with several, ask
-  which code to use and add `--isrc-code [DISC-]TRACK=CODE`.
+## 6. Report
 
-Rerun the dry run with the chosen flags and handle its exit code.
-
-### Apply
-
-Run this step only when the final dry run exited 0, or exited 3 and the user
-approved. Pass the same `--isrc`, `--isrc-code`, and `--approve-overwrites`
-flags as that dry run.
-
-```bash
-uv run music-tagger tag "<album-dir>" --release-id <uuid>
-```
-
-## Step 3: Cover art
-
-```bash
-uv run music-tagger art "<album-dir>" --release-id <uuid> --full --force --embed
-```
-
-## Step 4: Genre
-
-```bash
-uv run music-tagger genre "<album-dir>" <genre>
-```
-
-If multiple genres, pass them all:
-
-```bash
-uv run music-tagger genre "<album-dir>" "Genre One" "Genre Two"
-```
-
-## Step 5: Rename
-
-```bash
-uv run music-tagger rename "<album-dir>"
-```
-
-## Step 6: ReplayGain
-
-```bash
-uv run music-tagger replaygain "<album-dir>"
-```
-
-## Step 7: Checklist
-
-If `~/Projects/music-tagger/checklist.md` contains an entry for this album,
-mark it `- [x]`.
+Summarize the release, the cover decision, the genres, any approved
+overwrites, kept ISRC codes, and every `Warning: ... unverified` ISRC line.
+Do not run `nd rescan`; the user triggers rescans after a batch.

@@ -1,191 +1,139 @@
 ---
 name: rip-album
 description: >
-  Rip a CD to FLAC via whipper, tag from MusicBrainz, embed cover art, set
-  genre, rename, compute ReplayGain, and copy to the music library. Use when
-  the user asks to rip a CD or process a new album from disc.
-allowed-tools: "Bash Read Edit AskUserQuestion"
+  Rips a CD to FLAC via whipper, tags it from MusicBrainz, embeds cover art,
+  sets genre, renames files, computes ReplayGain, and copies the album into
+  the music library. Use when the user asks to rip a CD or process a new
+  album from disc.
+allowed-tools: "Bash Read AskUserQuestion"
 ---
 
 # Rip Album
 
-Rip a single CD and process it into the music library. Collect all inputs
-before starting, then execute each step without pausing for user input
-(unless a safety gate fires).
+Rip one CD and place it in the library. The CLI performs every mechanical
+step and writes `changes.log`. The operator makes four decisions: the
+release, the cover, the genres, and approval of anything a gate stops on.
+Do not edit tags or JSON by hand.
 
 ## Inputs
 
-Collect these from the user before starting:
+Collect these before starting:
 
 | Input | Required | Example |
-|---|---|---|
+| --- | --- | --- |
 | Artist | yes | `Matchbox 20` |
 | Album title | yes | `Yourself or Someone Like You` |
 | Barcode | no | `075679272126` |
-| Genre | no | `Y2K Rock` |
-| Release ID | no | MB release UUID if already known |
+| Genres | no | `Y2K Rock` |
+| Release ID | no | MusicBrainz release UUID |
 | Device | no | `/dev/cdrom` (default) |
 
-**Genre selection:** If the user provided genres, validate each one against
-`${CLAUDE_SKILL_DIR}/references/genre-list.md`. If they did not, read the
-genre list, pick the 2–4 best fits for the artist and album, and present
-them as a multi-select `AskUserQuestion` for confirmation. The user can
-deselect bad picks or add their own via "Other."
+## 1. Rip
 
-Multiple genres are allowed — pass each as its own quoted argument, e.g.
-`genre "<dir>" "Pop Rock" "Y2K Rock"`. They are stored as separate tag
-values; never join them into one string.
-
-## Step 1: Rip
-
-Create a temp staging directory:
+Ripping is slow. Run it in the background and wait for it to finish:
 
 ```bash
-STAGING=$(mktemp -d /tmp/rip-XXXXXX)
+uv run music-tagger rip --device <device>
 ```
 
-Rip the CD (this is slow — run in background and wait for completion):
+Add `--release-id <uuid>` when the user gave one. If whipper reports that
+the disc is not in MusicBrainz, rerun with `--unknown`.
 
-```bash
-uv run music-tagger rip "$STAGING" --device <device>
-```
+The first line is `Staging: <path>`; call that `$STAGING`. The output ends
+with an AccurateRip summary.
 
-If the user provided a `--release-id`, pass it through. If the CD is not in
-MusicBrainz, use `--unknown`.
-
-**Gate:** If the rip exits non-zero, stop and report the error. Do not
-proceed to tagging.
-
-Note AccurateRip mismatches in the output but continue — some CDs are not
-in the AR database.
-
-## Step 2: Identify release
-
-**If the user provided a release ID:** skip this step entirely, use that ID.
-
-**Otherwise:**
-
-```bash
-uv run music-tagger candidates "$STAGING" --artist '<artist>' --album '<album>'
-```
-
-If a barcode was provided, add `--barcode '<barcode>'` to narrow results.
-
-### Selection logic
-
-1. Count the tracks in the staging directory.
-2. Filter candidates to CD releases with a matching track count.
-3. If whipper tagged the files with an MB release ID (check the file tags),
-   prefer that release if it appears in the filtered results.
-4. Among remaining candidates, prefer US releases.
-5. Break ties by earliest release date.
-
-Present the chosen release to the user for confirmation. If multiple strong
-candidates remain, show the top 2-3 and ask.
-
-**MusicBrainz 503 errors:** retry once after 5 seconds.
-
-## Step 3: Tag
-
-### Dry run
-
-```bash
-uv run music-tagger tag "$STAGING" --release-id <uuid> --dry-run
-```
-
-### Safety gate
-
-The dry run ends with a gate verdict, and its exit code matches:
-
-| Exit | Verdict | Action |
+| Exit | Meaning | Action |
 | --- | --- | --- |
-| 0 | `Gate: auto` | Apply. |
-| 3 | `Gate: review` | Show the user the listed overwrites. After they confirm, apply with `--approve-overwrites`. If they reject them, the release is probably wrong: return to release selection. |
-| 4 | `Gate: blocked` | Unresolved ISRC conflicts. See below. |
+| 0 | Rip verified, or tracks absent from the AccurateRip database | Continue. Absent tracks are normal. |
+| 3 | A track mismatched AccurateRip or did not copy OK | Show the user the summary. Ask whether to clean the disc and rip again, or continue. |
+| Other | Rip failed | Report the error and stop. |
 
-The gate passes changes that fill empty fields, change only IDs or release
-metadata, or change only case, Unicode punctuation, or whitespace. It stops
-only for real changes to a non-empty `title`, `artist`, `album`,
-`albumartist`, or `date`.
+## 2. Choose the release
 
-`Warning: ... unverified` lines on stderr do not block writes. List each
-unverified code in the final summary.
-
-**Exit 4 (`Gate: blocked`):** unresolved ISRC conflicts. Rerun the dry run
-with `--isrc keep`. Whipper read those codes from this disc, and absence
-from MusicBrainz does not prove them wrong. This decision does not need user
-confirmation. Kept codes are locked. List each kept code in the final
-summary.
-
-### Apply
-
-Run this step only when the final dry run exited 0, or exited 3 and the user
-approved. Pass the same `--isrc`, `--isrc-code`, and `--approve-overwrites`
-flags as that dry run.
+Skip this step if the user gave a release ID.
 
 ```bash
-uv run music-tagger tag "$STAGING" --release-id <uuid>
+uv run music-tagger candidates "$STAGING" --artist "<artist>" --album "<album>"
 ```
 
-## Step 4: Cover art
+Add `--barcode "<barcode>"` when the user gave one. The table lists every
+candidate, ranked: exact track count, then `partial`, then mismatched
+counts; within each group by tracks within 2s, `on-files` (the release
+whipper matched), CD, US, and earliest date. The ranking is advice. Decide:
+
+- **One clear row** (track counts equal, nearly every track within 2s, the
+  next rows clearly worse): use it. Confirm with the user only when it is
+  not `on-files`.
+- **Several rows tie on durations** (editions that differ only in country,
+  label, or barcode): prefer a barcode match, then `on-files`, then the
+  ranking. Show the top 2–3 rows and ask with `AskUserQuestion`.
+- **`No candidates found.`, or no row fits:** retry once with different
+  `--artist` or `--album` spelling. If nothing fits, tell the user the
+  search terms tried and stop. Do not place an unidentified album.
+
+## 3. Choose the cover
 
 ```bash
-uv run music-tagger art "$STAGING" --release-id <uuid> --full --force --embed
+uv run music-tagger art "$STAGING" --release-id <uuid> --preview
 ```
 
-## Step 5: Genre
+It prints `Candidate:` (a temp file) with dimensions. View it with Read.
+If it shows this release's artwork, pass `--cover-file "<candidate path>"`.
+If it is wrong, or exit 1 (`No cover art available`), ask the user for an
+image path and pass `--cover-file "<path>"`.
+
+## 4. Choose genres
+
+If the user gave genres, use them. Otherwise read
+`${CLAUDE_SKILL_DIR}/references/genre-list.md`, pick the 2–4 best fits for
+the artist and album, and confirm with a multi-select `AskUserQuestion`.
+`apply` rejects genres that are not on the list. Pass `--force-genre` only
+when the user deliberately adds a new genre.
+
+## 5. Apply
 
 ```bash
-uv run music-tagger genre "$STAGING" <genre>
+uv run music-tagger apply "$STAGING" --release-id <uuid> \
+  --cover-file "<image>" --genre "<Genre One>" --genre "<Genre Two>"
 ```
 
-If multiple genres, pass them all:
+`apply` runs tag, art, genre, rename, and ReplayGain, and logs every change.
+Gates stop it before anything is written, so rerunning with added flags is
+safe.
+
+| Exit | Output | Action |
+| --- | --- | --- |
+| 0 | `Done.` | Continue to step 6. |
+| 3 | `Gate: review` and the overwrites | Show the user the listed overwrites. If they approve, rerun with `--approve-overwrites`. If they reject them, the release is probably wrong: return to step 2. |
+| 4 | `Gate: blocked` and `ISRC conflict` lines | Rerun with `--isrc keep`. Whipper read those codes from this disc, and absence from MusicBrainz does not prove them wrong. This needs no user confirmation. |
+| Other | `apply stopped at <step>` | Report the error and the step. Do not work around it. |
+
+## 6. Place
+
+Preview the destination:
 
 ```bash
-uv run music-tagger genre "$STAGING" "Genre One" "Genre Two"
+uv run music-tagger place "$STAGING" --dry-run
 ```
 
-## Step 6: Rename
+Check the artist and album directory names. Correct a wrong name with
+`--artist-dir "<name>"` or `--album-dir "<name>"`. If the output says
+`(exists)` or exits 1 because the destination exists, the library already
+has this album: stop and ask the user whether to use a different
+`--album-dir` (for example `<Album> (Remaster)`) or to `--merge`.
+
+Then copy with the same flags:
 
 ```bash
-uv run music-tagger rename "$STAGING"
+uv run music-tagger place "$STAGING"
 ```
 
-## Step 7: ReplayGain
+It verifies every file by SHA-256, logs the copy, and removes `$STAGING`.
+Exit 1 means a copy failed; `$STAGING` is kept. Report the failed files.
 
-```bash
-uv run music-tagger replaygain "$STAGING"
-```
+## 7. Report
 
-## Step 8: Copy to library
-
-Build evidence, compute placement, then copy. Create the working JSON
-files outside `$STAGING` so they don't get copied to the library:
-
-```bash
-WORK=$(mktemp -d /tmp/rip-work-XXXXXX)
-uv run music-tagger read "$STAGING" -o "$WORK/evidence.json"
-uv run music-tagger path-for --evidence "$WORK/evidence.json" -o "$WORK/plan.json"
-uv run music-tagger copy --plan "$WORK/plan.json" --dry-run
-```
-
-Review the dry-run output. Confirm the artist/album directory names are
-correct and the destination does not collide with an existing album (unless
-replacing it intentionally). Then apply:
-
-```bash
-uv run music-tagger copy --plan "$WORK/plan.json"
-```
-
-## Step 9: Cleanup
-
-Remove the staging and working directories:
-
-```bash
-rm -rf "$STAGING" "$WORK"
-```
-
-## Step 10: Checklist
-
-If `~/Projects/music-tagger/checklist.md` exists and contains an entry for
-this album, mark it `- [x]`.
+Summarize the AccurateRip result, the release, the cover, the genres, any
+approved overwrites, kept ISRC codes, every `Warning: ... unverified` ISRC
+line, and the library path. Do not run `nd rescan`; the user triggers
+rescans.

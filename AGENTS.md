@@ -106,12 +106,18 @@ Key CLI subcommands, driven by Claude Code in conversation:
 
 ## Library workflow
 
-**For ripping a new CD**, use the `rip-album` skill — it handles the full
-pipeline automatically (rip → candidates → tag → art → genre → rename →
-ReplayGain → copy).
+**For ripping a new CD**, use the `rip-album` skill: `rip` → `candidates`
+→ `art --preview` → `apply` → `place`.
 
-**For fixing existing library albums**, use the `fix-album` skill — it
-handles candidates → tag → art → genre → rename → ReplayGain in-place.
+**For fixing existing library albums**, use the `fix-album` skill:
+`checklist next` → `candidates` → `art --preview` → `apply`, in place.
+
+**Design rule: anything that can be scripted is a CLI command.** The operator
+exists for judgment: which release, whether a cover is right, which genres,
+and approving what a gate stops on. Skills must not have the operator edit
+tags, JSON, or the checklist by hand, classify diffs, apply tie-break rules,
+or chain temp files. When a skill step needs mechanical work, add a command
+or flag instead.
 
 Processing the library is staged album by album across sessions:
 
