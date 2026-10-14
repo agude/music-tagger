@@ -268,6 +268,15 @@ class TestSearchCandidates:
         assert len(candidates) == 1
         assert candidates[0].id == "release-1"
 
+    def test_no_results_returns_empty_list(self, flac_album: Path) -> None:
+        mock_mb = MagicMock()
+        mock_mb.search_releases.return_value = []
+
+        album, candidates = search_candidates(flac_album, mock_mb)
+
+        assert album.track_count == 3
+        assert candidates == []
+
     def test_empty_dir_raises(self, tmp_path: Path) -> None:
         import pytest
 
@@ -1075,3 +1084,101 @@ class TestApplyChangesLocksKeptIsrc:
         updated = read_album(flac_album).tracks[0]
         assert updated.tags["isrc"] == "USDW10110279"
         assert updated.locked_fields == []
+
+
+def _local_album(durations: dict[int, float], albumid: str = "") -> AlbumTags:
+    tags = {"musicbrainz_albumid": albumid} if albumid else {}
+    tracks = [
+        TrackTags(Path(f"/music/0{n}.flac"), {"tracknumber": str(n), **tags}, seconds, "flac")
+        for n, seconds in durations.items()
+    ]
+    return AlbumTags(Path("/music"), tracks)
+
+
+def _candidate(
+    release_id: str,
+    seconds: list[float],
+    *,
+    country: str = "US",
+    date: str = "1973",
+    media: str = "CD",
+) -> MBRelease:
+    tracks = [
+        MBTrack(number=n, title=f"T{n}", duration_ms=int(value * 1000))
+        for n, value in enumerate(seconds, start=1)
+    ]
+    return MBRelease(
+        id=release_id,
+        title="Desperado",
+        country=country,
+        date=date,
+        format=media,
+        track_count=len(tracks),
+        discs={1: tracks},
+    )
+
+
+LOCAL_DURATIONS = {1: 200.0, 2: 180.0, 3: 210.0}
+
+
+class TestRankCandidates:
+    def _ranked_ids(self, album: AlbumTags, *candidates: MBRelease) -> list[str]:
+        return [match.release.id for match in score_candidates(album, list(candidates))]
+
+    def test_track_count_mismatch_ranks_last(self) -> None:
+        longer = _candidate("longer", [200.0, 180.0, 210.0, 190.0])
+        exact = _candidate("exact", [201.5, 181.5, 211.5])
+
+        assert self._ranked_ids(_local_album(LOCAL_DURATIONS), longer, exact) == ["exact", "longer"]
+
+    def test_more_tracks_within_2s_ranks_first(self) -> None:
+        close = _candidate("close", [200.0, 180.0, 210.0])
+        far = _candidate("far", [200.0, 190.0, 220.0])
+
+        assert self._ranked_ids(_local_album(LOCAL_DURATIONS), far, close) == ["close", "far"]
+
+    def test_release_on_files_ranks_first_among_equals(self) -> None:
+        album = _local_album(LOCAL_DURATIONS, albumid="current")
+        other = _candidate("other", [200.0, 180.0, 210.0])
+        current = _candidate("current", [201.0, 181.0, 211.0])
+
+        matches = score_candidates(album, [other, current])
+
+        assert [m.release.id for m in matches] == ["current", "other"]
+        assert matches[0].flags == ["on-files"]
+        assert matches[1].flags == []
+
+    def test_cd_then_us_then_earliest_date(self) -> None:
+        same = [200.0, 180.0, 210.0]
+        candidates = [
+            _candidate("digital", same, media="Digital Media"),
+            _candidate("gb", same, country="GB"),
+            _candidate("us-late", same, date="1999"),
+            _candidate("us-early", same, date="1973"),
+        ]
+
+        assert self._ranked_ids(_local_album(LOCAL_DURATIONS), *candidates) == [
+            "us-early",
+            "us-late",
+            "gb",
+            "digital",
+        ]
+
+    def test_partial_album_flagged_and_ranked_with_count_matches(self) -> None:
+        album = _local_album({1: 200.0, 3: 210.0})
+        full = _candidate("full", [200.0, 180.0, 210.0])
+        mismatched = _candidate("mismatched", [200.0])
+
+        matches = score_candidates(album, [mismatched, full])
+
+        assert [m.release.id for m in matches] == ["full", "mismatched"]
+        assert matches[0].flags == ["partial"]
+        assert matches[1].flags == []
+
+    def test_flags_survive_serialization(self) -> None:
+        album = _local_album(LOCAL_DURATIONS, albumid="current")
+        match = score_candidates(album, [_candidate("current", [200.0, 180.0, 210.0])])[0]
+
+        restored = CandidateMatch.from_dict(match.to_dict())
+
+        assert restored.flags == ["on-files"]

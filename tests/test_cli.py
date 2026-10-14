@@ -738,7 +738,7 @@ class TestCandidatesCommand:
         ):
             album = read_album(flac_album)
             mock_search.return_value = (album, [release])
-            _print_candidates([str(flac_album)])
+            _print_candidates([str(flac_album), "--json"])
 
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         data = json.loads(captured.out)
@@ -779,9 +779,83 @@ class TestCandidatesCommand:
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "Eagles" in captured.out
         assert "r-1" in captured.out
-        assert "scored" in captured.out
+        assert "Release ID" in captured.out
         data = json.loads(out.read_text())
         assert data["album"]["artist"] == "Eagles"
+
+
+def _run_candidates(album_dir: Path, releases: list[MBRelease], *args: str) -> None:
+    from music_tagger.cli import _print_candidates
+
+    with (
+        patch("music_tagger.cli.search_candidates") as search,
+        patch("music_tagger.cli.MusicBrainzClient"),
+    ):
+        search.return_value = (read_album(album_dir), releases)
+        _print_candidates([str(album_dir), *args])
+
+
+class TestCandidatesTable:
+    def _release(self, release_id: str, **overrides: object) -> MBRelease:
+        fields: dict = {
+            "id": release_id,
+            "title": "Desperado",
+            "date": "1973-04-17",
+            "country": "US",
+            "label": "Asylum",
+            "barcode": "075596066624",
+            "format": "CD",
+            "track_count": 3,
+            "discs": {
+                1: [
+                    MBTrack(number=1, title="T1", duration_ms=200000),
+                    MBTrack(number=2, title="T2", duration_ms=200000),
+                    MBTrack(number=3, title="T3", duration_ms=200000),
+                ]
+            },
+        }
+        fields.update(overrides)
+        return MBRelease(**fields)
+
+    def test_prints_table_by_default(self, flac_album: Path, capsys: object) -> None:
+        _run_candidates(flac_album, [self._release("test-album-id-1"), self._release("other")])
+
+        lines = capsys.readouterr().out.splitlines()  # type: ignore[attr-defined]
+        assert lines[0] == "Local: Eagles — Desperado (3 tracks)"
+        assert lines[1] == 'Searched: artist="Eagles" album="Desperado"'
+        header = next(line for line in lines if "Release ID" in line)
+        for column in (
+            "#",
+            "Tracks",
+            "Within 2s",
+            "Max dev",
+            "Country",
+            "Date",
+            "Label",
+            "Barcode",
+            "Flags",
+            "Title",
+        ):
+            assert column in header
+        rows = lines[lines.index(header) + 1 :]
+        assert rows[0].split()[:2] == ["1", "test-album-id-1"]
+        assert "on-files" in rows[0]
+        assert rows[1].split()[:2] == ["2", "other"]
+        assert "3/3" in rows[0]
+
+    def test_reports_override_search_terms(self, flac_album: Path, capsys: object) -> None:
+        _run_candidates(flac_album, [self._release("r-1")], "--artist", "The Eagles")
+
+        out = capsys.readouterr().out  # type: ignore[attr-defined]
+        assert 'Searched: artist="The Eagles" album="Desperado"' in out
+
+    def test_reports_no_candidates(self, flac_album: Path, capsys: object) -> None:
+        _run_candidates(flac_album, [], "--barcode", "123")
+
+        out = capsys.readouterr().out  # type: ignore[attr-defined]
+        assert 'Searched: artist="Eagles" album="Desperado" barcode="123"' in out
+        assert "No candidates found." in out
+        assert "Release ID" not in out
 
 
 class TestTagCommand:

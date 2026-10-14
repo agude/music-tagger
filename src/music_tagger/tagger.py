@@ -154,11 +154,15 @@ class MatchStats:
 class CandidateMatch:
     release: MBRelease
     stats: MatchStats
+    # "on-files": the files already carry this release ID.
+    # "partial": the files are a subset of this release's tracks.
+    flags: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "release": self.release.to_dict(),
             "match": self.stats.to_dict(),
+            "flags": list(self.flags),
         }
 
     @classmethod
@@ -171,6 +175,7 @@ class CandidateMatch:
                 tracks_compared=data["match"]["tracks_compared"],
                 max_deviation_secs=data["match"]["max_deviation_secs"],
             ),
+            flags=list(data.get("flags", [])),
         )
 
 
@@ -181,10 +186,15 @@ def score_candidates(
     """Score candidates by duration match against local evidence.
 
     For each candidate, compares local track durations to MB track durations,
-    matching by track number within each disc. Returns results sorted by
-    match quality (most tracks within 2s first, then lowest max deviation).
+    matching by track number within each disc. Returns results ranked by
+    `_rank_key`. The ranking is advice; the operator makes the choice.
     """
     results: list[CandidateMatch] = []
+    local_release_ids = {
+        track.tags["musicbrainz_albumid"]
+        for track in album.tracks
+        if track.tags.get("musicbrainz_albumid")
+    }
 
     local_by_key: dict[tuple[int, int], float] = {}
     for track in album.tracks:
@@ -209,6 +219,11 @@ def score_candidates(
                 if dev <= 2.0:
                     within_2s += 1
 
+        flags = []
+        if candidate.id in local_release_ids:
+            flags.append("on-files")
+        if _is_partial_match(album, local_by_key, candidate):
+            flags.append("partial")
         results.append(
             CandidateMatch(
                 release=candidate,
@@ -218,11 +233,47 @@ def score_candidates(
                     tracks_compared=compared,
                     max_deviation_secs=max_dev,
                 ),
+                flags=flags,
             )
         )
 
-    results.sort(key=lambda m: (-m.stats.tracks_within_2s, m.stats.max_deviation_secs))
+    results.sort(key=_rank_key)
     return results
+
+
+def _is_partial_match(
+    album: AlbumTags, local_by_key: dict[tuple[int, int], float], candidate: MBRelease
+) -> bool:
+    """True when every local track's (disc, number) exists in a longer release."""
+    if album.track_count >= candidate.track_count or len(local_by_key) != album.track_count:
+        return False
+    release_keys = {
+        (disc_num, mb_track.number)
+        for disc_num, disc_tracks in candidate.discs.items()
+        for mb_track in disc_tracks
+    }
+    return set(local_by_key) <= release_keys
+
+
+def _rank_key(match: CandidateMatch) -> tuple[int, int, bool, bool, bool, str, float]:
+    """Exact track count, then partial, then durations, the release on the files, CD, US,
+    earliest date."""
+    release = match.release
+    if match.stats.track_count_match:
+        count_rank = 0
+    elif "partial" in match.flags:
+        count_rank = 1
+    else:
+        count_rank = 2
+    return (
+        count_rank,
+        -match.stats.tracks_within_2s,
+        "on-files" not in match.flags,
+        "CD" not in release.format,
+        release.country != "US",
+        release.date or "9999",
+        match.stats.max_deviation_secs,
+    )
 
 
 def _parse_disc_number(track: TrackTags) -> int:
@@ -372,9 +423,6 @@ def search_candidates(
         raise ValueError("No artist/album in tags and none provided via --artist/--album")
 
     candidates = mb_client.search_releases(search_artist, search_album, barcode=barcode)
-    if not candidates:
-        raise ValueError(f"No MusicBrainz results for '{search_artist}' - '{search_album}'")
-
     detailed: list[MBRelease] = []
     for c in candidates:
         detailed.append(mb_client.fetch_release(c.id))

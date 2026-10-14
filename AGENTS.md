@@ -15,7 +15,15 @@ Key CLI subcommands, driven by Claude Code in conversation:
    with split or missing MusicBrainz IDs, writes a markdown checklist.
 
 2. `uv run music-tagger candidates <album-dir>` — reads audio file tags and
-   durations, searches MusicBrainz for CD releases, prints everything.
+   durations, searches MusicBrainz for CD releases, and prints every
+   candidate as a ranked table: track counts, tracks within 2s, max
+   deviation, country, date, label, barcode, flags (`on-files` when the
+   files already carry the release ID, `partial` when the files are a
+   subset of the release), and title. Rank order: exact track count,
+   partial, mismatch; then tracks within 2s, `on-files`, CD, US, earliest
+   date. The ranking is advice; the operator chooses. Prints
+   `No candidates found.` with the search terms when MusicBrainz returns
+   nothing. `--json` prints JSON instead; `-o FILE` also writes it.
 
 3. `uv run music-tagger tag <album-dir> --release-id <uuid> [--dry-run] [--log changes.log]`
    — fetches the chosen release from MusicBrainz, computes a field-by-field

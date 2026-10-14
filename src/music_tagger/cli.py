@@ -20,6 +20,7 @@ from .placement import PlacementPlan, compute_placement, copy_files
 from .tagger import (
     ISRC_POLICIES,
     AlbumResult,
+    CandidateMatch,
     TrackDiff,
     _parse_disc_number,
     _parse_track_number,
@@ -643,12 +644,16 @@ def _print_candidates(argv: list[str] | None = None) -> None:
         "--album", default=None, help="Override album title (for freshly ripped files)."
     )
     parser.add_argument("--barcode", default=None, help="Filter results by barcode (UPC/EAN).")
-    parser.add_argument(
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument(
         "-o",
         "--out",
         type=Path,
         default=None,
-        help="Output JSON file (prints digest to stdout).",
+        help="Also write the full results as JSON to this file.",
+    )
+    output.add_argument(
+        "--json", action="store_true", help="Print JSON to stdout instead of the table."
     )
     args = parser.parse_args(argv)
 
@@ -666,32 +671,77 @@ def _print_candidates(argv: list[str] | None = None) -> None:
             album_title=args.album,
             barcode=args.barcode,
         )
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
     finally:
         mb_client.close()
 
     matches = score_candidates(album, candidates)
+    data = {"album": album.to_dict(), "matches": [m.to_dict() for m in matches]}
+    if args.json:
+        sys.stdout.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        return
+    if args.out:
+        args.out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
-    data = {
-        "album": album.to_dict(),
-        "matches": [m.to_dict() for m in matches],
-    }
-
-    lines = [
-        f"{album.artist} — {album.album}  ({album.track_count} tracks)",
-        "",
-        f"{len(matches)} candidates scored:",
-    ]
-    for m in matches:
-        r = m.release
-        s = m.stats
-        count_ok = "=" if s.track_count_match else "!"
-        lines.append(
-            f"  [{r.id}]  {r.title} ({r.date})"
-            f" {r.country} / {r.label} / {r.format}"
-            f"  {s.tracks_within_2s}/{s.tracks_compared} within 2s"
-            f"  max_dev={s.max_deviation_secs:.1f}s  count{count_ok}"
+    searched = f'artist="{args.artist or album.artist}" album="{args.album or album.album}"'
+    if args.barcode:
+        searched += f' barcode="{args.barcode}"'
+    print(f"Local: {album.artist} — {album.album} ({album.track_count} tracks)")
+    print(f"Searched: {searched}")
+    print()
+    if not matches:
+        print("No candidates found.")
+        return
+    print(
+        _format_table(
+            _CANDIDATE_COLUMNS, [_candidate_row(i, m, album) for i, m in enumerate(matches, 1)]
         )
-    _output_json(data, args.out, "\n".join(lines))
+    )
+
+
+_CANDIDATE_COLUMNS = [
+    "#",
+    "Release ID",
+    "Tracks",
+    "Within 2s",
+    "Max dev",
+    "Country",
+    "Date",
+    "Label",
+    "Barcode",
+    "Flags",
+    "Title",
+]
+
+
+def _candidate_row(rank: int, match: CandidateMatch, album: AlbumTags) -> list[str]:
+    release = match.release
+    stats = match.stats
+    return [
+        str(rank),
+        release.id,
+        f"{album.track_count}/{release.track_count}",
+        f"{stats.tracks_within_2s}/{stats.tracks_compared}",
+        f"{stats.max_deviation_secs:.1f}s",
+        release.country or "-",
+        release.date or "-",
+        release.label or "-",
+        release.barcode or "-",
+        ",".join(match.flags) or "-",
+        release.title,
+    ]
+
+
+def _format_table(header: list[str], rows: list[list[str]]) -> str:
+    """Align columns with two spaces; the last column is not padded."""
+    widths = [max(len(row[i]) for row in [header, *rows]) for i in range(len(header) - 1)]
+    lines = []
+    for row in [header, *rows]:
+        cells = [cell.ljust(width) for cell, width in zip(row, widths, strict=False)]
+        lines.append("  ".join([*cells, row[-1]]))
+    return "\n".join(lines)
 
 
 def _print_tag_issues(result: AlbumResult) -> None:
