@@ -111,17 +111,17 @@ only for real changes to a non-empty `title`, `artist`, `album`,
 `Warning: ... unverified` lines on stderr do not block writes. List each
 unverified code in the final summary.
 
-**Exit 4 (`Gate: blocked`):** `tag` writes nothing until the conflicts are
-resolved. Skip the apply step below. Follow
-`${CLAUDE_SKILL_DIR}/references/isrc-conflicts.md` and keep every file
-code. Whipper read those codes from this disc, and absence from
-MusicBrainz does not prove them wrong. This decision does not need user
-confirmation. List each kept code in the final summary.
+**Exit 4 (`Gate: blocked`):** unresolved ISRC conflicts. Rerun the dry run
+with `--isrc keep`. Whipper read those codes from this disc, and absence
+from MusicBrainz does not prove them wrong. This decision does not need user
+confirmation. Kept codes are locked. List each kept code in the final
+summary.
 
 ### Apply
 
-Run this step only when the dry run exited 0, or exited 3 and the user approved.
-Add `--approve-overwrites` in the second case.
+Run this step only when the final dry run exited 0, or exited 3 and the user
+approved. Pass the same `--isrc`, `--isrc-code`, and `--approve-overwrites`
+flags as that dry run.
 
 ```bash
 uv run music-tagger tag "$STAGING" --release-id <uuid>

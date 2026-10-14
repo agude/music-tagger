@@ -176,29 +176,21 @@ src/music_tagger/
 
 ### Resolve an ISRC conflict
 
-Create the review files outside the album directory:
+`tag` resolves conflicts from flags:
 
-```bash
-WORK=$(mktemp -d /tmp/music-tagger-review-XXXXXX)
-uv run music-tagger read "<album-dir>" -o "$WORK/evidence.json"
-uv run music-tagger mb release <uuid> -o "$WORK/release.json"
-uv run music-tagger diff --evidence "$WORK/evidence.json" --release "$WORK/release.json" -o "$WORK/diff.json"
-```
+- `--isrc keep` keeps every file code and locks `isrc` on those tracks, so
+  the conflict does not return on the next run.
+- `--isrc musicbrainz` takes MusicBrainz's code where it lists exactly one.
+  Tracks with several codes stay unresolved.
+- `--isrc-code [DISC-]TRACK=CODE` picks a code for one track and overrides
+  `--isrc` for it. The code must be the file's code or a MusicBrainz code.
 
-Review each track's `conflicts` entry. Set `resolution` to its `old_value`
-to preserve the file's code, or to one of its `candidate_values` to replace
-it. Retain the conflict entry so the decision remains in the review JSON
-and change log. A `null` resolution or an unlisted value blocks writes.
-Do not add a duplicate ISRC entry to `changes`; the resolution generates
-the required change.
-
-```bash
-uv run music-tagger write-tags --diff "$WORK/diff.json" --dry-run
-uv run music-tagger write-tags --diff "$WORK/diff.json" --log changes.log
-```
-
-Old release JSON containing only a scalar `isrc` must be fetched again:
-that value may have been selected from a longer list.
+The diff JSON path (`read` → `diff` → `write-tags`) still honors a
+`resolution` set on each conflict, and a kept resolution locks `isrc` there
+too. Do not add a duplicate ISRC entry to `changes`; the resolution
+generates the required change. Old release JSON containing only a scalar
+`isrc` must be fetched again: that value may have been selected from a
+longer list.
 
 ## Format differences that bite
 

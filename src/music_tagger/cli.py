@@ -16,6 +16,7 @@ from .musicbrainz import MBRelease, MusicBrainzClient
 from .navidrome import NavidromeClient, SongRating
 from .placement import PlacementPlan, compute_placement, copy_files
 from .tagger import (
+    ISRC_POLICIES,
     AlbumResult,
     TrackDiff,
     _parse_disc_number,
@@ -23,6 +24,7 @@ from .tagger import (
     apply_changes,
     build_diff,
     overwrites_needing_review,
+    resolve_isrc_conflicts,
     score_candidates,
     search_candidates,
 )
@@ -471,9 +473,10 @@ def _write_log_entry(log_path: Path, result: AlbumResult) -> None:
         lines.extend(change_lines)
         for conflict in diff.conflicts:
             candidates = ", ".join(conflict.candidate_values)
+            kept = "; locked" if conflict.resolution == conflict.old_value else ""
             lines.append(
                 f"    {conflict.field} conflict: file={conflict.old_value}; "
-                f"MusicBrainz=[{candidates}]; resolution={conflict.resolution}"
+                f"MusicBrainz=[{candidates}]; resolution={conflict.resolution}{kept}"
             )
     lines.append("")
     lines.append("---")
@@ -735,7 +738,10 @@ def _print_gate(result: AlbumResult) -> int:
         count = sum(
             not conflict.is_resolved for diff in result.diffs for conflict in diff.conflicts
         )
-        print(f"Gate: blocked — {count} unresolved ISRC conflict(s); see stderr.")
+        print(
+            f"Gate: blocked — {count} unresolved ISRC conflict(s); see stderr. "
+            "Rerun with --isrc keep, --isrc musicbrainz, or --isrc-code [DISC-]TRACK=CODE."
+        )
         return EXIT_BLOCKED
 
     overwrites = overwrites_needing_review(result)
@@ -1422,6 +1428,20 @@ def _write_replaygain_log(
         f.write("\n".join(lines))
 
 
+def _parse_isrc_code(spec: str) -> tuple[tuple[int, int], str]:
+    """Parse "[DISC-]TRACK=CODE" into ((disc, track), code)."""
+    position, _, code = spec.partition("=")
+    disc_text, _, track_text = position.rpartition("-")
+    try:
+        disc = int(disc_text) if disc_text else 1
+        track = int(track_text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"expected [DISC-]TRACK=CODE, got {spec!r}") from None
+    if not code:
+        raise argparse.ArgumentTypeError(f"missing ISRC after '=' in {spec!r}")
+    return (disc, track), code
+
+
 def _lock(argv: list[str] | None = None) -> None:
     _edit_locks(argv, locking=True)
 
@@ -1578,6 +1598,21 @@ def _tag(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Write changes that replace a non-empty title, artist, album, albumartist, or date.",
     )
+    parser.add_argument(
+        "--isrc",
+        choices=ISRC_POLICIES,
+        default=None,
+        help="Resolve ISRC conflicts: keep (and lock) the file codes, or take MusicBrainz's "
+        "code where it lists exactly one.",
+    )
+    parser.add_argument(
+        "--isrc-code",
+        action="append",
+        type=_parse_isrc_code,
+        default=[],
+        metavar="[DISC-]TRACK=CODE",
+        help="Resolve one track's ISRC conflict to CODE. Overrides --isrc for that track.",
+    )
     args = parser.parse_args(argv)
 
     target: Path = args.path.resolve()
@@ -1597,9 +1632,14 @@ def _tag(argv: list[str] | None = None) -> None:
         mb_client.close()
 
     result = build_diff(album, release, ignore_locks=args.ignore_locks)
+    try:
+        resolve_isrc_conflicts(result, policy=args.isrc, codes=dict(args.isrc_code))
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
     _print_diff(result)
 
-    if not result.has_changes and not result.has_unresolved_conflicts:
+    if not result.has_changes and not any(diff.conflicts for diff in result.diffs):
         return
 
     gate = _print_gate(result)

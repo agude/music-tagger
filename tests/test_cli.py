@@ -1277,3 +1277,99 @@ class TestTagCommandGate:
         _run_tag(flac_album, _gate_release("Desperado"))
 
         assert read_album(flac_album).tracks[0].tags["musicbrainz_albumid"] == "r-1"
+
+
+def _isrc_conflict_album(album_dir: Path, *candidate_lists: list[str]) -> MBRelease:
+    """Give the first tracks file ISRC USIR19902220 and a release that disagrees."""
+    tracks = read_album(album_dir).tracks
+    release = _gate_release("Desperado")
+    for index, candidates in enumerate(candidate_lists):
+        write_tags(tracks[index], [TagChange("isrc", "", "USIR19902220")])
+        release.discs[1][index].isrcs = candidates
+    return release
+
+
+class TestTagCommandIsrc:
+    def test_blocked_gate_names_the_flags(self, flac_album: Path, capsys: object) -> None:
+        release = _isrc_conflict_album(flac_album, ["USDW10110279"])
+
+        with pytest.raises(SystemExit):
+            _run_tag(flac_album, release, "--dry-run")
+
+        assert "--isrc keep" in capsys.readouterr().out  # type: ignore[attr-defined]
+
+    def test_keep_writes_other_tags_and_locks_isrc(
+        self, flac_album: Path, default_log: Path
+    ) -> None:
+        release = _isrc_conflict_album(flac_album, ["USDW10110279"])
+
+        _run_tag(flac_album, release, "--isrc", "keep")
+
+        updated = read_album(flac_album).tracks[0]
+        assert updated.tags["isrc"] == "USIR19902220"
+        assert updated.tags["musicbrainz_albumid"] == "r-1"
+        assert updated.locked_fields == ["isrc"]
+        assert "resolution=USIR19902220" in default_log.read_text()
+
+    def test_keep_dry_run_passes_gate_without_writing(
+        self, flac_album: Path, capsys: object
+    ) -> None:
+        release = _isrc_conflict_album(flac_album, ["USDW10110279"])
+        before = {path: path.read_bytes() for path in flac_album.glob("*.flac")}
+
+        _run_tag(flac_album, release, "--isrc", "keep", "--dry-run")
+
+        assert "Gate: auto" in capsys.readouterr().out  # type: ignore[attr-defined]
+        assert {path: path.read_bytes() for path in before} == before
+
+    def test_musicbrainz_replaces_single_candidate(self, flac_album: Path) -> None:
+        release = _isrc_conflict_album(flac_album, ["USDW10110279"])
+
+        _run_tag(flac_album, release, "--isrc", "musicbrainz")
+
+        assert read_album(flac_album).tracks[0].tags["isrc"] == "USDW10110279"
+
+    def test_musicbrainz_blocks_on_several_candidates(
+        self, flac_album: Path, capsys: object
+    ) -> None:
+        release = _isrc_conflict_album(flac_album, ["USDW10110279", "USIR19701434"])
+
+        with pytest.raises(SystemExit) as error:
+            _run_tag(flac_album, release, "--isrc", "musicbrainz")
+
+        assert error.value.code == EXIT_BLOCKED
+        assert "--isrc-code" in capsys.readouterr().out  # type: ignore[attr-defined]
+
+    def test_code_picks_one_candidate(self, flac_album: Path) -> None:
+        release = _isrc_conflict_album(flac_album, ["USDW10110279", "USIR19701434"])
+
+        _run_tag(flac_album, release, "--isrc-code", "1=USIR19701434")
+
+        assert read_album(flac_album).tracks[0].tags["isrc"] == "USIR19701434"
+
+    def test_code_accepts_disc_prefix(self, flac_album: Path) -> None:
+        release = _isrc_conflict_album(flac_album, ["USDW10110279", "USIR19701434"])
+
+        _run_tag(flac_album, release, "--isrc-code", "1-1=USIR19701434")
+
+        assert read_album(flac_album).tracks[0].tags["isrc"] == "USIR19701434"
+
+    def test_invalid_code_value_exits_without_writing(
+        self, flac_album: Path, capsys: object
+    ) -> None:
+        release = _isrc_conflict_album(flac_album, ["USDW10110279"])
+        before = {path: path.read_bytes() for path in flac_album.glob("*.flac")}
+
+        with pytest.raises(SystemExit) as error:
+            _run_tag(flac_album, release, "--isrc-code", "1=USXX00000000")
+
+        assert error.value.code == 1
+        assert {path: path.read_bytes() for path in before} == before
+        assert "USXX00000000" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+    @pytest.mark.parametrize("spec", ["USIR19701434", "x=USIR19701434", "1="])
+    def test_malformed_code_is_a_usage_error(self, flac_album: Path, spec: str) -> None:
+        with pytest.raises(SystemExit) as error:
+            _run_tag(flac_album, _gate_release("Desperado"), "--isrc-code", spec)
+
+        assert error.value.code == 2

@@ -91,24 +91,25 @@ only for real changes to a non-empty `title`, `artist`, `album`,
 `Warning: ... unverified` lines on stderr do not block writes. List each
 unverified code in the final summary.
 
-**Exit 4 (`Gate: blocked`):** `tag` writes nothing until the conflicts are
-resolved. Skip the apply step below. The source of an existing library code is
-unknown: it may have been read from the CD or set by another tagger.
-Show the user a table of each conflicting file, its code, and the
-MusicBrainz codes. Then ask with `AskUserQuestion`:
-- **Keep file codes (Recommended):** absence from MusicBrainz does not
-  prove a code is wrong.
-- **Use MusicBrainz codes:** this applies only to tracks where MusicBrainz
-  lists exactly one code. If a track lists several codes, ask which one to
-  use.
+**Exit 4 (`Gate: blocked`):** unresolved ISRC conflicts. The source of an
+existing library code is unknown: it may have been read from the CD or set
+by another tagger. Show the user a table of each conflicting file, its code,
+and the MusicBrainz codes. Then ask with `AskUserQuestion`:
 
-Apply the decision with
-`${CLAUDE_SKILL_DIR}/references/isrc-conflicts.md`.
+- **Keep file codes (Recommended):** absence from MusicBrainz does not
+  prove a code is wrong. Add `--isrc keep`. Kept codes are locked, so later
+  `tag` runs do not raise them again.
+- **Use MusicBrainz codes:** add `--isrc musicbrainz`. It resolves tracks
+  where MusicBrainz lists exactly one code. For a track with several, ask
+  which code to use and add `--isrc-code [DISC-]TRACK=CODE`.
+
+Rerun the dry run with the chosen flags and handle its exit code.
 
 ### Apply
 
-Run this step only when the dry run exited 0, or exited 3 and the user approved.
-Add `--approve-overwrites` in the second case.
+Run this step only when the final dry run exited 0, or exited 3 and the user
+approved. Pass the same `--isrc`, `--isrc-code`, and `--approve-overwrites`
+flags as that dry run.
 
 ```bash
 uv run music-tagger tag "<album-dir>" --release-id <uuid>

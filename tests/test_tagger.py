@@ -17,6 +17,7 @@ from music_tagger.tagger import (
     apply_changes,
     build_diff,
     overwrites_needing_review,
+    resolve_isrc_conflicts,
     score_candidates,
     search_candidates,
 )
@@ -988,3 +989,89 @@ class TestOverwritesNeedingReview:
         )
 
         assert overwrites_needing_review(result) == []
+
+
+def _conflicted_result(*candidate_lists: list[str]) -> AlbumResult:
+    """One track per candidate list, each with file ISRC USIR19902220 in conflict."""
+    tracks = [
+        TrackTags(Path(f"/music/0{n}.flac"), {"tracknumber": str(n)}, format="flac")
+        for n in range(1, len(candidate_lists) + 1)
+    ]
+    diffs = [
+        TrackDiff(track, [], [TagConflict("isrc", "USIR19902220", list(candidates))])
+        for track, candidates in zip(tracks, candidate_lists, strict=True)
+    ]
+    return AlbumResult(AlbumTags(Path("/music"), tracks), _make_release(), diffs)
+
+
+class TestResolveIsrcConflicts:
+    def test_keep_resolves_every_conflict_to_file_code(self) -> None:
+        result = _conflicted_result(["USDW10110279"], ["USDW10110279", "USIR19701434"])
+
+        resolve_isrc_conflicts(result, policy="keep")
+
+        assert [d.conflicts[0].resolution for d in result.diffs] == ["USIR19902220"] * 2
+        assert not result.has_unresolved_conflicts
+
+    def test_musicbrainz_resolves_only_single_candidates(self) -> None:
+        result = _conflicted_result(["USDW10110279"], ["USDW10110279", "USIR19701434"])
+
+        resolve_isrc_conflicts(result, policy="musicbrainz")
+
+        assert result.diffs[0].conflicts[0].resolution == "USDW10110279"
+        assert result.diffs[1].conflicts[0].resolution is None
+
+    def test_code_overrides_policy_for_one_track(self) -> None:
+        result = _conflicted_result(["USDW10110279"], ["USDW10110279", "USIR19701434"])
+
+        resolve_isrc_conflicts(result, policy="musicbrainz", codes={(1, 2): "USIR19701434"})
+
+        assert result.diffs[1].conflicts[0].resolution == "USIR19701434"
+        assert not result.has_unresolved_conflicts
+
+    def test_rejects_code_that_is_not_a_candidate(self) -> None:
+        result = _conflicted_result(["USDW10110279"])
+
+        with pytest.raises(ValueError, match="USXX00000000"):
+            resolve_isrc_conflicts(result, codes={(1, 1): "USXX00000000"})
+
+    def test_rejects_code_for_track_without_conflict(self) -> None:
+        result = _conflicted_result(["USDW10110279"])
+
+        with pytest.raises(ValueError, match="no ISRC conflict"):
+            resolve_isrc_conflicts(result, codes={(1, 5): "USDW10110279"})
+
+    def test_rejects_unknown_policy(self) -> None:
+        with pytest.raises(ValueError, match="policy"):
+            resolve_isrc_conflicts(_conflicted_result(["USDW10110279"]), policy="first")
+
+
+class TestApplyChangesLocksKeptIsrc:
+    def test_kept_code_is_locked(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        write_tags(album.tracks[0], [TagChange("isrc", "", "USIR19902220")])
+        release = _make_release()
+        release.discs[1][0].isrcs = ["USDW10110279"]
+        result = build_diff(read_album(flac_album), release)
+        resolve_isrc_conflicts(result, policy="keep")
+
+        apply_changes(result)
+
+        updated = read_album(flac_album).tracks[0]
+        assert updated.tags["isrc"] == "USIR19902220"
+        assert updated.locked_fields == ["isrc"]
+        assert build_diff(read_album(flac_album), release).diffs[0].conflicts == []
+
+    def test_replaced_code_is_not_locked(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        write_tags(album.tracks[0], [TagChange("isrc", "", "USIR19902220")])
+        release = _make_release()
+        release.discs[1][0].isrcs = ["USDW10110279"]
+        result = build_diff(read_album(flac_album), release)
+        resolve_isrc_conflicts(result, policy="musicbrainz")
+
+        apply_changes(result)
+
+        updated = read_album(flac_album).tracks[0]
+        assert updated.tags["isrc"] == "USDW10110279"
+        assert updated.locked_fields == []

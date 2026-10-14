@@ -17,6 +17,7 @@ from .tags import (
     compute_diff,
     read_album,
     read_locks,
+    write_locks,
     write_tags,
 )
 
@@ -61,6 +62,14 @@ class TrackDiff:
     warnings: list[str] = field(default_factory=list)
     # Changes the release proposes for locked fields; reported, never written.
     locked_changes: list[TagChange] = field(default_factory=list)
+
+    @property
+    def keeps_conflicting_isrc(self) -> bool:
+        """True when an ISRC conflict was resolved by keeping the file's code."""
+        return any(
+            conflict.field == "isrc" and conflict.resolution == conflict.old_value
+            for conflict in self.conflicts
+        )
 
     @property
     def effective_changes(self) -> list[TagChange]:
@@ -484,6 +493,8 @@ def apply_changes(result: AlbumResult, *, ignore_locks: bool = False) -> int:
     count = 0
     for diff in result.diffs:
         changes = diff.effective_changes
+        if not changes and not diff.keeps_conflicting_isrc:
+            continue
         if changes:
             timestamp = TagChange(
                 field="music_tagger_updated",
@@ -491,8 +502,57 @@ def apply_changes(result: AlbumResult, *, ignore_locks: bool = False) -> int:
                 new_value=now,
             )
             write_tags(diff.track, [*changes, timestamp])
-            count += 1
+        if diff.keeps_conflicting_isrc:
+            # Persist the decision so the next `tag` run does not raise it again.
+            locked = sorted({*read_locks(diff.track.path), "isrc"})
+            write_locks(diff.track.path, locked, timestamp=now)
+        count += 1
     return count
+
+
+ISRC_POLICIES = ("keep", "musicbrainz")
+
+
+def resolve_isrc_conflicts(
+    result: AlbumResult,
+    *,
+    policy: str | None = None,
+    codes: dict[tuple[int, int], str] | None = None,
+) -> None:
+    """Set ISRC conflict resolutions in place.
+
+    `policy` "keep" keeps every file code; "musicbrainz" takes MusicBrainz's
+    code where it lists exactly one. `codes` maps (disc, track) to a chosen
+    code and overrides the policy for that track. Conflicts the policy cannot
+    decide stay unresolved.
+    """
+    if policy is not None and policy not in ISRC_POLICIES:
+        raise ValueError(f"unknown ISRC policy {policy!r}; use one of {', '.join(ISRC_POLICIES)}")
+
+    conflicts_by_track = {
+        (_parse_disc_number(diff.track), _parse_track_number(diff.track)): (diff, conflict)
+        for diff in result.diffs
+        for conflict in diff.conflicts
+        if conflict.field == "isrc"
+    }
+    codes = codes or {}
+    if missing := sorted(key for key in codes if key not in conflicts_by_track):
+        tracks = ", ".join(f"{disc}-{track}" for disc, track in missing)
+        raise ValueError(f"no ISRC conflict on track(s) {tracks}")
+
+    for key, (diff, conflict) in conflicts_by_track.items():
+        if key in codes:
+            code = codes[key]
+            if code not in [conflict.old_value, *conflict.candidate_values]:
+                raise ValueError(
+                    f"{code} is neither the file ISRC nor a MusicBrainz ISRC "
+                    f"for {diff.track.path.name}"
+                )
+            conflict.resolution = code
+        elif policy == "keep":
+            conflict.resolution = conflict.old_value
+        elif policy == "musicbrainz" and len(conflict.candidate_values) == 1:
+            conflict.resolution = conflict.candidate_values[0]
 
 
 def _check_locks(result: AlbumResult) -> None:
