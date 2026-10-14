@@ -3,10 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.tagger import (
     AlbumResult,
     CandidateMatch,
+    TagConflict,
     TrackDiff,
     _build_new_tags,
     _parse_disc_number,
@@ -16,7 +19,7 @@ from music_tagger.tagger import (
     score_candidates,
     search_candidates,
 )
-from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album
+from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album, write_tags
 
 
 def _make_release() -> MBRelease:
@@ -207,7 +210,7 @@ class TestBuildNewTags:
                         title="Song",
                         recording_id="rec-1",
                         track_id="trk-1",
-                        isrc="USEE10400287",
+                        isrcs=["USEE10400287"],
                         work_id="work-1",
                         composer="Bach",
                         composer_id="c1",
@@ -264,6 +267,81 @@ class TestSearchCandidates:
 
 
 class TestBuildDiff:
+    @pytest.mark.parametrize("existing_tags", [{}, {"isrc": ""}], ids=["absent-tag", "empty-tag"])
+    def test_fills_missing_isrc(self, existing_tags: dict[str, str]) -> None:
+        track = TrackTags(
+            path=Path("/music/01.flac"),
+            tags={"tracknumber": "1", **existing_tags},
+            format="flac",
+        )
+        release = _make_release()
+        release.discs[1][0].isrcs = ["USIR19902220"]
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), release)
+
+        changes = [change for change in result.diffs[0].changes if change.field == "isrc"]
+        assert changes == [TagChange("isrc", "", "USIR19902220")]
+        assert result.diffs[0].conflicts == []
+
+    @pytest.mark.parametrize("isrcs", [[], ["USIR19902220", "USDW10110279"]])
+    def test_does_not_guess_missing_isrc(self, isrcs: list[str]) -> None:
+        track = TrackTags(Path("/music/01.flac"), {"tracknumber": "1"}, format="flac")
+        release = _make_release()
+        release.discs[1][0].isrcs = isrcs
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), release)
+
+        assert not any(change.field == "isrc" for change in result.diffs[0].changes)
+        assert result.diffs[0].conflicts == []
+
+    @pytest.mark.parametrize(
+        "isrcs",
+        [
+            ["USIR19902220"],
+            ["USIR19902220", "USDW10110279"],
+            ["USDW10110279", "USIR19902220"],
+        ],
+    )
+    def test_preserves_existing_isrc_in_recording_list(self, isrcs: list[str]) -> None:
+        track = TrackTags(
+            Path("/music/01.flac"), {"tracknumber": "1", "isrc": "USIR19902220"}, format="flac"
+        )
+        release = _make_release()
+        release.discs[1][0].isrcs = isrcs
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), release)
+
+        assert not any(change.field == "isrc" for change in result.diffs[0].changes)
+        assert result.diffs[0].conflicts == []
+        assert result.diffs[0].warnings == []
+
+    @pytest.mark.parametrize("isrcs", [["USDW10110279"], ["USDW10110279", "USIR19701434"]])
+    def test_reports_isrc_conflict_without_proposing_replacement(self, isrcs: list[str]) -> None:
+        track = TrackTags(
+            Path("/music/01.flac"), {"tracknumber": "1", "isrc": "USIR19902220"}, format="flac"
+        )
+        release = _make_release()
+        release.discs[1][0].isrcs = isrcs
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), release)
+
+        assert result.has_unresolved_conflicts
+        assert result.diffs[0].conflicts == [TagConflict("isrc", "USIR19902220", isrcs)]
+        assert not any(change.field == "isrc" for change in result.diffs[0].changes)
+
+    def test_preserves_unverified_isrc_when_recording_has_no_codes(self) -> None:
+        track = TrackTags(
+            Path("/music/01.flac"), {"tracknumber": "1", "isrc": "USIR19902220"}, format="flac"
+        )
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), _make_release())
+
+        assert not result.has_unresolved_conflicts
+        assert not any(change.field == "isrc" for change in result.diffs[0].changes)
+        assert result.diffs[0].warnings == [
+            "ISRC USIR19902220 is unverified: MusicBrainz lists no ISRCs."
+        ]
+
     def test_computes_changes(self, flac_album: Path) -> None:
         album = read_album(flac_album)
         release = _make_release()
@@ -521,6 +599,27 @@ class TestScoreCandidates:
 
 
 class TestAlbumResultSerialization:
+    @pytest.mark.parametrize(
+        ("resolution", "has_unresolved_conflicts"),
+        [(None, True), ("USIR19902220", False), ("USDW10110279", False)],
+    )
+    def test_preserves_conflicts_and_warnings(
+        self, resolution: str | None, has_unresolved_conflicts: bool
+    ) -> None:
+        track = TrackTags(Path("/music/01.flac"), {}, format="flac")
+        conflict = TagConflict("isrc", "USIR19902220", ["USDW10110279"], resolution)
+        result = AlbumResult(
+            AlbumTags(Path("/music"), [track]),
+            _make_release(),
+            [TrackDiff(track, [], [conflict], ["Unverified metadata."])],
+        )
+
+        restored = AlbumResult.from_dict(result.to_dict())
+
+        assert restored.diffs[0].conflicts == [conflict]
+        assert restored.diffs[0].warnings == ["Unverified metadata."]
+        assert restored.has_unresolved_conflicts is has_unresolved_conflicts
+
     def test_round_trip(self) -> None:
         track = TrackTags(path=Path("/music/01.flac"), tags={"title": "Old"}, format="flac")
         changes = [TagChange(field="title", old_value="Old", new_value="New")]
@@ -554,6 +653,82 @@ class TestAlbumResultSerialization:
 
 
 class TestApplyChanges:
+    def test_writes_missing_isrc(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        release = _make_release()
+        release.discs[1][0].isrcs = ["USIR19902220"]
+
+        result = build_diff(album, release)
+        apply_changes(result)
+
+        updated_album = read_album(flac_album)
+        assert updated_album.tracks[0].tags["isrc"] == "USIR19902220"
+
+    def test_preserves_existing_isrc_while_writing_other_tags(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        write_tags(album.tracks[0], [TagChange("isrc", "", "USIR19902220")])
+        release = _make_release()
+        release.discs[1][0].isrcs = ["USDW10110279", "USIR19902220"]
+
+        result = build_diff(read_album(flac_album), release)
+        apply_changes(result)
+
+        updated_album = read_album(flac_album)
+        assert updated_album.tracks[0].tags["isrc"] == "USIR19902220"
+        assert updated_album.tracks[0].tags["musicbrainz_albumid"] == "release-1"
+
+    @pytest.mark.parametrize("resolution", [None, "NOT-A-CANDIDATE"])
+    def test_blocks_entire_album_with_unresolved_or_invalid_conflict(
+        self, flac_album: Path, resolution: str | None
+    ) -> None:
+        album = read_album(flac_album)
+        write_tags(album.tracks[2], [TagChange("isrc", "", "USIR19902220")])
+        before = {track.path: track.path.read_bytes() for track in album.tracks}
+        release = _make_release()
+        release.discs[1][2].isrcs = ["USDW10110279"]
+        release.discs[1][2].recording_id = "new-recording"
+        result = build_diff(read_album(flac_album), release)
+        result.diffs[2].conflicts[0].resolution = resolution
+
+        with pytest.raises(ValueError, match="Unresolved tag conflicts"):
+            apply_changes(result)
+
+        assert {path: path.read_bytes() for path in before} == before
+
+    @pytest.mark.parametrize("resolution", ["USIR19902220", "USDW10110279"])
+    def test_applies_explicit_conflict_resolution_from_json(
+        self, flac_album: Path, resolution: str
+    ) -> None:
+        album = read_album(flac_album)
+        write_tags(album.tracks[0], [TagChange("isrc", "", "USIR19902220")])
+        release = _make_release()
+        release.discs[1][0].isrcs = ["USDW10110279"]
+        release.discs[1][0].recording_id = "new-recording"
+        data = build_diff(read_album(flac_album), release).to_dict()
+        data["tracks"][0]["conflicts"][0]["resolution"] = resolution
+
+        apply_changes(AlbumResult.from_dict(data))
+
+        updated = read_album(flac_album).tracks[0].tags
+        assert updated["isrc"] == resolution
+        assert updated["musicbrainz_recordingid"] == "new-recording"
+
+    def test_rejects_duplicate_change_for_resolved_conflict(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        track = album.tracks[0]
+        before = track.path.read_bytes()
+        conflict = TagConflict("isrc", "USIR19902220", ["USDW10110279"], "USIR19902220")
+        result = AlbumResult(
+            album,
+            _make_release(),
+            [TrackDiff(track, [TagChange("isrc", "USIR19902220", "USDW10110279")], [conflict])],
+        )
+
+        with pytest.raises(ValueError, match="duplicate tag change"):
+            apply_changes(result)
+
+        assert track.path.read_bytes() == before
+
     def test_writes_changes(self, flac_album: Path) -> None:
         album = read_album(flac_album)
         diffs = [

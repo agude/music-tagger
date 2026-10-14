@@ -335,6 +335,7 @@ def _diff(argv: list[str] | None = None) -> None:
 
     result = build_diff(album, release)
     data = result.to_dict()
+    _print_tag_issues(result)
 
     changed = [d for d in result.diffs if d.changes]
     lines = [f"Release: {release.title} [{release.id}]"]
@@ -342,6 +343,11 @@ def _diff(argv: list[str] | None = None) -> None:
     for d in changed:
         fields = ", ".join(c.field for c in d.changes)
         lines.append(f"  {d.track.path.name}: {fields}")
+    for diff in result.diffs:
+        if diff.conflicts:
+            lines.append(f"  {diff.track.path.name}: {len(diff.conflicts)} unresolved conflict(s)")
+        for warning in diff.warnings:
+            lines.append(f"  {diff.track.path.name}: {warning}")
     if not changed:
         lines.append("  (no changes)")
     _output_json(data, args.out, "\n".join(lines))
@@ -373,25 +379,29 @@ def _write_tags(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     result = AlbumResult.from_dict(json.loads(args.diff_file.read_text()))
-
-    if not result.has_changes:
-        print("No tag changes to apply.")
-        return
+    _print_tag_issues(result)
 
     if args.dry_run:
         for d in result.diffs:
-            if d.changes:
+            if d.effective_changes:
                 print(f"  {d.track.path.name}:")
-                for c in d.changes:
+                for c in d.effective_changes:
                     old = c.old_value or "(empty)"
                     print(f"    {c.field}: {old} → {c.new_value}")
         print("\n(dry run — skipping write)")
         return
 
-    count = apply_changes(result)
-    print(f"Updated {count} track(s).")
+    try:
+        count = apply_changes(result)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
+    if count:
+        print(f"Updated {count} track(s).")
+    else:
+        print("No tag changes to apply.")
 
-    if args.log:
+    if args.log and (count or any(diff.conflicts for diff in result.diffs)):
         _write_log_entry(args.log, result)
 
 
@@ -404,12 +414,18 @@ def _write_log_entry(log_path: Path, result: AlbumResult) -> None:
         "",
     ]
     for diff in result.diffs:
-        if not diff.changes:
+        if not diff.effective_changes and not diff.conflicts:
             continue
         lines.append(f"  {diff.track.path.name}:")
-        for change in diff.changes:
+        for change in diff.effective_changes:
             old = change.old_value or "(empty)"
             lines.append(f"    {change.field}: {old} → {change.new_value}")
+        for conflict in diff.conflicts:
+            candidates = ", ".join(conflict.candidate_values)
+            lines.append(
+                f"    {conflict.field} conflict: file={conflict.old_value}; "
+                f"MusicBrainz=[{candidates}]; resolution={conflict.resolution}"
+            )
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -624,20 +640,38 @@ def _print_candidates(argv: list[str] | None = None) -> None:
     _output_json(data, args.out, "\n".join(lines))
 
 
+def _print_tag_issues(result: AlbumResult) -> None:
+    for diff in result.diffs:
+        for warning in diff.warnings:
+            print(f"Warning: {diff.track.path}: {warning}", file=sys.stderr)
+        for conflict in diff.conflicts:
+            candidates = ", ".join(conflict.candidate_values)
+            status = f"resolved as {conflict.resolution}" if conflict.is_resolved else "unresolved"
+            print(
+                f"{conflict.field.upper()} conflict: {diff.track.path}: file={conflict.old_value}; "
+                f"MusicBrainz=[{candidates}]; {status}",
+                file=sys.stderr,
+            )
+
+
 def _print_diff(result: AlbumResult) -> None:
     print(f"Release: {result.release.title} [{result.release.id}]")
     print(f"         {result.release.date} / {result.release.country} / {result.release.label}")
     print()
+    _print_tag_issues(result)
 
     if not result.has_changes:
-        print("No tag changes needed.")
+        if result.has_unresolved_conflicts or any(diff.warnings for diff in result.diffs):
+            print("No tag changes proposed; review the reported ISRC issues.")
+        else:
+            print("No tag changes needed.")
         return
 
     for diff in result.diffs:
-        if not diff.changes:
+        if not diff.effective_changes:
             continue
         print(f"  {diff.track.path.name}:")
-        for change in diff.changes:
+        for change in diff.effective_changes:
             old = change.old_value or "(empty)"
             print(f"    {change.field}: {old} → {change.new_value}")
     print()
@@ -1278,14 +1312,18 @@ def _tag(argv: list[str] | None = None) -> None:
     result = build_diff(album, release)
     _print_diff(result)
 
-    if not result.has_changes:
+    if not result.has_changes and not result.has_unresolved_conflicts:
         return
 
     if args.dry_run:
         print("(dry run — skipping write)")
         return
 
-    count = apply_changes(result)
+    try:
+        count = apply_changes(result)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
     print(f"Updated {count} track(s).")
 
     if args.log:

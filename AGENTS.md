@@ -137,6 +137,49 @@ src/music_tagger/
 - `releasestatus` is compared case-insensitively (`official` == `Official`).
 - Unicode from MusicBrainz (e.g. U+2010 HYPHEN in titles) is accepted as
   canonical.
+- `isrc` identifies a recording. MusicBrainz can list several ISRCs for
+  that recording; their order does not identify the code on this CD.
+  The client retains the full `MBTrack.isrcs` list. The tagger applies this
+  policy:
+
+  | File ISRC | MusicBrainz list | Action |
+  | --- | --- | --- |
+  | Present in the list | Any length | Preserve it |
+  | Missing or empty | Exactly one code | Fill it |
+  | Missing or empty | Several codes or none | Leave it empty |
+  | Present, absent from a non-empty list | One or several codes | Report a conflict and block writes |
+  | Present | Empty list | Preserve it and report it as unverified |
+
+  Absence from MusicBrainz does not prove a code read from the CD is wrong.
+  Unresolved conflicts block **every track in the album**, including
+  recording-ID changes. Unverified codes produce warnings and do not block
+  writes. Conflicts and warnings survive diff JSON export and import.
+
+### Resolve an ISRC conflict
+
+Create the review files outside the album directory:
+
+```bash
+WORK=$(mktemp -d /tmp/music-tagger-review-XXXXXX)
+uv run music-tagger read "<album-dir>" -o "$WORK/evidence.json"
+uv run music-tagger mb release <uuid> -o "$WORK/release.json"
+uv run music-tagger diff --evidence "$WORK/evidence.json" --release "$WORK/release.json" -o "$WORK/diff.json"
+```
+
+Review each track's `conflicts` entry. Set `resolution` to its `old_value`
+to preserve the file's code, or to one of its `candidate_values` to replace
+it. Retain the conflict entry so the decision remains in the review JSON
+and change log. A `null` resolution or an unlisted value blocks writes.
+Do not add a duplicate ISRC entry to `changes`; the resolution generates
+the required change.
+
+```bash
+uv run music-tagger write-tags --diff "$WORK/diff.json" --dry-run
+uv run music-tagger write-tags --diff "$WORK/diff.json" --log changes.log
+```
+
+Old release JSON containing only a scalar `isrc` must be fetched again:
+that value may have been selected from a longer list.
 
 ## Format differences that bite
 

@@ -7,20 +7,65 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .musicbrainz import MBRelease, MusicBrainzClient
+from .musicbrainz import MBRelease, MBTrack, MusicBrainzClient
 from .tags import AlbumTags, TagChange, TrackTags, compute_diff, read_album, write_tags
+
+
+@dataclass
+class TagConflict:
+    field: str
+    old_value: str
+    candidate_values: list[str]
+    resolution: str | None = None
+
+    @property
+    def is_resolved(self) -> bool:
+        return self.resolution is not None and self.resolution in [
+            self.old_value,
+            *self.candidate_values,
+        ]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "field": self.field,
+            "old_value": self.old_value,
+            "candidate_values": list(self.candidate_values),
+            "resolution": self.resolution,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TagConflict:
+        return cls(
+            field=data["field"],
+            old_value=data["old_value"],
+            candidate_values=list(data["candidate_values"]),
+            resolution=data.get("resolution"),
+        )
 
 
 @dataclass
 class TrackDiff:
     track: TrackTags
     changes: list[TagChange]
+    conflicts: list[TagConflict] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def effective_changes(self) -> list[TagChange]:
+        changes = list(self.changes)
+        for conflict in self.conflicts:
+            resolution = conflict.resolution
+            if conflict.is_resolved and resolution is not None and resolution != conflict.old_value:
+                changes.append(TagChange(conflict.field, conflict.old_value, resolution))
+        return changes
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "path": str(self.track.path),
             "format": self.track.format,
             "changes": [c.to_dict() for c in self.changes],
+            "conflicts": [conflict.to_dict() for conflict in self.conflicts],
+            "warnings": list(self.warnings),
         }
 
 
@@ -32,7 +77,11 @@ class AlbumResult:
 
     @property
     def has_changes(self) -> bool:
-        return any(d.changes for d in self.diffs)
+        return any(d.effective_changes for d in self.diffs)
+
+    @property
+    def has_unresolved_conflicts(self) -> bool:
+        return any(not conflict.is_resolved for diff in self.diffs for conflict in diff.conflicts)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,7 +99,9 @@ class AlbumResult:
                 format=td.get("format", ""),
             )
             changes = [TagChange.from_dict(c) for c in td.get("changes", [])]
-            diffs.append(TrackDiff(track=track, changes=changes))
+            conflicts = [TagConflict.from_dict(c) for c in td.get("conflicts", [])]
+            warnings = list(td.get("warnings", []))
+            diffs.append(TrackDiff(track, changes, conflicts, warnings))
         release = MBRelease(id=data["release_id"], title=data.get("release_title", ""))
         album = AlbumTags(directory=Path("."))
         return cls(album=album, release=release, diffs=diffs)
@@ -232,8 +283,9 @@ def _build_new_tags(
             tags["musicbrainz_recordingid"] = mb_track.recording_id
         if mb_track.track_id:
             tags["musicbrainz_releasetrackid"] = mb_track.track_id
-        if mb_track.isrc:
-            tags["isrc"] = mb_track.isrc
+        # ISRCs belong to recordings; list order does not identify this disc's code.
+        if not track.tags.get("isrc") and len(mb_track.isrcs) == 1:
+            tags["isrc"] = mb_track.isrcs[0]
         if mb_track.work_id:
             tags["musicbrainz_workid"] = mb_track.work_id
 
@@ -312,6 +364,16 @@ def _parse_track_number(track: TrackTags) -> int | None:
         return None
 
 
+def _check_isrc(track: TrackTags, mb_track: MBTrack) -> tuple[list[TagConflict], list[str]]:
+    existing = track.tags.get("isrc", "")
+    if not existing or existing in mb_track.isrcs:
+        return [], []
+    if not mb_track.isrcs:
+        return [], [f"ISRC {existing} is unverified: MusicBrainz lists no ISRCs."]
+    # Absence from MusicBrainz does not prove a code read from the CD is wrong.
+    return [TagConflict("isrc", existing, list(mb_track.isrcs))], []
+
+
 def build_diff(album: AlbumTags, release: MBRelease) -> AlbumResult:
     """Compute the tag diff between current tags and a chosen release.
 
@@ -349,30 +411,53 @@ def build_diff(album: AlbumTags, release: MBRelease) -> AlbumResult:
         elif positional:
             track_index = file_pos if file_pos < len(release.discs.get(disc_num, [])) else None
 
+        conflicts: list[TagConflict] = []
+        warnings: list[str] = []
         if track_index is not None:
             new_tags = _build_new_tags(release, track, track_index, disc_num)
+            mb_track = release.discs[disc_num][track_index]
+            conflicts, warnings = _check_isrc(track, mb_track)
         else:
             new_tags = _build_new_tags(
                 release, track, len(release.discs.get(disc_num, [])), disc_num
             )
 
         changes = compute_diff(track, new_tags)
-        diffs.append(TrackDiff(track=track, changes=changes))
+        diffs.append(TrackDiff(track, changes, conflicts, warnings))
 
     return AlbumResult(album=album, release=release, diffs=diffs)
 
 
 def apply_changes(result: AlbumResult) -> int:
     """Write all tag changes. Returns the number of tracks modified."""
+    # Check the whole album before writing any track or changing recording IDs.
+    if result.has_unresolved_conflicts:
+        paths = [
+            str(diff.track.path)
+            for diff in result.diffs
+            if any(not conflict.is_resolved for conflict in diff.conflicts)
+        ]
+        raise ValueError(
+            "Unresolved tag conflicts: "
+            + ", ".join(paths)
+            + ". Set each conflict's resolution to its old value or a candidate in the diff JSON."
+        )
+    for diff in result.diffs:
+        conflict_fields = {conflict.field for conflict in diff.conflicts}
+        if any(change.field in conflict_fields for change in diff.changes):
+            raise ValueError(
+                f"{diff.track.path}: resolve the conflict instead of adding a duplicate tag change."
+            )
     now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     count = 0
     for diff in result.diffs:
-        if diff.changes:
+        changes = diff.effective_changes
+        if changes:
             timestamp = TagChange(
                 field="music_tagger_updated",
                 old_value=diff.track.tags.get("music_tagger_updated", ""),
                 new_value=now,
             )
-            write_tags(diff.track, [*diff.changes, timestamp])
+            write_tags(diff.track, [*changes, timestamp])
             count += 1
     return count

@@ -22,7 +22,7 @@ class MBTrack:
     artist_id: str = ""
     recording_id: str = ""
     track_id: str = ""
-    isrc: str = ""
+    isrcs: list[str] = field(default_factory=list)
     work_id: str = ""
     composer: str = ""
     composer_id: str = ""
@@ -49,12 +49,13 @@ class MBTrack:
         d: dict[str, Any] = {"number": self.number, "title": self.title}
         if self.duration_ms is not None:
             d["duration_ms"] = self.duration_ms
+        if self.isrcs:
+            d["isrcs"] = list(self.isrcs)
         for attr in (
             "artist",
             "artist_id",
             "recording_id",
             "track_id",
-            "isrc",
             "work_id",
             "composer",
             "composer_id",
@@ -80,6 +81,13 @@ class MBTrack:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> MBTrack:
+        isrcs = data.get("isrcs", [])
+        # A legacy scalar may be the first of several codes; it cannot establish uniqueness.
+        if "isrcs" not in data and data.get("isrc"):
+            raise ValueError(
+                "Legacy scalar ISRC in release JSON; "
+                "fetch the release again for its full ISRC lists."
+            )
         return cls(
             number=data["number"],
             title=data["title"],
@@ -88,7 +96,7 @@ class MBTrack:
             artist_id=data.get("artist_id", ""),
             recording_id=data.get("recording_id", ""),
             track_id=data.get("track_id", ""),
-            isrc=data.get("isrc", ""),
+            isrcs=list(isrcs),
             work_id=data.get("work_id", ""),
             composer=data.get("composer", ""),
             composer_id=data.get("composer_id", ""),
@@ -371,7 +379,6 @@ class MusicBrainzClient:
                 if track_artist_credit:
                     track_artist_id = track_artist_credit[0].get("artist", {}).get("id", "")
 
-                isrcs = recording.get("isrcs", [])
                 credits = _parse_recording_credits(recording)
 
                 raw_number = t.get("number", 0)
@@ -389,7 +396,7 @@ class MusicBrainzClient:
                         artist_id=track_artist_id,
                         recording_id=recording.get("id", ""),
                         track_id=t.get("id", ""),
-                        isrc=isrcs[0] if isrcs else "",
+                        isrcs=list(recording.get("isrcs", [])),
                         work_id=credits.get("work_id", ""),
                         composer=credits.get("composer", ""),
                         composer_id=credits.get("composer_id", ""),

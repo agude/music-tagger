@@ -22,8 +22,8 @@ from music_tagger.cli import (
     _write_tags,
 )
 from music_tagger.musicbrainz import MBRelease, MBTrack
-from music_tagger.tagger import AlbumResult, TrackDiff
-from music_tagger.tags import TagChange, read_album
+from music_tagger.tagger import AlbumResult, TagConflict, TrackDiff
+from music_tagger.tags import TagChange, read_album, write_tags
 
 
 class TestIsAlbumDir:
@@ -42,6 +42,43 @@ class TestIsAlbumDir:
 
 
 class TestPrintDiff:
+    def test_reports_conflict_when_there_are_no_tag_changes(
+        self, capsys: object, flac_album: Path
+    ) -> None:
+        album = read_album(flac_album)
+        result = AlbumResult(
+            album,
+            MBRelease(id="r-1", title="Desperado"),
+            [
+                TrackDiff(
+                    album.tracks[0], [], [TagConflict("isrc", "USIR19902220", ["USDW10110279"])]
+                )
+            ],
+        )
+
+        _print_diff(result)
+
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "No tag changes needed" not in captured.out
+        assert str(album.tracks[0].path) in captured.err
+        assert "USIR19902220" in captured.err
+        assert "USDW10110279" in captured.err
+        assert "unresolved" in captured.err
+
+    def test_reports_unverified_isrc(self, capsys: object, flac_album: Path) -> None:
+        album = read_album(flac_album)
+        result = AlbumResult(
+            album,
+            MBRelease(id="r-1", title="Desperado"),
+            [TrackDiff(album.tracks[0], [], warnings=["ISRC USIR19902220 is unverified."])],
+        )
+
+        _print_diff(result)
+
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "No tag changes needed" not in captured.out
+        assert "USIR19902220 is unverified" in captured.err
+
     def test_no_changes(self, capsys: object, flac_album: Path) -> None:
         album = read_album(flac_album)
         result = AlbumResult(
@@ -431,6 +468,38 @@ class TestMatchCommand:
 
 
 class TestDiffCommand:
+    def test_exports_conflicts_and_reports_both_codes(
+        self, flac_album: Path, tmp_path: Path, capsys: object
+    ) -> None:
+        album = read_album(flac_album)
+        album.tracks[0].tags["isrc"] = "USIR19902220"
+        evidence = tmp_path / "evidence.json"
+        evidence.write_text(json.dumps(album.to_dict()))
+        release = MBRelease(
+            id="r-1",
+            title="Desperado",
+            discs={1: [MBTrack(number=1, title="Desperado", isrcs=["USDW10110279"])]},
+        )
+        release_file = tmp_path / "release.json"
+        release_file.write_text(json.dumps(release.to_dict()))
+        out = tmp_path / "diff.json"
+
+        _diff(["--evidence", str(evidence), "--release", str(release_file), "-o", str(out)])
+
+        data = json.loads(out.read_text())
+        assert data["tracks"][0]["conflicts"] == [
+            {
+                "field": "isrc",
+                "old_value": "USIR19902220",
+                "candidate_values": ["USDW10110279"],
+                "resolution": None,
+            }
+        ]
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "1 unresolved conflict" in captured.out
+        assert "USIR19902220" in captured.err
+        assert "USDW10110279" in captured.err
+
     def test_json_to_stdout(self, flac_album: Path, tmp_path: Path, capsys: object) -> None:
         from music_tagger.tags import read_album as _read_album
 
@@ -499,6 +568,71 @@ class TestDiffCommand:
 
 
 class TestWriteTagsCommand:
+    def test_blocks_unresolved_conflict_without_other_changes(
+        self, flac_album: Path, tmp_path: Path, capsys: object
+    ) -> None:
+        album = read_album(flac_album)
+        track = album.tracks[0]
+        before = track.path.read_bytes()
+        conflict = TagConflict("isrc", "USIR19902220", ["USDW10110279"])
+        result = AlbumResult(
+            album, MBRelease("r-1", "Desperado"), [TrackDiff(track, [], [conflict])]
+        )
+        diff_path = tmp_path / "diff.json"
+        diff_path.write_text(json.dumps(result.to_dict()))
+        log_path = tmp_path / "changes.log"
+
+        with pytest.raises(SystemExit) as error:
+            _write_tags(["--diff", str(diff_path), "--log", str(log_path)])
+
+        assert error.value.code == 1
+        assert track.path.read_bytes() == before
+        assert not log_path.exists()
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "Unresolved tag conflicts" in captured.err
+        assert "No tag changes to apply" not in captured.out
+
+    def test_previews_unresolved_conflict_without_writing(
+        self, flac_album: Path, tmp_path: Path, capsys: object
+    ) -> None:
+        data = self._make_diff_json(flac_album)
+        data["tracks"][0]["conflicts"] = [
+            TagConflict("isrc", "USIR19902220", ["USDW10110279"]).to_dict()
+        ]
+        diff_path = tmp_path / "diff.json"
+        diff_path.write_text(json.dumps(data))
+        before = {path: path.read_bytes() for path in flac_album.glob("*.flac")}
+
+        _write_tags(["--diff", str(diff_path), "--dry-run"])
+
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "unresolved" in captured.err
+        assert "dry run" in captured.out
+        assert {path: path.read_bytes() for path in before} == before
+
+    @pytest.mark.parametrize("resolution", ["USIR19902220", "USDW10110279"])
+    def test_logs_explicit_isrc_resolution(
+        self, flac_album: Path, tmp_path: Path, resolution: str
+    ) -> None:
+        album = read_album(flac_album)
+        track = album.tracks[0]
+        write_tags(track, [TagChange("isrc", "", "USIR19902220")])
+        conflict = TagConflict("isrc", "USIR19902220", ["USDW10110279"], resolution)
+        result = AlbumResult(
+            album, MBRelease("r-1", "Desperado"), [TrackDiff(track, [], [conflict])]
+        )
+        diff_path = tmp_path / "diff.json"
+        diff_path.write_text(json.dumps(result.to_dict()))
+        log_path = tmp_path / "changes.log"
+
+        _write_tags(["--diff", str(diff_path), "--log", str(log_path)])
+
+        assert read_album(flac_album).tracks[0].tags["isrc"] == resolution
+        log = log_path.read_text()
+        assert "file=USIR19902220" in log
+        assert "MusicBrainz=[USDW10110279]" in log
+        assert f"resolution={resolution}" in log
+
     def _make_diff_json(self, flac_album: Path) -> dict:
         from music_tagger.tags import read_album as _read_album
 
@@ -647,6 +781,41 @@ class TestCandidatesCommand:
 
 
 class TestTagCommand:
+    def test_blocks_conflicts_before_changing_recording_ids(
+        self, flac_album: Path, tmp_path: Path, capsys: object
+    ) -> None:
+        from music_tagger.cli import _tag
+
+        album = read_album(flac_album)
+        write_tags(album.tracks[0], [TagChange("isrc", "", "USIR19902220")])
+        before = {path: path.read_bytes() for path in flac_album.glob("*.flac")}
+        release = MBRelease(
+            id="r-1",
+            title="Desperado",
+            discs={
+                1: [
+                    MBTrack(
+                        number=1,
+                        title="Desperado",
+                        recording_id="new-recording",
+                        isrcs=["USDW10110279"],
+                    )
+                ]
+            },
+        )
+        log_path = tmp_path / "changes.log"
+        with patch("music_tagger.cli.MusicBrainzClient") as client:
+            client.return_value.fetch_release.return_value = release
+            with pytest.raises(SystemExit) as error:
+                _tag([str(flac_album), "--release-id", "r-1", "--log", str(log_path)])
+
+        assert error.value.code == 1
+        assert {path: path.read_bytes() for path in before} == before
+        assert not log_path.exists()
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "USIR19902220" in captured.err
+        assert "USDW10110279" in captured.err
+
     def test_dry_run(self, capsys: object, flac_album: Path) -> None:
         from music_tagger.cli import _tag
         from music_tagger.musicbrainz import MBRelease, MBTrack

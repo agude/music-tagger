@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from unittest.mock import MagicMock
+
+import pytest
 
 from music_tagger.musicbrainz import (
     MBRelease,
@@ -254,7 +257,27 @@ class TestFetchRelease:
         track = release.discs[1][0]
         assert track.recording_id == "rec-id-1"
         assert track.track_id == "track-id-1"
-        assert track.isrc == "USEE10400287"
+        assert track.isrcs == ["USEE10400287"]
+
+    @pytest.mark.parametrize(
+        "isrcs",
+        [
+            [],
+            ["USIR19902220"],
+            ["USDW10110279", "USIR19902220"],
+            ["USIR19902220", "USDW10110279"],
+        ],
+    )
+    def test_retains_all_recording_isrcs(self, isrcs: list[str]) -> None:
+        response = deepcopy(FETCH_RESPONSE)
+        response["media"][0]["tracks"][0]["recording"]["isrcs"] = isrcs
+        client = MusicBrainzClient()
+        client._client = MagicMock()
+        client._client.get.return_value.json.return_value = response
+
+        release = client.fetch_release("release-1")
+
+        assert release.discs[1][0].isrcs == isrcs
 
     def test_track_credits(self) -> None:
         mock_resp = MagicMock()
@@ -285,7 +308,7 @@ class TestMBTrackSerialization:
             artist_id="a1",
             recording_id="r1",
             track_id="t1",
-            isrc="US1234",
+            isrcs=["USIR19902220", "USDW10110279"],
             composer="Bach",
             composer_id="c1",
         )
@@ -296,6 +319,18 @@ class TestMBTrackSerialization:
         assert restored.artist == "The Band"
         assert restored.artist_id == "a1"
         assert restored.composer == "Bach"
+        assert restored.isrcs == ["USIR19902220", "USDW10110279"]
+        assert track.to_dict()["isrcs"] == ["USIR19902220", "USDW10110279"]
+
+    def test_rejects_legacy_single_isrc_that_may_hide_multiple_codes(self) -> None:
+        with pytest.raises(ValueError, match="fetch the release again"):
+            MBTrack.from_dict({"number": 1, "title": "Song", "isrc": "USIR19902220"})
+
+    def test_prefers_explicit_list_over_legacy_isrc(self) -> None:
+        track = MBTrack.from_dict(
+            {"number": 1, "title": "Song", "isrc": "USIR19902220", "isrcs": []}
+        )
+        assert track.isrcs == []
 
     def test_omits_empty_fields(self) -> None:
         track = MBTrack(number=1, title="Song")
