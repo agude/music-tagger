@@ -77,7 +77,10 @@ Key CLI subcommands, driven by Claude Code in conversation:
    encoding. Produces .log and .cue files alongside the audio.
    Use `--release-id` to force a specific MB release, or `--unknown`
    to rip CDs not in MusicBrainz. Without an output directory, it creates a
-   temp staging directory and prints `Staging: <path>`. Requires system
+   temp staging directory and prints `Staging: <path>`. It parses whipper's
+   log and prints an AccurateRip summary per track; it exits 3 when a track
+   is a mismatch (`Found, NO exact match`) or its status is not `Copy OK`.
+   Tracks absent from the AccurateRip database are normal. Requires system
    package: `whipper`.
 
 8. `uv run music-tagger lock <album-dir> [field ...] [--track N] [--disc N] [--dry-run]`
@@ -160,7 +163,8 @@ src/music_tagger/
   scale-free), `STARRED`, `STARRED_AT` as `----:com.apple.iTunes:` freeform
   atoms, plus the native `rate` atom (0-100) for third-party readers, and
   deliberately no bare `RATING`.
-- `musicbrainz.py` searches and fetches releases. Rate-limited to 1 req/sec.
+- `musicbrainz.py` searches and fetches releases. Rate-limited to 1 req/sec;
+  retries 429 and 503 up to 4 attempts with exponential backoff.
 - `tagger.py` builds the target tags from an MB release and computes diffs.
   Handles multi-disc albums by parsing `discnumber` tags.
 - `discid.py` parses CUE sheets and computes MusicBrainz disc IDs.

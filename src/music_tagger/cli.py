@@ -1188,10 +1188,17 @@ def _rip(argv: list[str] | None = None) -> None:
     )
     print(f"Ripped {result.track_count} tracks.")
 
-    if result.log_file:
-        print(f"Log: {result.log_file}")
     if result.cue_file:
         print(f"CUE: {result.cue_file}")
+    if result.log_file is None:
+        print("Error: whipper wrote no log; AccurateRip results unknown.", file=sys.stderr)
+        sys.exit(EXIT_REVIEW)
+    print(f"Log: {result.log_file}")
+    accuraterip = ripper.parse_accuraterip(result.log_file.read_text())
+    print("\n".join(accuraterip.describe()))
+    if accuraterip.needs_review:
+        print("Rip needs review: see the mismatched tracks above.", file=sys.stderr)
+        sys.exit(EXIT_REVIEW)
 
     print("\nNext: review tags and candidates:")
     print(f"  uv run music-tagger candidates {target}")

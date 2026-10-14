@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from music_tagger.ripper import _check_tool, read_disc_id, rip_cd
+from music_tagger.ripper import _check_tool, parse_accuraterip, read_disc_id, rip_cd
 
 
 class TestCheckTool:
@@ -123,3 +123,109 @@ class TestReadDiscId:
         assert result["track_count"] == 1
         assert result["tracks"][0]["number"] == 1
         assert result["tracks"][0]["seconds"] == 266
+
+
+def _track_block(number: int, v1: str, v2: str, status: str = "Copy OK") -> str:
+    return (
+        f"  {number}:\n"
+        f"    Filename: /tmp/rip-x/0{number}. Song.flac\n"
+        f"    Copy CRC: BC8A83AA\n"
+        f"    AccurateRip v1:\n"
+        f"      Result: {v1}\n"
+        f"      Confidence: 200\n"
+        f"    AccurateRip v2:\n"
+        f"      Result: {v2}\n"
+        f"    Status: {status}\n"
+        f"\n"
+    )
+
+
+EXACT = "Found, exact match"
+MISMATCH = "Found, NO exact match"
+ABSENT = "Track not present in AccurateRip database"
+
+
+def _log(*blocks: str) -> str:
+    """A whipper 0.10 log: a TOC section that also numbers tracks, then Tracks:."""
+    toc = "TOC:\n  1:\n    Start: 00:00:00\n  2:\n    Start: 03:00:00\n\n"
+    return (
+        "Log created by: whipper 0.10.0 (internal logger)\n\n" + toc + "Tracks:\n" + "".join(blocks)
+    )
+
+
+class TestParseAccurateRip:
+    def test_all_exact(self) -> None:
+        summary = parse_accuraterip(
+            _log(_track_block(1, EXACT, EXACT), _track_block(2, EXACT, EXACT))
+        )
+
+        assert summary.exact == [1, 2]
+        assert summary.mismatched == []
+        assert summary.absent == []
+        assert summary.not_ok == []
+        assert summary.needs_review is False
+
+    def test_either_version_exact_counts_as_exact(self) -> None:
+        summary = parse_accuraterip(_log(_track_block(1, MISMATCH, EXACT)))
+
+        assert summary.exact == [1]
+
+    def test_absent_tracks_do_not_need_review(self) -> None:
+        summary = parse_accuraterip(_log(_track_block(1, ABSENT, ABSENT)))
+
+        assert summary.absent == [1]
+        assert summary.needs_review is False
+
+    def test_mismatch_needs_review(self) -> None:
+        summary = parse_accuraterip(
+            _log(_track_block(1, EXACT, EXACT), _track_block(2, MISMATCH, MISMATCH))
+        )
+
+        assert summary.mismatched == [2]
+        assert summary.needs_review is True
+
+    def test_bad_copy_status_needs_review(self) -> None:
+        summary = parse_accuraterip(_log(_track_block(1, EXACT, EXACT, status="Copy NOT OK")))
+
+        assert summary.not_ok == [(1, "Copy NOT OK")]
+        assert summary.needs_review is True
+
+    def test_describe(self) -> None:
+        summary = parse_accuraterip(
+            _log(
+                _track_block(1, EXACT, EXACT),
+                _track_block(2, MISMATCH, MISMATCH),
+                _track_block(3, ABSENT, ABSENT),
+            )
+        )
+
+        assert summary.describe() == [
+            "AccurateRip: 1 exact, 1 mismatched, 1 not in database",
+            "Mismatched tracks: 2",
+        ]
+
+
+class TestRipCommandAccurateRip:
+    def _rip(self, tmp_path: Path, log_text: str) -> None:
+        from music_tagger.cli import _rip
+        from music_tagger.ripper import RipResult
+
+        log_file = tmp_path / "rip.log"
+        log_file.write_text(log_text)
+        with patch("music_tagger.ripper.rip_cd") as rip:
+            rip.return_value = RipResult(tracks=[], track_count=2, log_file=log_file)
+            _rip([str(tmp_path / "out")])
+
+    def test_prints_summary(self, tmp_path: Path, capsys: object) -> None:
+        self._rip(tmp_path, _log(_track_block(1, EXACT, EXACT), _track_block(2, ABSENT, ABSENT)))
+
+        out = capsys.readouterr().out  # type: ignore[attr-defined]
+        assert "AccurateRip: 1 exact, 0 mismatched, 1 not in database" in out
+
+    def test_mismatch_exits_review(self, tmp_path: Path) -> None:
+        from music_tagger.cli import EXIT_REVIEW
+
+        with pytest.raises(SystemExit) as error:
+            self._rip(tmp_path, _log(_track_block(1, MISMATCH, MISMATCH)))
+
+        assert error.value.code == EXIT_REVIEW

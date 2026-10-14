@@ -279,6 +279,15 @@ class TestPlaceCommand:
         assert staging.exists()
 
 
+def _clean_rip(log_dir: Path) -> RipResult:
+    log_file = log_dir / "rip.log"
+    log_file.write_text(
+        "Tracks:\n  1:\n    AccurateRip v1:\n      Result: Found, exact match\n"
+        "    Status: Copy OK\n"
+    )
+    return RipResult(tracks=[], track_count=1, log_file=log_file)
+
+
 class TestRipStaging:
     def test_creates_staging_directory_when_path_omitted(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: object
@@ -286,7 +295,7 @@ class TestRipStaging:
         monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
 
         with patch("music_tagger.ripper.rip_cd") as rip_cd:
-            rip_cd.return_value = RipResult(tracks=[], track_count=0)
+            rip_cd.return_value = _clean_rip(tmp_path)
             _rip([])
 
         target = rip_cd.call_args.args[0]
@@ -296,7 +305,7 @@ class TestRipStaging:
 
     def test_uses_given_path(self, tmp_path: Path) -> None:
         with patch("music_tagger.ripper.rip_cd") as rip_cd:
-            rip_cd.return_value = RipResult(tracks=[], track_count=0)
+            rip_cd.return_value = _clean_rip(tmp_path)
             _rip([str(tmp_path / "out")])
 
         assert rip_cd.call_args.args[0] == tmp_path / "out"

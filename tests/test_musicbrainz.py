@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from music_tagger.musicbrainz import (
+    MAX_ATTEMPTS,
+    RETRY_BACKOFF_SECS,
     MBRelease,
     MBTrack,
     MusicBrainzClient,
@@ -538,3 +541,49 @@ class TestParseRecordingCredits:
         assert credits == {}
         credits = _parse_recording_credits({"relations": []})
         assert credits == {}
+
+
+def _response(status_code: int, payload: dict | None = None) -> httpx.Response:
+    request = httpx.Request("GET", "https://musicbrainz.org/ws/2/release/")
+    return httpx.Response(status_code, json=payload or {"releases": []}, request=request)
+
+
+class TestRetry:
+    @pytest.mark.parametrize("status_code", [503, 429])
+    def test_retries_then_succeeds(self, status_code: int) -> None:
+        client = MusicBrainzClient()
+        client._client = MagicMock()
+        client._client.get.side_effect = [_response(status_code), _response(200)]
+
+        with patch("music_tagger.musicbrainz.time.sleep") as sleep:
+            releases = client.search_releases("Eagles", "Desperado")
+
+        assert releases == []
+        assert client._client.get.call_count == 2
+        assert any(call.args[0] >= RETRY_BACKOFF_SECS for call in sleep.call_args_list)
+
+    def test_gives_up_after_max_attempts(self) -> None:
+        client = MusicBrainzClient()
+        client._client = MagicMock()
+        client._client.get.return_value = _response(503)
+
+        with (
+            patch("music_tagger.musicbrainz.time.sleep"),
+            pytest.raises(httpx.HTTPStatusError),
+        ):
+            client.fetch_release("r-1")
+
+        assert client._client.get.call_count == MAX_ATTEMPTS
+
+    def test_does_not_retry_client_errors(self) -> None:
+        client = MusicBrainzClient()
+        client._client = MagicMock()
+        client._client.get.return_value = _response(404)
+
+        with (
+            patch("music_tagger.musicbrainz.time.sleep"),
+            pytest.raises(httpx.HTTPStatusError),
+        ):
+            client.fetch_release("r-1")
+
+        assert client._client.get.call_count == 1

@@ -11,6 +11,10 @@ import httpx
 BASE_URL = "https://musicbrainz.org/ws/2"
 USER_AGENT = "music-tagger/0.1 (alex.public.account@gmail.com)"
 RATE_LIMIT_SECS = 1.0
+# MusicBrainz answers 503 when it is overloaded or a client exceeds its rate.
+RETRY_STATUS_CODES = {429, 503}
+MAX_ATTEMPTS = 4
+RETRY_BACKOFF_SECS = 2.0
 
 
 @dataclass
@@ -305,6 +309,20 @@ class MusicBrainzClient:
             time.sleep(RATE_LIMIT_SECS - elapsed)
         self._last_request = time.monotonic()
 
+    def _get(self, path: str, params: dict[str, Any]) -> httpx.Response:
+        """GET with rate limiting, retrying 429/503 with exponential backoff.
+
+        Returns the last response; callers decide how to treat its status.
+        """
+        attempt = 1
+        while True:
+            self._rate_limit()
+            resp = self._client.get(path, params=params)
+            if resp.status_code not in RETRY_STATUS_CODES or attempt == MAX_ATTEMPTS:
+                return resp
+            time.sleep(RETRY_BACKOFF_SECS * 2 ** (attempt - 1))
+            attempt += 1
+
     def search_releases(
         self,
         artist: str,
@@ -313,20 +331,18 @@ class MusicBrainzClient:
         limit: int = 10,
         barcode: str | None = None,
     ) -> list[MBRelease]:
-        self._rate_limit()
         query = f'artist:"{artist}" release:"{album}"'
         if format:
             query += f" AND format:{format}"
         if barcode:
             query += f" AND barcode:{barcode}"
-        resp = self._client.get("/release/", params={"query": query, "fmt": "json", "limit": limit})
+        resp = self._get("/release/", params={"query": query, "fmt": "json", "limit": limit})
         resp.raise_for_status()
         data = resp.json()
         return [self._parse_search_release(r) for r in data.get("releases", [])]
 
     def fetch_release(self, release_id: str) -> MBRelease:
-        self._rate_limit()
-        resp = self._client.get(
+        resp = self._get(
             f"/release/{release_id}",
             params={
                 "fmt": "json",
@@ -442,8 +458,7 @@ class MusicBrainzClient:
         )
 
     def lookup_discid(self, discid: str) -> list[MBRelease]:
-        self._rate_limit()
-        resp = self._client.get(
+        resp = self._get(
             f"/discid/{discid}",
             params={
                 "fmt": "json",
@@ -458,8 +473,7 @@ class MusicBrainzClient:
         return [self._parse_search_release(r) for r in releases]
 
     def lookup_toc(self, toc: str) -> list[MBRelease]:
-        self._rate_limit()
-        resp = self._client.get(
+        resp = self._get(
             "/discid/-",
             params={
                 "toc": toc,
