@@ -86,7 +86,28 @@ Inspect the diff output:
   `artist`, `album`, `albumartist`, or `date` field with a different value.
   Wait for user confirmation before proceeding.
 
+Check stderr for ISRC issues. The change list does not include them, and
+the dry run exits 0 even when they block writes.
+
+- **`ISRC conflict: ... unresolved`:** `tag` will exit 1 and write nothing.
+  Skip the apply step below. The source of an existing library code is
+  unknown: it may have been read from the CD or set by another tagger.
+  Show the user a table of each conflicting file, its code, and the
+  MusicBrainz codes. Then ask with `AskUserQuestion`:
+  - **Keep file codes (Recommended):** absence from MusicBrainz does not
+    prove a code is wrong.
+  - **Use MusicBrainz codes:** this applies only to tracks where MusicBrainz
+    lists exactly one code. If a track lists several codes, ask which one to
+    use.
+
+  Apply the decision with
+  `${CLAUDE_SKILL_DIR}/references/isrc-conflicts.md`.
+- **`Warning: ... unverified`:** this does not block writes. Proceed, and
+  list each unverified code in the final summary.
+
 ### Apply
+
+Run this step only when the dry run reported no unresolved ISRC conflicts:
 
 ```bash
 uv run music-tagger tag "<album-dir>" --release-id <uuid> --log ~/Projects/music-tagger/changes.log

@@ -106,7 +106,21 @@ Inspect the diff output:
   `artist`, `album`, `albumartist`, or `date` field with a different value.
   Wait for user confirmation before proceeding.
 
+Check stderr for ISRC issues. The change list does not include them, and
+the dry run exits 0 even when they block writes.
+
+- **`ISRC conflict: ... unresolved`:** `tag` will exit 1 and write nothing.
+  Skip the apply step below. Follow
+  `${CLAUDE_SKILL_DIR}/references/isrc-conflicts.md` and keep every file
+  code. Whipper read those codes from this disc, and absence from
+  MusicBrainz does not prove them wrong. This decision does not need user
+  confirmation. List each kept code in the final summary.
+- **`Warning: ... unverified`:** this does not block writes. Proceed, and
+  list each unverified code in the final summary.
+
 ### Apply
+
+Run this step only when the dry run reported no unresolved ISRC conflicts:
 
 ```bash
 uv run music-tagger tag "$STAGING" --release-id <uuid> --log ~/Projects/music-tagger/changes.log
