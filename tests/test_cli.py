@@ -7,6 +7,8 @@ from unittest.mock import patch
 import pytest
 
 from music_tagger.cli import (
+    EXIT_BLOCKED,
+    EXIT_REVIEW,
     _diff,
     _is_album_dir,
     _lock,
@@ -811,7 +813,7 @@ class TestTagCommand:
             with pytest.raises(SystemExit) as error:
                 _tag([str(flac_album), "--release-id", "r-1", "--log", str(log_path)])
 
-        assert error.value.code == 1
+        assert error.value.code == EXIT_BLOCKED
         assert {path: path.read_bytes() for path in before} == before
         assert not log_path.exists()
         captured = capsys.readouterr()  # type: ignore[attr-defined]
@@ -832,7 +834,7 @@ class TestTagCommand:
             format="CD",
             discs={
                 1: [
-                    MBTrack(number=1, title="Doolin-Dalton"),
+                    MBTrack(number=1, title="Desperado"),
                     MBTrack(number=2, title="Twenty-One"),
                     MBTrack(number=3, title="Out of Control"),
                 ]
@@ -1156,7 +1158,7 @@ class TestTagCommandLocks:
 
         with patch("music_tagger.cli.MusicBrainzClient") as client:
             client.return_value.fetch_release.return_value = _desperado_release()
-            _tag([str(flac_album), "--release-id", "r-1", "--ignore-locks"])
+            _tag([str(flac_album), "--release-id", "r-1", "--ignore-locks", "--approve-overwrites"])
 
         updated = read_album(flac_album).tracks[0]
         assert updated.tags["title"] == "Doolin-Dalton"
@@ -1192,3 +1194,86 @@ def _tag_album_to_match(album_dir: Path, release: MBRelease) -> None:
     from music_tagger.tagger import apply_changes, build_diff
 
     apply_changes(build_diff(read_album(album_dir), release))
+
+
+def _gate_release(first_title: str) -> MBRelease:
+    """A release that matches the FLAC fixture except, possibly, track 1's title."""
+    return MBRelease(
+        id="r-1",
+        title="Desperado",
+        artist="Eagles",
+        discs={
+            1: [
+                MBTrack(number=1, title=first_title),
+                MBTrack(number=2, title="Twenty-One"),
+                MBTrack(number=3, title="Out of Control"),
+            ]
+        },
+    )
+
+
+def _run_tag(album_dir: Path, release: MBRelease, *extra: str) -> None:
+    from music_tagger.cli import _tag
+
+    with patch("music_tagger.cli.MusicBrainzClient") as client:
+        client.return_value.fetch_release.return_value = release
+        _tag([str(album_dir), "--release-id", release.id, *extra])
+
+
+class TestTagCommandGate:
+    def test_dry_run_passes_gate_for_id_and_fill_changes(
+        self, flac_album: Path, capsys: object
+    ) -> None:
+        _run_tag(flac_album, _gate_release("Desperado"), "--dry-run")
+
+        assert "Gate: auto" in capsys.readouterr().out  # type: ignore[attr-defined]
+
+    def test_dry_run_passes_gate_for_style_only_overwrite(
+        self, flac_album: Path, capsys: object
+    ) -> None:
+        _run_tag(flac_album, _gate_release("DESPERADO"), "--dry-run")
+
+        assert "Gate: auto" in capsys.readouterr().out  # type: ignore[attr-defined]
+
+    def test_dry_run_exits_review_for_overwrite(self, flac_album: Path, capsys: object) -> None:
+        with pytest.raises(SystemExit) as error:
+            _run_tag(flac_album, _gate_release("Doolin-Dalton"), "--dry-run")
+
+        assert error.value.code == EXIT_REVIEW
+        out = capsys.readouterr().out  # type: ignore[attr-defined]
+        assert "Gate: review" in out
+        assert "01 - Track 1.flac: title: Desperado → Doolin-Dalton" in out
+
+    def test_dry_run_exits_blocked_for_unresolved_conflict(
+        self, flac_album: Path, capsys: object
+    ) -> None:
+        write_tags(read_album(flac_album).tracks[0], [TagChange("isrc", "", "USIR19902220")])
+        release = _gate_release("Desperado")
+        release.discs[1][0].isrcs = ["USDW10110279"]
+
+        with pytest.raises(SystemExit) as error:
+            _run_tag(flac_album, release, "--dry-run")
+
+        assert error.value.code == EXIT_BLOCKED
+        assert "Gate: blocked" in capsys.readouterr().out  # type: ignore[attr-defined]
+
+    def test_refuses_unapproved_overwrite(self, flac_album: Path, tmp_path: Path) -> None:
+        before = {path: path.read_bytes() for path in flac_album.glob("*.flac")}
+        log_path = tmp_path / "changes.log"
+
+        with pytest.raises(SystemExit) as error:
+            _run_tag(flac_album, _gate_release("Doolin-Dalton"), "--log", str(log_path))
+
+        assert error.value.code == EXIT_REVIEW
+        assert {path: path.read_bytes() for path in before} == before
+        assert not log_path.exists()
+
+    def test_writes_approved_overwrite(self, flac_album: Path) -> None:
+        _run_tag(flac_album, _gate_release("Doolin-Dalton"), "--approve-overwrites")
+
+        assert read_album(flac_album).tracks[0].tags["title"] == "Doolin-Dalton"
+
+    def test_writes_without_approval_when_gate_passes(self, flac_album: Path) -> None:
+        _run_tag(flac_album, _gate_release("Desperado"))
+
+        assert read_album(flac_album).tracks[0].tags["musicbrainz_albumid"] == "r-1"

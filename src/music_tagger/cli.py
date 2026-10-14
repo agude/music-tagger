@@ -21,6 +21,7 @@ from .tagger import (
     _parse_track_number,
     apply_changes,
     build_diff,
+    overwrites_needing_review,
     score_candidates,
     search_candidates,
 )
@@ -36,6 +37,10 @@ from .tags import (
 )
 
 _DEFAULT_LIBRARY_ROOT = Path("/mnt/synology/media/music")
+
+# Exit codes for `tag`, so the operator can branch without parsing output.
+EXIT_REVIEW = 3  # An overwrite needs --approve-overwrites.
+EXIT_BLOCKED = 4  # Unresolved conflicts; nothing can be written.
 _DEFAULT_RATINGS_PATH = _DEFAULT_LIBRARY_ROOT / "ratings.json"
 
 
@@ -698,6 +703,26 @@ def _print_diff(result: AlbumResult) -> None:
         print(f"No tag changes to apply; {locked_count} locked field(s) kept.")
     else:
         print("No tag changes needed.")
+
+
+def _print_gate(result: AlbumResult) -> int:
+    """Print the safety-gate verdict. Returns 0, EXIT_REVIEW, or EXIT_BLOCKED."""
+    if result.has_unresolved_conflicts:
+        count = sum(
+            not conflict.is_resolved for diff in result.diffs for conflict in diff.conflicts
+        )
+        print(f"Gate: blocked — {count} unresolved ISRC conflict(s); see stderr.")
+        return EXIT_BLOCKED
+
+    overwrites = overwrites_needing_review(result)
+    if overwrites:
+        print("Gate: review — these overwrites need approval:")
+        for path, change in overwrites:
+            print(f"  {path.name}: {change.field}: {change.old_value} → {change.new_value}")
+        return EXIT_REVIEW
+
+    print("Gate: auto — no overwrites need approval.")
+    return 0
 
 
 def _format_change_lines(diff: TrackDiff) -> list[str]:
@@ -1466,6 +1491,11 @@ def _tag(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Overwrite locked fields too. The locks themselves stay in place.",
     )
+    parser.add_argument(
+        "--approve-overwrites",
+        action="store_true",
+        help="Write changes that replace a non-empty title, artist, album, albumartist, or date.",
+    )
     args = parser.parse_args(argv)
 
     target: Path = args.path.resolve()
@@ -1490,9 +1520,19 @@ def _tag(argv: list[str] | None = None) -> None:
     if not result.has_changes and not result.has_unresolved_conflicts:
         return
 
+    gate = _print_gate(result)
     if args.dry_run:
         print("(dry run — skipping write)")
+        if gate:
+            sys.exit(gate)
         return
+
+    if gate == EXIT_BLOCKED:
+        print("Error: resolve the ISRC conflicts first; nothing written.", file=sys.stderr)
+        sys.exit(EXIT_BLOCKED)
+    if gate == EXIT_REVIEW and not args.approve_overwrites:
+        print("Error: overwrites need --approve-overwrites; nothing written.", file=sys.stderr)
+        sys.exit(EXIT_REVIEW)
 
     try:
         count = apply_changes(result, ignore_locks=args.ignore_locks)

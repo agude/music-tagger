@@ -21,6 +21,12 @@ Key CLI subcommands, driven by Claude Code in conversation:
    — fetches the chosen release from MusicBrainz, computes a field-by-field
    diff against current tags, and writes if not `--dry-run`. Appends all
    changes to the log file for auditing.
+   It ends with a safety-gate verdict and a matching exit code: 0
+   `Gate: auto`, 3 `Gate: review` (an overwrite of a non-empty `title`,
+   `artist`, `album`, `albumartist`, or `date` that is more than a case,
+   Unicode-punctuation, or whitespace change), 4 `Gate: blocked`
+   (unresolved ISRC conflicts). A real run refuses exit-3 changes unless
+   `--approve-overwrites` is passed.
 
 4. `uv run music-tagger genre <album-dir> [genre ...] [--dry-run] [--log changes.log]`
    — sets the genre meta-grouping tags on all tracks. Pass each genre as its

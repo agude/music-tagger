@@ -16,6 +16,7 @@ from music_tagger.tagger import (
     _parse_track_number,
     apply_changes,
     build_diff,
+    overwrites_needing_review,
     score_candidates,
     search_candidates,
 )
@@ -926,3 +927,64 @@ class TestApplyChangesLocks:
         updated = read_album(flac_album).tracks[0]
         assert updated.tags["title"] == "Doolin-Dalton"
         assert updated.locked_fields == ["title"]
+
+
+class TestOverwritesNeedingReview:
+    @staticmethod
+    def _result(*changes: TagChange) -> AlbumResult:
+        track = TrackTags(Path("/music/01.flac"), {}, format="flac")
+        return AlbumResult(
+            AlbumTags(Path("/music"), [track]), _make_release(), [TrackDiff(track, list(changes))]
+        )
+
+    @pytest.mark.parametrize("field_name", ["title", "artist", "album", "albumartist", "date"])
+    def test_flags_overwrite_of_reviewed_field(self, field_name: str) -> None:
+        change = TagChange(field_name, "Old", "New")
+
+        overwrites = overwrites_needing_review(self._result(change))
+
+        assert overwrites == [(Path("/music/01.flac"), change)]
+
+    def test_ignores_fill_of_empty_field(self) -> None:
+        assert overwrites_needing_review(self._result(TagChange("title", "", "New"))) == []
+
+    def test_ignores_overwrite_of_unreviewed_field(self) -> None:
+        change = TagChange("label", "Asylum", "Asylum Records")
+
+        assert overwrites_needing_review(self._result(change)) == []
+
+    @pytest.mark.parametrize(
+        ("old", "new"),
+        [
+            ("I'm Gonna Be (500 Miles)", "I\u2019m Gonna Be (500 Miles)"),
+            ("Greatest Hits 1991-2003", "Greatest Hits 1991\u20132003"),
+            ("Dorsey-Itis", "Dorsey\u2010itis"),
+            ("Love Is Strange: En Vivo Con Tino", "Love Is Strange: En vivo con Tino"),
+            ('"Heroes"', "\u201cHeroes\u201d"),
+            ("Wait...", "Wait\u2026"),
+            ("Two  Spaces", "Two Spaces"),
+        ],
+    )
+    def test_ignores_style_only_overwrite(self, old: str, new: str) -> None:
+        assert overwrites_needing_review(self._result(TagChange("title", old, new))) == []
+
+    @pytest.mark.parametrize(
+        ("old", "new"),
+        [
+            ("Space Intro", "Space Intro."),
+            ("Greatest Hits Volume III 1983-1997", "Greatest Hits, Volume III"),
+            ("Yours, Mine and Ours", "Gilmore Girls: The Ultimate Soundtrack, Volume 2"),
+        ],
+    )
+    def test_flags_substantive_overwrite(self, old: str, new: str) -> None:
+        assert overwrites_needing_review(self._result(TagChange("album", old, new)))
+
+    def test_ignores_locked_changes(self) -> None:
+        track = TrackTags(Path("/music/01.flac"), {}, format="flac")
+        result = AlbumResult(
+            AlbumTags(Path("/music"), [track]),
+            _make_release(),
+            [TrackDiff(track, [], locked_changes=[TagChange("title", "Old", "New")])],
+        )
+
+        assert overwrites_needing_review(result) == []

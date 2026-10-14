@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -512,3 +514,47 @@ def _check_locks(result: AlbumResult) -> None:
             + "; ".join(violations)
             + ". Run `unlock` on these fields, or `tag --ignore-locks`."
         )
+
+
+# Fields a user must approve before `tag` overwrites a non-empty value. Other
+# fields are IDs or release metadata that MusicBrainz is trusted to correct.
+REVIEWED_FIELDS = frozenset({"title", "artist", "album", "albumartist", "date"})
+
+# MusicBrainz style guidelines use typographic punctuation; files from other
+# taggers usually use ASCII. Treat the two as the same text.
+_STYLE_EQUIVALENTS = str.maketrans(
+    {
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2010": "-",
+        "\u2011": "-",
+        "\u2012": "-",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2015": "-",
+    }
+)
+
+
+def overwrites_needing_review(result: AlbumResult) -> list[tuple[Path, TagChange]]:
+    """Return changes that replace a reviewed field's value with different text.
+
+    Filling an empty field, and changes of case, Unicode punctuation, or
+    whitespace only, do not need review.
+    """
+    overwrites = []
+    for diff in result.diffs:
+        for change in diff.effective_changes:
+            if change.field not in REVIEWED_FIELDS or not change.old_value:
+                continue
+            if _style_key(change.old_value) == _style_key(change.new_value):
+                continue
+            overwrites.append((diff.track.path, change))
+    return overwrites
+
+
+def _style_key(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text).translate(_STYLE_EQUIVALENTS)
+    return re.sub(r"\s+", " ", normalized).strip().casefold()

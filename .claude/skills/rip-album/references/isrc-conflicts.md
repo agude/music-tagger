@@ -7,15 +7,15 @@ apply that diff with `write-tags`.
 
 ## Recognize the output
 
-`tag --dry-run` prints ISRC issues to stderr. It exits 0 even when the real
-run will fail.
+`tag --dry-run` prints ISRC issues to stderr. Unresolved conflicts make it
+print `Gate: blocked` and exit 4.
 
 | Line | Meaning | Blocks writes |
 | --- | --- | --- |
 | `ISRC conflict: <path>: file=<code>; MusicBrainz=[<codes>]; unresolved` | The file's code is not in the MusicBrainz list | Yes |
 | `Warning: <path>: ISRC <code> is unverified: MusicBrainz lists no ISRCs.` | MusicBrainz has no codes to compare against | No |
 
-When unresolved conflicts are present, `tag` without `--dry-run` exits 1 and
+When unresolved conflicts are present, `tag` without `--dry-run` exits 4 and
 writes nothing. Do not run it. Use the procedure below instead.
 
 Warnings alone do not block writes. Continue with the normal apply step and

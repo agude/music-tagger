@@ -75,39 +75,40 @@ uv run music-tagger tag "<album-dir>" --release-id <uuid> --dry-run
 
 ### Safety gate
 
-Inspect the diff output:
+The dry run ends with a gate verdict, and its exit code matches:
 
-- **Auto-proceed** if all changes either fill empty fields or update
-  `performer` / `musicbrainz_albumid` / `musicbrainz_artistid` /
-  `musicbrainz_albumartistid` / `musicbrainz_trackid` /
-  `releasestatus` / `releasetype` / `releasedate` / `barcode` /
-  `media` / `catalognumber` / `label` / `asin` fields.
-- **Stop and show the diff** if any change overwrites a non-empty `title`,
-  `artist`, `album`, `albumartist`, or `date` field with a different value.
-  Wait for user confirmation before proceeding.
+| Exit | Verdict | Action |
+| --- | --- | --- |
+| 0 | `Gate: auto` | Apply. |
+| 3 | `Gate: review` | Show the user the listed overwrites. After they confirm, apply with `--approve-overwrites`. If they reject them, the release is probably wrong: return to release selection. |
+| 4 | `Gate: blocked` | Unresolved ISRC conflicts. See below. |
 
-Check stderr for ISRC issues. The change list does not include them, and
-the dry run exits 0 even when they block writes.
+The gate passes changes that fill empty fields, change only IDs or release
+metadata, or change only case, Unicode punctuation, or whitespace. It stops
+only for real changes to a non-empty `title`, `artist`, `album`,
+`albumartist`, or `date`.
 
-- **`ISRC conflict: ... unresolved`:** `tag` will exit 1 and write nothing.
-  Skip the apply step below. The source of an existing library code is
-  unknown: it may have been read from the CD or set by another tagger.
-  Show the user a table of each conflicting file, its code, and the
-  MusicBrainz codes. Then ask with `AskUserQuestion`:
-  - **Keep file codes (Recommended):** absence from MusicBrainz does not
-    prove a code is wrong.
-  - **Use MusicBrainz codes:** this applies only to tracks where MusicBrainz
-    lists exactly one code. If a track lists several codes, ask which one to
-    use.
+`Warning: ... unverified` lines on stderr do not block writes. List each
+unverified code in the final summary.
 
-  Apply the decision with
-  `${CLAUDE_SKILL_DIR}/references/isrc-conflicts.md`.
-- **`Warning: ... unverified`:** this does not block writes. Proceed, and
-  list each unverified code in the final summary.
+**Exit 4 (`Gate: blocked`):** `tag` writes nothing until the conflicts are
+resolved. Skip the apply step below. The source of an existing library code is
+unknown: it may have been read from the CD or set by another tagger.
+Show the user a table of each conflicting file, its code, and the
+MusicBrainz codes. Then ask with `AskUserQuestion`:
+- **Keep file codes (Recommended):** absence from MusicBrainz does not
+  prove a code is wrong.
+- **Use MusicBrainz codes:** this applies only to tracks where MusicBrainz
+  lists exactly one code. If a track lists several codes, ask which one to
+  use.
+
+Apply the decision with
+`${CLAUDE_SKILL_DIR}/references/isrc-conflicts.md`.
 
 ### Apply
 
-Run this step only when the dry run reported no unresolved ISRC conflicts:
+Run this step only when the dry run exited 0, or exited 3 and the user approved.
+Add `--approve-overwrites` in the second case.
 
 ```bash
 uv run music-tagger tag "<album-dir>" --release-id <uuid> --log ~/Projects/music-tagger/changes.log
