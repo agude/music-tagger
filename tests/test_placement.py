@@ -367,3 +367,19 @@ class TestPathForCommand:
         assert "Desperado" in captured.out
         assert "3 files" in captured.out
         assert out.exists()
+
+
+class TestPlacementOverrides:
+    def test_overrides_directory_names(self, flac_album: Path) -> None:
+        album = read_album(flac_album)
+
+        plan = compute_placement(
+            album, root=Path("/music"), artist_dir="The Eagles", album_dir="Desperado (Remaster)"
+        )
+
+        assert plan.album_dir == Path("/music/The Eagles/Desperado (Remaster)")
+
+    def test_sanitizes_overrides(self, flac_album: Path) -> None:
+        plan = compute_placement(read_album(flac_album), root=Path("/music"), album_dir="A/B")
+
+        assert plan.album_dir == Path("/music/Eagles/A-B")

@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
+import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -970,7 +972,13 @@ def _rip(argv: list[str] | None = None) -> None:
         prog="music-tagger rip",
         description="Rip a CD to FLAC via whipper with AccurateRip verification.",
     )
-    parser.add_argument("path", type=Path, help="Output directory for FLAC files.")
+    parser.add_argument(
+        "path",
+        nargs="?",
+        type=Path,
+        default=None,
+        help="Output directory for FLAC files (default: a new temp staging directory).",
+    )
     parser.add_argument(
         "--device", default="/dev/cdrom", help="CD drive device (default: /dev/cdrom)."
     )
@@ -982,12 +990,12 @@ def _rip(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    from .ripper import rip_cd
+    from . import ripper
 
-    target: Path = args.path.resolve()
+    target = args.path.resolve() if args.path else Path(tempfile.mkdtemp(prefix="rip-"))
 
-    print(f"Ripping to {target}...")
-    result = rip_cd(
+    print(f"Staging: {target}")
+    result = ripper.rip_cd(
         target,
         device=args.device,
         release_id=args.release_id,
@@ -1294,7 +1302,7 @@ def _write_genre_log(log_path: Path, album: AlbumTags, genre: str, count: int) -
 def _rename(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger rename",
-        description="Rename audio files to 'NN - Title.ext' based on tags.",
+        description="Rename audio files to 'NN. Title.ext' (or 'D-NN. Title.ext') from tags.",
     )
     parser.add_argument("path", type=Path, help="Album directory.")
     parser.add_argument("--dry-run", action="store_true", help="Show renames without executing.")
@@ -1311,8 +1319,9 @@ def _rename(argv: list[str] | None = None) -> None:
         print(f"Error: no audio files in {target}.", file=sys.stderr)
         sys.exit(1)
 
-    from .placement import _sanitize
+    from .placement import is_multi_disc, track_filename
 
+    multi_disc = is_multi_disc(album)
     renames: list[tuple[str, str]] = []
     for track in album.tracks:
         title = track.tags.get("title")
@@ -1322,13 +1331,13 @@ def _rename(argv: list[str] | None = None) -> None:
             continue
 
         try:
-            num = int(tracknumber.split("/")[0])
+            int(tracknumber.split("/")[0])
         except ValueError:
             print(f"  {track.path.name}: skipped (unparseable tracknumber '{tracknumber}')")
             continue
 
-        safe_title = _sanitize(title)
-        new_name = f"{num:02d} - {safe_title}{track.path.suffix}"
+        # Same names `place` gives files in the library.
+        new_name = track_filename(track, multi_disc)
         new_path = track.path.parent / new_name
 
         if new_path == track.path:
@@ -1426,6 +1435,169 @@ def _write_replaygain_log(
     ]
     with open(log_path, "a") as f:
         f.write("\n".join(lines))
+
+
+def _apply(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger apply",
+        description="Run tag, art, genre, rename, and replaygain on an album, stopping at the "
+        "first failure. Inputs are checked before anything is written.",
+    )
+    parser.add_argument("path", type=Path, help="Album directory.")
+    parser.add_argument("--release-id", required=True, help="MusicBrainz release UUID.")
+    cover = parser.add_mutually_exclusive_group(required=True)
+    cover.add_argument("--cover-file", type=Path, help="Install and embed this reviewed image.")
+    cover.add_argument(
+        "--keep-cover", action="store_true", help="Embed the album's existing cover.jpg."
+    )
+    parser.add_argument(
+        "--genre", action="append", required=True, help="Genre to set. Repeat for several."
+    )
+    parser.add_argument(
+        "--force-genre", action="store_true", help="Allow genres not on the canonical list."
+    )
+    parser.add_argument("--approve-overwrites", action="store_true", help="Passed to `tag`.")
+    parser.add_argument("--ignore-locks", action="store_true", help="Passed to `tag`.")
+    parser.add_argument("--isrc", choices=ISRC_POLICIES, default=None, help="Passed to `tag`.")
+    parser.add_argument(
+        "--isrc-code",
+        action="append",
+        default=[],
+        metavar="[DISC-]TRACK=CODE",
+        help="Passed to `tag`.",
+    )
+    _add_log_arguments(parser)
+    args = parser.parse_args(argv)
+
+    target: Path = args.path.resolve()
+    cover_path = _check_apply_inputs(target, args)
+
+    log_args = ["--no-log"] if args.no_log else ["--log", str(_log_path(args))]
+    tag_args = _apply_tag_args(args)
+    # Installing the album's own cover.jpg over itself would fail; it only needs embedding.
+    art_args = ["--cover-file", str(cover_path), "--embed"]
+    if cover_path != target / "cover.jpg":
+        art_args.append("--force")
+    genre_args = [*args.genre, *(["--force"] if args.force_genre else [])]
+
+    steps: list[tuple[str, Callable[[list[str] | None], None], list[str]]] = [
+        ("tag", _tag, tag_args),
+        ("art", _art, art_args),
+        ("genre", _genre, genre_args),
+        ("rename", _rename, []),
+        ("replaygain", _replaygain, []),
+    ]
+    for name, handler, step_args in steps:
+        print(f"\n== {name} ==")
+        try:
+            handler([str(target), *step_args, *log_args])
+        except SystemExit as error:
+            if error.code:
+                print(f"apply stopped at {name} (exit {error.code}).", file=sys.stderr)
+                raise
+    print("\nDone.")
+
+
+def _apply_tag_args(args: argparse.Namespace) -> list[str]:
+    """Rebuild the `tag` arguments that `apply` passes through."""
+    tag_args = ["--release-id", args.release_id]
+    if args.approve_overwrites:
+        tag_args.append("--approve-overwrites")
+    if args.ignore_locks:
+        tag_args.append("--ignore-locks")
+    if args.isrc:
+        tag_args += ["--isrc", args.isrc]
+    for spec in args.isrc_code:
+        tag_args += ["--isrc-code", spec]
+    return tag_args
+
+
+def _check_apply_inputs(target: Path, args: argparse.Namespace) -> Path:
+    """Validate `apply` inputs before any step writes. Returns the cover image path."""
+    if not target.is_dir():
+        print(f"Error: {target} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    cover_path: Path = target / "cover.jpg" if args.keep_cover else args.cover_file.resolve()
+    if not cover_path.is_file():
+        print(f"Error: cover image not found: {cover_path}", file=sys.stderr)
+        sys.exit(1)
+
+    from .genres import GENRE_LIST_PATH, load_canonical
+
+    canonical = load_canonical()
+    unknown = [genre for genre in args.genre if canonical and genre not in canonical]
+    if unknown and not args.force_genre:
+        print(f"Error: not on the canonical list: {', '.join(unknown)}", file=sys.stderr)
+        print(f"See {GENRE_LIST_PATH}, or pass --force-genre.", file=sys.stderr)
+        sys.exit(1)
+    return cover_path
+
+
+def _place(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger place",
+        description="Copy a finished album into the library with SHA-256 verification. "
+        "Removes the source afterward when it is a temp staging directory.",
+    )
+    parser.add_argument("path", type=Path, help="Album directory to copy.")
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=_DEFAULT_LIBRARY_ROOT,
+        help=f"Library root (default: {_DEFAULT_LIBRARY_ROOT}).",
+    )
+    parser.add_argument("--artist-dir", default=None, help="Override the artist directory name.")
+    parser.add_argument("--album-dir", default=None, help="Override the album directory name.")
+    parser.add_argument(
+        "--merge",
+        action="store_true",
+        help="Allow copying into an existing album directory. Existing files are kept.",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show the destination and files without copying."
+    )
+    _add_log_arguments(parser)
+    args = parser.parse_args(argv)
+
+    source: Path = args.path.resolve()
+    album = read_album(source)
+    if not album.tracks:
+        print(f"Error: no audio files in {source}.", file=sys.stderr)
+        sys.exit(1)
+
+    plan = compute_placement(
+        album, root=args.root, artist_dir=args.artist_dir, album_dir=args.album_dir
+    )
+    destination_exists = plan.album_dir.exists()
+    print(f"{album.artist} — {album.album}")
+    print(f"Destination: {plan.album_dir}" + (" (exists)" if destination_exists else ""))
+    for mapping in plan.mappings:
+        print(f"  {mapping.source.name} → {mapping.dest.name}")
+
+    if destination_exists and not args.merge:
+        print("Error: destination exists; pass --merge to copy into it.", file=sys.stderr)
+        sys.exit(1)
+    if args.dry_run:
+        print("\n(dry run — nothing copied)")
+        return
+
+    result = copy_files(plan)
+    log_path = _log_path(args)
+    if log_path:
+        _write_copy_log(log_path, plan, result)
+    for mapping, error in result.failed:
+        print(f"Failed: {mapping.dest}: {error}", file=sys.stderr)
+    for mapping in result.skipped:
+        print(f"Skipped (exists): {mapping.dest}")
+    print(f"Copied {len(result.copied)} of {len(plan.mappings)} file(s).")
+    if result.failed:
+        sys.exit(1)
+
+    # Delete only a temp staging directory whose every file was copied and verified.
+    if not result.skipped and source.is_relative_to(Path(tempfile.gettempdir()).resolve()):
+        shutil.rmtree(source)
+        print(f"Removed staging directory {source}")
 
 
 def _parse_isrc_code(spec: str) -> tuple[tuple[int, int], str]:
@@ -1688,10 +1860,12 @@ def _register_commands() -> dict[str, tuple[str, Callable[[list[str] | None], No
         "scan": ("Generate a checklist of albums needing attention.", _scan),
         "candidates": ("Show MusicBrainz candidates for an album.", _print_candidates),
         "tag": ("Apply tags from a chosen MusicBrainz release.", _tag),
+        "apply": ("Run tag, art, genre, rename, and replaygain on an album.", _apply),
+        "place": ("Copy a finished album into the library.", _place),
         "genre": ("Set or show the genre meta-grouping tag.", _genre),
         "lock": ("Lock fields so `tag` keeps them, or show locks.", _lock),
         "unlock": ("Unlock fields so `tag` can change them.", _unlock),
-        "rename": ("Rename files to 'NN - Title.ext' from tags.", _rename),
+        "rename": ("Rename files to 'NN. Title.ext' from tags.", _rename),
         "replaygain": ("Compute and write ReplayGain 2.0 tags.", _replaygain),
         "rip": ("Rip a CD to FLAC with bootstrap tags.", _rip),
     }

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .tags import AlbumTags
+from .tags import AlbumTags, TrackTags
 
 DEFAULT_LIBRARY_ROOT = Path("/mnt/synology/media/music")
 
@@ -76,38 +76,49 @@ def compute_placement(
     album: AlbumTags,
     root: Path = DEFAULT_LIBRARY_ROOT,
     include_non_audio: bool = True,
+    artist_dir: str | None = None,
+    album_dir: str | None = None,
 ) -> PlacementPlan:
-    artist = _sanitize(album.artist or "Unknown Artist")
+    """Plan the library paths for an album.
 
-    album_name = album.album or "Unknown Album"
-    year = _extract_year(album)
-    safe = _sanitize(album_name)
-    album_dir_name = f"{safe} ({year})" if year else safe
+    `artist_dir` and `album_dir` replace the directory names computed from
+    the tags; they are sanitized the same way.
+    """
+    artist_name = _sanitize(artist_dir or album.artist or "Unknown Artist")
+    if album_dir:
+        album_dir_name = _sanitize(album_dir)
+    else:
+        year = _extract_year(album)
+        safe = _sanitize(album.album or "Unknown Album")
+        album_dir_name = f"{safe} ({year})" if year else safe
+    destination = root / artist_name / album_dir_name
 
-    album_dir = root / artist / album_dir_name
-
-    is_multi_disc = any(_parse_int(t.tags.get("discnumber", "1"), 1) > 1 for t in album.tracks)
-
-    mappings: list[FileMapping] = []
-    for track in album.tracks:
-        track_num = _parse_int(track.tags.get("tracknumber", "0"), 0)
-        title = _sanitize(track.tags.get("title", track.path.stem))
-        ext = track.path.suffix
-
-        if is_multi_disc:
-            disc_num = _parse_int(track.tags.get("discnumber", "1"), 1)
-            filename = f"{disc_num}-{track_num:02d}. {title}{ext}"
-        else:
-            filename = f"{track_num:02d}. {title}{ext}"
-
-        mappings.append(FileMapping(source=track.path, dest=album_dir / filename))
+    multi_disc = is_multi_disc(album)
+    mappings = [
+        FileMapping(source=track.path, dest=destination / track_filename(track, multi_disc))
+        for track in album.tracks
+    ]
 
     if include_non_audio and album.directory.is_dir():
         for f in sorted(album.directory.iterdir()):
             if f.is_file() and f.suffix.lower() in _NON_AUDIO_EXTENSIONS:
-                mappings.append(FileMapping(source=f, dest=album_dir / f.name))
+                mappings.append(FileMapping(source=f, dest=destination / f.name))
 
-    return PlacementPlan(album_dir=album_dir, mappings=mappings)
+    return PlacementPlan(album_dir=destination, mappings=mappings)
+
+
+def is_multi_disc(album: AlbumTags) -> bool:
+    return any(_parse_int(t.tags.get("discnumber", "1"), 1) > 1 for t in album.tracks)
+
+
+def track_filename(track: TrackTags, multi_disc: bool) -> str:
+    """Library file name: "NN. Title.ext", or "D-NN. Title.ext" on multi-disc albums."""
+    track_num = _parse_int(track.tags.get("tracknumber", "0"), 0)
+    title = _sanitize(track.tags.get("title", track.path.stem))
+    if multi_disc:
+        disc_num = _parse_int(track.tags.get("discnumber", "1"), 1)
+        return f"{disc_num}-{track_num:02d}. {title}{track.path.suffix}"
+    return f"{track_num:02d}. {title}{track.path.suffix}"
 
 
 def _extract_year(album: AlbumTags) -> str:

@@ -850,13 +850,26 @@ class TestTagCommand:
 
 
 class TestRenameCommand:
+    def test_uses_disc_prefix_for_multi_disc_album(self, flac_album: Path) -> None:
+        last = read_album(flac_album).tracks[2]
+        write_tags(last, [TagChange("discnumber", "1", "2"), TagChange("tracknumber", "3", "1")])
+
+        _rename([str(flac_album)])
+
+        names = sorted(path.name for path in flac_album.glob("*.flac"))
+        assert names == [
+            "1-01. Desperado.flac",
+            "1-02. Twenty-One.flac",
+            "2-01. Out of Control.flac",
+        ]
+
     def test_dry_run(self, capsys: object, flac_album: Path) -> None:
         for f in sorted(flac_album.glob("*.flac")):
             f.rename(f.parent / f"track{f.stem[:2]}.flac")
 
         _rename([str(flac_album), "--dry-run"])
         captured = capsys.readouterr()  # type: ignore[attr-defined]
-        assert "track01.flac -> 01 - Desperado.flac" in captured.out
+        assert "track01.flac -> 01. Desperado.flac" in captured.out
         assert "dry run" in captured.out
         assert (flac_album / "track01.flac").exists()
 
@@ -867,9 +880,9 @@ class TestRenameCommand:
         _rename([str(flac_album)])
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "Renamed 3 file(s)" in captured.out
-        assert (flac_album / "01 - Desperado.flac").exists()
-        assert (flac_album / "02 - Twenty-One.flac").exists()
-        assert (flac_album / "03 - Out of Control.flac").exists()
+        assert (flac_album / "01. Desperado.flac").exists()
+        assert (flac_album / "02. Twenty-One.flac").exists()
+        assert (flac_album / "03. Out of Control.flac").exists()
 
     def test_skips_already_correct(self, flac_album: Path, capsys: object) -> None:
         # Fixtures are named "NN - Track N.flac" but title tag is different,
@@ -880,7 +893,7 @@ class TestRenameCommand:
             audio = FLAC(str(f))
             title = audio["TITLE"][0]
             num = int(audio["TRACKNUMBER"][0])
-            correct_name = f"{num:02d} - {title}.flac"
+            correct_name = f"{num:02d}. {title}.flac"
             if f.name != correct_name:
                 f.rename(f.parent / correct_name)
 
@@ -909,7 +922,7 @@ class TestRenameCommand:
         audio.save()
         _rename([str(flac_album)])
         capsys.readouterr()  # type: ignore[attr-defined]
-        assert (flac_album / "01 - What-Is-This-.flac").exists()
+        assert (flac_album / "01. What-Is-This-.flac").exists()
 
 
 class TestWriteRatings:

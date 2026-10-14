@@ -51,25 +51,41 @@ Key CLI subcommands, driven by Claude Code in conversation:
    writing. Use `--skip-existing` to skip files already tagged.
    Requires system package: `rsgain`.
 
-6. `uv run music-tagger rename <album-dir> [--dry-run] [--log changes.log]` — renames audio
-   files to `NN - Title.ext` based on their tracknumber and title tags.
-   Sanitizes filesystem-unsafe characters. Skips files missing title or
-   tracknumber tags.
+6. `uv run music-tagger rename <album-dir> [--dry-run]` — renames audio
+   files to `NN. Title.ext` (`D-NN. Title.ext` on multi-disc albums) from
+   their tracknumber, discnumber, and title tags, the same names `place`
+   uses. Sanitizes filesystem-unsafe characters. Skips files missing title
+   or tracknumber tags.
 
-7. `uv run music-tagger rip <output-dir> [--device /dev/cdrom] [--release-id <uuid>] [--unknown]`
+7. `uv run music-tagger rip [<output-dir>] [--device /dev/cdrom] [--release-id <uuid>] [--unknown]`
    — rips a CD to FLAC via whipper with AccurateRip verification.
    Whipper handles disc ID lookup, MusicBrainz matching, and FLAC
    encoding. Produces .log and .cue files alongside the audio.
    Use `--release-id` to force a specific MB release, or `--unknown`
-   to rip CDs not in MusicBrainz. Requires system package: `whipper`.
+   to rip CDs not in MusicBrainz. Without an output directory, it creates a
+   temp staging directory and prints `Staging: <path>`. Requires system
+   package: `whipper`.
 
-8. `uv run music-tagger lock <album-dir> [field ...] [--track N] [--disc N] [--dry-run] [--log changes.log]`
+8. `uv run music-tagger lock <album-dir> [field ...] [--track N] [--disc N] [--dry-run]`
    — locks fields so `tag` keeps their current value, including an empty
    one. Omit the fields to show current locks. `unlock` takes the same
    arguments and removes them. `tag` reports withheld changes as
    `field: old (locked; release has new)` and never as "no changes needed";
    `tag --ignore-locks` overwrites locked fields and leaves the locks in
    place. A locked `isrc` skips the ISRC conflict check.
+
+9. `uv run music-tagger apply <album-dir> --release-id <uuid> (--cover-file <img> | --keep-cover) --genre <g> [--genre <g> ...]`
+   — runs `tag`, `art`, `genre`, `rename`, and `replaygain` in order and
+   stops at the first non-zero exit. Checks the cover image and genres
+   before any step writes. Passes `--approve-overwrites`, `--ignore-locks`,
+   `--isrc`, and `--isrc-code` through to `tag`, so a gate stop (exit 3 or
+   4) happens before anything is written.
+
+10. `uv run music-tagger place <album-dir> [--root <dir>] [--artist-dir <name>] [--album-dir <name>] [--merge] [--dry-run]`
+    — copies a finished album into the library with SHA-256 verification.
+    Refuses an existing album directory unless `--merge` (existing files are
+    kept). Removes the source only when it is under the temp directory and
+    every file was copied, so it never deletes a library album.
 
 ## Library workflow
 
