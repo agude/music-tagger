@@ -12,7 +12,13 @@ This is an interactive tool — Claude Code is the operator, not the end user.
 Key CLI subcommands, driven by Claude Code in conversation:
 
 1. `uv run music-tagger scan <library-root> -o checklist.md` — finds albums
-   with split or missing MusicBrainz IDs, writes a markdown checklist.
+   with split or missing MusicBrainz IDs. A `.md` output adds them to the
+   markdown checklist and keeps existing entries and their status; any
+   other output is JSON. `checklist next | done <dir> | skip <dir> --reason
+   <text> | reopen (<dir> | --matching <text>)` reads and updates it
+   (default file `$MUSIC_TAGGER_CHECKLIST`, else
+   `~/Projects/music-tagger/checklist.md`). Never edit the checklist by
+   hand.
 
 2. `uv run music-tagger candidates <album-dir>` — reads audio file tags and
    durations, searches MusicBrainz for CD releases, and prints every
@@ -106,9 +112,10 @@ handles candidates → tag → art → genre → rename → ReplayGain in-place.
 
 Processing the library is staged album by album across sessions:
 
-1. Run `scan` once to generate the checklist.
-2. Each session: read the checklist, find the next `- [ ]` entry.
-3. Per album: run the `fix-album` skill. It marks the checklist when done.
+1. Run `scan <library-root> -o checklist.md` to add albums to the checklist.
+2. Each session: `checklist next` names the next album.
+3. Per album: run the `fix-album` skill. `apply` marks the entry done;
+   `checklist skip` records why an album was not fixed.
 4. After a batch: `nd rescan` to trigger Navidrome library scan.
 5. Repeat until done. Re-scan if needed to catch stragglers.
 

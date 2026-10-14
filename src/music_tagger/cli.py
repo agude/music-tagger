@@ -12,6 +12,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .checklist import Checklist, ChecklistEntry
 from .coverart import ArtResult, fetch_cover_art, image_dimensions, use_local_cover
 from .discid import parse_rip_dir
 from .musicbrainz import MBRelease, MusicBrainzClient
@@ -69,6 +70,11 @@ def _log_path(args: argparse.Namespace) -> Path | None:
         return None
     log_path: Path = args.log or _default_log_path()
     return log_path
+
+
+def _default_checklist_path() -> Path:
+    override = os.environ.get("MUSIC_TAGGER_CHECKLIST")
+    return Path(override) if override else Path.home() / "Projects/music-tagger/checklist.md"
 
 
 # Exit codes for `tag`, so the operator can branch without parsing output.
@@ -622,6 +628,10 @@ def _scan(argv: list[str] | None = None) -> None:
         print("All albums have consistent MusicBrainz IDs.")
         return
 
+    if args.output and args.output.suffix == ".md":
+        _write_scan_checklist(args.output, entries)
+        return
+
     output = json.dumps(entries, indent=2, ensure_ascii=False) + "\n"
 
     if args.output:
@@ -629,6 +639,95 @@ def _scan(argv: list[str] | None = None) -> None:
         print(f"Wrote {len(entries)} entries to {args.output}")
     else:
         print(output)
+
+
+def _write_scan_checklist(path: Path, scanned: list[dict[str, object]]) -> None:
+    """Add scanned albums to a markdown checklist, keeping existing entries as they are."""
+    checklist = Checklist.load(path)
+    new_entries = []
+    for album in scanned:
+        album_ids = album.get("musicbrainz_albumid")
+        if isinstance(album_ids, list):
+            ids = ", ".join(album_ids)
+        else:
+            ids = str(album_ids) if album_ids else "NO MB ID"
+        description = (
+            f"{album['artist']} — {album['album']} ({album['track_count']} tracks) [{ids}]"
+        )
+        new_entries.append(ChecklistEntry(str(album["path"]), description))
+    added = checklist.add_new(new_entries)
+    checklist.save(path)
+    print(f"Wrote {len(checklist.entries)} entries ({added} new) to {path}")
+
+
+def _checklist(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger checklist", description="Read and update the album checklist."
+    )
+    parser.add_argument(
+        "--file",
+        type=Path,
+        default=None,
+        help="Checklist file (default: $MUSIC_TAGGER_CHECKLIST, "
+        "else ~/Projects/music-tagger/checklist.md).",
+    )
+    actions = parser.add_subparsers(dest="action", required=True)
+    actions.add_parser("next", help="Show the next unchecked album.")
+    done = actions.add_parser("done", help="Mark an album done.")
+    done.add_argument("album", help="Album directory as listed.")
+    skip = actions.add_parser("skip", help="Mark an album skipped, with the reason.")
+    skip.add_argument("album", help="Album directory as listed.")
+    skip.add_argument("--reason", required=True, help="Why it was skipped.")
+    reopen = actions.add_parser("reopen", help="Uncheck an album, or every skip matching text.")
+    reopen.add_argument("album", nargs="?", default=None, help="Album directory as listed.")
+    reopen.add_argument("--matching", default=None, help="Reopen skips whose reason contains this.")
+    for action in (done, skip, reopen):
+        action.add_argument("--file", type=Path, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+    if args.action == "reopen" and (args.album is None) == (args.matching is None):
+        reopen.error("give an album or --matching, not both")
+
+    path: Path = args.file or _default_checklist_path()
+    checklist = Checklist.load(path)
+
+    if args.action == "next":
+        _print_next_entry(checklist)
+        return
+    if args.action == "reopen" and args.matching is not None:
+        matched = [
+            candidate
+            for candidate in checklist.entries
+            if candidate.status == "skipped" and args.matching in candidate.reason
+        ]
+        for skipped in matched:
+            skipped.status, skipped.reason = "todo", ""
+        checklist.save(path)
+        print(f"Reopened {len(matched)} entry(ies).")
+        return
+
+    entry = checklist.find(args.album)
+    if entry is None:
+        print(f"Error: {args.album} is not in {path}.", file=sys.stderr)
+        sys.exit(1)
+    if args.action == "done":
+        entry.status, entry.reason = "done", ""
+    elif args.action == "skip":
+        entry.status, entry.reason = "skipped", args.reason
+    else:
+        entry.status, entry.reason = "todo", ""
+    checklist.save(path)
+    print(entry.format())
+
+
+def _print_next_entry(checklist: Checklist) -> None:
+    entry = checklist.next_todo()
+    if entry is None:
+        print("Checklist complete.")
+        return
+    remaining = sum(e.status == "todo" for e in checklist.entries)
+    print(f"Next: {entry.path}")
+    print(f"Album: {entry.description}")
+    print(f"Remaining: {remaining}")
 
 
 def _print_candidates(argv: list[str] | None = None) -> None:
@@ -1581,7 +1680,19 @@ def _apply(argv: list[str] | None = None) -> None:
             if error.code:
                 print(f"apply stopped at {name} (exit {error.code}).", file=sys.stderr)
                 raise
+    _mark_checklist_done(target)
     print("\nDone.")
+
+
+def _mark_checklist_done(album_dir: Path) -> None:
+    path = _default_checklist_path()
+    checklist = Checklist.load(path)
+    entry = checklist.find(album_dir)
+    if entry is None:
+        return
+    entry.status, entry.reason = "done", ""
+    checklist.save(path)
+    print(f"Checklist: marked {album_dir} done.")
 
 
 def _apply_tag_args(args: argparse.Namespace) -> list[str]:
@@ -1944,6 +2055,7 @@ def _register_commands() -> dict[str, tuple[str, Callable[[list[str] | None], No
         "art": ("Fetch or install cover art for an album.", _art),
         "nd": ("Navidrome commands.", _nd),
         "scan": ("Generate a checklist of albums needing attention.", _scan),
+        "checklist": ("Show the next album, or mark one done, skipped, or reopened.", _checklist),
         "candidates": ("Show MusicBrainz candidates for an album.", _print_candidates),
         "tag": ("Apply tags from a chosen MusicBrainz release.", _tag),
         "apply": ("Run tag, art, genre, rename, and replaygain on an album.", _apply),

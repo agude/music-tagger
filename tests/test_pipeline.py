@@ -65,6 +65,25 @@ class TestApplyCommand:
         for heading in ("## Cover art", "## Genre", "## Rename", "## ReplayGain"):
             assert heading in log
 
+    def test_marks_checklist_entry_done(
+        self, flac_album: Path, cover: Path, default_checklist: Path
+    ) -> None:
+        default_checklist.write_text(
+            "# music-tagger checklist\n\n1 albums to process.\n\n"
+            f"- [ ] `{flac_album}` — Eagles — Desperado (3 tracks) [NO MB ID]\n"
+        )
+
+        _run_apply(flac_album, "--cover-file", str(cover), "--genre", "Retro Rock")
+
+        assert f"- [x] `{flac_album}`" in default_checklist.read_text()
+
+    def test_album_absent_from_checklist_is_fine(
+        self, flac_album: Path, cover: Path, default_checklist: Path
+    ) -> None:
+        _run_apply(flac_album, "--cover-file", str(cover), "--genre", "Retro Rock")
+
+        assert not default_checklist.exists()
+
     def test_sets_several_genres(self, flac_album: Path, cover: Path) -> None:
         _run_apply(
             flac_album, "--cover-file", str(cover), "--genre", "Retro Rock", "--genre", "Folk Rock"

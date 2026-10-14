@@ -38,3 +38,11 @@ def default_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "default-changes.log"
     monkeypatch.setenv("MUSIC_TAGGER_LOG", str(path))
     return path
+
+
+@pytest.fixture(autouse=True)
+def default_checklist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the default checklist at a temp file so no test edits the real one."""
+    path = tmp_path / "default-checklist.md"
+    monkeypatch.setenv("MUSIC_TAGGER_CHECKLIST", str(path))
+    return path
