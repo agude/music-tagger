@@ -12,7 +12,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .coverart import ArtResult, fetch_cover_art, use_local_cover
+from .coverart import ArtResult, fetch_cover_art, image_dimensions, use_local_cover
 from .discid import parse_rip_dir
 from .musicbrainz import MBRelease, MusicBrainzClient
 from .navidrome import NavidromeClient, SongRating
@@ -898,13 +898,24 @@ def _art(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--embed", action="store_true", help="Embed cover art into all audio files."
     )
+    parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="Download the release's full-size front cover to a temp file for review. "
+        "Writes nothing to the album.",
+    )
     _add_log_arguments(parser)
     args = parser.parse_args(argv)
 
     if not args.release_id and not args.cover_file:
         parser.error("provide --release-id or --cover-file")
+    if args.preview and args.cover_file:
+        parser.error("--preview applies to --release-id only")
 
     target: Path = args.path.resolve()
+    if args.preview:
+        _preview_cover(args.release_id, target)
+        return
 
     if args.cover_file:
         result = use_local_cover(
@@ -944,6 +955,31 @@ def _art(argv: list[str] | None = None) -> None:
             else (f"Cover Art Archive release {args.release_id}")
         )
         _write_art_log(log_path, target, source, result, embedded_count)
+
+
+def _preview_cover(release_id: str, album_dir: Path) -> None:
+    result = fetch_cover_art(
+        release_id, Path(tempfile.mkdtemp(prefix="cover-")), full_size=True, force=True
+    )
+    if result.not_found or result.path is None:
+        print(f"No cover art available for release {release_id}.")
+        sys.exit(1)
+
+    print(f"Candidate: {result.path} ({_describe_image(result.path)})")
+    current = album_dir / "cover.jpg"
+    if current.is_file():
+        print(f"Current: {current} ({_describe_image(current)})")
+    else:
+        print("Current: none")
+
+
+def _describe_image(path: Path) -> str:
+    size_kb = path.stat().st_size / 1024
+    dimensions = image_dimensions(path)
+    if dimensions is None:
+        return f"unknown format, {size_kb:.0f} KB"
+    width, height = dimensions
+    return f"{width}x{height}, {size_kb:.0f} KB"
 
 
 def _write_art_log(

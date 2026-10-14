@@ -154,6 +154,10 @@ src/music_tagger/
 - `coverart.py` fetches front cover images from the Cover Art Archive or
   installs a local image via `use_local_cover()`. The `art` subcommand
   accepts `--cover-file <path>` as an alternative to `--release-id`.
+  `art --release-id <uuid> --preview` downloads the full-size front cover to
+  a temp file and prints its path and dimensions next to the album's
+  current `cover.jpg`, writing nothing to the album, so the operator can
+  look at it before passing it to `apply --cover-file`.
 - `replaygain.py` subprocess wrapper around `rsgain` for ReplayGain 2.0 tagging.
 - `navidrome.py` Subsonic API client for library scans (and future ratings).
 - `cli.py` wires the subcommands together.
