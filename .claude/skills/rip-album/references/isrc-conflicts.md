@@ -97,7 +97,7 @@ Confirm three things in the output:
 Then write and log:
 
 ```bash
-uv run music-tagger write-tags --diff "$REVIEW/diff.resolved.json" --log ~/Projects/music-tagger/changes.log
+uv run music-tagger write-tags --diff "$REVIEW/diff.resolved.json"
 ```
 
 The log entry contains each conflict, with the file code, the MusicBrainz

@@ -30,3 +30,11 @@ def m4a_album(tmp_path: Path) -> Path:
     dest = tmp_path / "album_m4a"
     shutil.copytree(FIXTURES / "album_m4a", dest)
     return dest
+
+
+@pytest.fixture(autouse=True)
+def default_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Point the default change log at a temp file so no test writes the real one."""
+    path = tmp_path / "default-changes.log"
+    monkeypatch.setenv("MUSIC_TAGGER_LOG", str(path))
+    return path

@@ -111,7 +111,7 @@ Run this step only when the dry run exited 0, or exited 3 and the user approved.
 Add `--approve-overwrites` in the second case.
 
 ```bash
-uv run music-tagger tag "<album-dir>" --release-id <uuid> --log ~/Projects/music-tagger/changes.log
+uv run music-tagger tag "<album-dir>" --release-id <uuid>
 ```
 
 ## Step 3: Cover art
@@ -123,19 +123,19 @@ uv run music-tagger art "<album-dir>" --release-id <uuid> --full --force --embed
 ## Step 4: Genre
 
 ```bash
-uv run music-tagger genre "<album-dir>" <genre> --log ~/Projects/music-tagger/changes.log
+uv run music-tagger genre "<album-dir>" <genre>
 ```
 
 If multiple genres, pass them all:
 
 ```bash
-uv run music-tagger genre "<album-dir>" "Genre One" "Genre Two" --log ~/Projects/music-tagger/changes.log
+uv run music-tagger genre "<album-dir>" "Genre One" "Genre Two"
 ```
 
 ## Step 5: Rename
 
 ```bash
-uv run music-tagger rename "<album-dir>" --log ~/Projects/music-tagger/changes.log
+uv run music-tagger rename "<album-dir>"
 ```
 
 ## Step 6: ReplayGain

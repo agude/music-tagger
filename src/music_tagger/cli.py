@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .coverart import fetch_cover_art, use_local_cover
+from .coverart import ArtResult, fetch_cover_art, use_local_cover
 from .discid import parse_rip_dir
 from .musicbrainz import MBRelease, MusicBrainzClient
 from .navidrome import NavidromeClient, SongRating
@@ -37,6 +38,33 @@ from .tags import (
 )
 
 _DEFAULT_LIBRARY_ROOT = Path("/mnt/synology/media/music")
+
+_LOG_ENV_VAR = "MUSIC_TAGGER_LOG"
+
+
+def _default_log_path() -> Path:
+    override = os.environ.get(_LOG_ENV_VAR)
+    return Path(override) if override else Path.home() / "Projects/music-tagger/changes.log"
+
+
+def _add_log_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--log",
+        type=Path,
+        default=None,
+        help=f"Append changes to this log file (default: ${_LOG_ENV_VAR}, "
+        "else ~/Projects/music-tagger/changes.log).",
+    )
+    group.add_argument("--no-log", action="store_true", help="Do not write the change log.")
+
+
+def _log_path(args: argparse.Namespace) -> Path | None:
+    if args.no_log:
+        return None
+    log_path: Path = args.log or _default_log_path()
+    return log_path
+
 
 # Exit codes for `tag`, so the operator can branch without parsing output.
 EXIT_REVIEW = 3  # An overwrite needs --approve-overwrites.
@@ -397,12 +425,7 @@ def _write_tags(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Show what would change without writing.",
     )
-    parser.add_argument(
-        "--log",
-        type=Path,
-        default=None,
-        help="Append changes to this log file.",
-    )
+    _add_log_arguments(parser)
     args = parser.parse_args(argv)
 
     result = AlbumResult.from_dict(json.loads(args.diff_file.read_text()))
@@ -427,8 +450,9 @@ def _write_tags(argv: list[str] | None = None) -> None:
     else:
         print("No tag changes to apply.")
 
-    if args.log and (count or any(diff.conflicts for diff in result.diffs)):
-        _write_log_entry(args.log, result)
+    log_path = _log_path(args)
+    if log_path and (count or any(diff.conflicts for diff in result.diffs)):
+        _write_log_entry(log_path, result)
 
 
 def _write_log_entry(log_path: Path, result: AlbumResult) -> None:
@@ -797,12 +821,7 @@ def _copy(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Show what would be copied without copying.",
     )
-    parser.add_argument(
-        "--log",
-        type=Path,
-        default=None,
-        help="Append copy results to this log file.",
-    )
+    _add_log_arguments(parser)
     args = parser.parse_args(argv)
 
     plan = PlacementPlan.from_dict(json.loads(args.plan_file.read_text()))
@@ -828,8 +847,9 @@ def _copy(argv: list[str] | None = None) -> None:
     if result.failed:
         sys.exit(1)
 
-    if args.log and not args.dry_run:
-        _write_copy_log(args.log, plan, result)
+    log_path = _log_path(args)
+    if log_path and not args.dry_run:
+        _write_copy_log(log_path, plan, result)
 
 
 def _write_copy_log(log_path: Path, plan: PlacementPlan, result: object) -> None:
@@ -870,6 +890,7 @@ def _art(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--embed", action="store_true", help="Embed cover art into all audio files."
     )
+    _add_log_arguments(parser)
     args = parser.parse_args(argv)
 
     if not args.release_id and not args.cover_file:
@@ -902,9 +923,40 @@ def _art(argv: list[str] | None = None) -> None:
         size_kb = result.size_bytes / 1024
         print(f"Saved cover.jpg ({size_kb:.0f} KB) to {result.path}")
 
+    embedded_count = 0
     if args.embed and result.path is not None:
-        count = embed_cover_art(target, result.path)
-        print(f"Embedded cover art into {count} file(s).")
+        embedded_count = embed_cover_art(target, result.path)
+        print(f"Embedded cover art into {embedded_count} file(s).")
+
+    log_path = _log_path(args)
+    if log_path and (result.saved or embedded_count):
+        source = (
+            str(args.cover_file)
+            if args.cover_file
+            else (f"Cover Art Archive release {args.release_id}")
+        )
+        _write_art_log(log_path, target, source, result, embedded_count)
+
+
+def _write_art_log(
+    log_path: Path, album_dir: Path, source: str, result: ArtResult, embedded_count: int
+) -> None:
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    saved = f"{result.path} ({result.size_bytes / 1024:.0f} KB)" if result.saved else "no"
+    lines = [
+        "## Cover art",
+        "",
+        f"- **Date:** {timestamp}",
+        f"- **Album:** {album_dir}",
+        f"- **Source:** {source}",
+        f"- **Saved:** {saved}",
+        f"- **Embedded:** {embedded_count} file(s)",
+        "",
+        "---",
+        "",
+    ]
+    with open(log_path, "a") as f:
+        f.write("\n".join(lines))
 
 
 def _rip(argv: list[str] | None = None) -> None:
@@ -1137,7 +1189,7 @@ def _genre(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would change without writing."
     )
-    parser.add_argument("--log", type=Path, default=None, help="Append changes to this log file.")
+    _add_log_arguments(parser)
     args = parser.parse_args(argv)
 
     if args.list:
@@ -1212,8 +1264,9 @@ def _genre(argv: list[str] | None = None) -> None:
     else:
         print(f"Set genre={applied} on {count} track(s).")
 
-    if args.log and not args.dry_run and count > 0:
-        _write_genre_log(args.log, album, str(applied), count)
+    log_path = _log_path(args)
+    if log_path and not args.dry_run and count > 0:
+        _write_genre_log(log_path, album, str(applied), count)
 
 
 def _write_genre_log(log_path: Path, album: AlbumTags, genre: str, count: int) -> None:
@@ -1239,7 +1292,7 @@ def _rename(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("path", type=Path, help="Album directory.")
     parser.add_argument("--dry-run", action="store_true", help="Show renames without executing.")
-    parser.add_argument("--log", type=Path, default=None, help="Append changes to this log file.")
+    _add_log_arguments(parser)
     args = parser.parse_args(argv)
 
     target: Path = args.path.resolve()
@@ -1291,8 +1344,9 @@ def _rename(argv: list[str] | None = None) -> None:
     else:
         print(f"Renamed {len(renames)} file(s).")
 
-    if args.log and not args.dry_run and renames:
-        _write_rename_log(args.log, album, renames)
+    log_path = _log_path(args)
+    if log_path and not args.dry_run and renames:
+        _write_rename_log(log_path, album, renames)
 
 
 def _write_rename_log(log_path: Path, album: AlbumTags, renames: list[tuple[str, str]]) -> None:
@@ -1324,6 +1378,7 @@ def _replaygain(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Skip files that already have ReplayGain tags.",
     )
+    _add_log_arguments(parser)
     args = parser.parse_args(argv)
 
     target: Path = args.path.resolve()
@@ -1331,14 +1386,40 @@ def _replaygain(argv: list[str] | None = None) -> None:
         print(f"Error: {target} is not a directory.", file=sys.stderr)
         sys.exit(1)
 
-    from .replaygain import scan_replaygain
+    from . import replaygain
 
-    result = scan_replaygain(target, dry_run=args.dry_run, skip_existing=args.skip_existing)
+    result = replaygain.scan_replaygain(
+        target, dry_run=args.dry_run, skip_existing=args.skip_existing
+    )
 
     if args.dry_run:
         print(f"\n(dry run — {result.track_count} tracks scanned, no tags written)")
-    else:
-        print(f"Wrote ReplayGain tags to {result.track_count} track(s).")
+        return
+    print(f"Wrote ReplayGain tags to {result.track_count} track(s).")
+
+    log_path = _log_path(args)
+    if log_path:
+        album_gain = replaygain.read_album_gain(target) or "(not found)"
+        _write_replaygain_log(log_path, target, result.track_count, album_gain)
+
+
+def _write_replaygain_log(
+    log_path: Path, album_dir: Path, track_count: int, album_gain: str
+) -> None:
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        "## ReplayGain",
+        "",
+        f"- **Date:** {timestamp}",
+        f"- **Album:** {album_dir}",
+        f"- **Tracks:** {track_count}",
+        f"- **Album gain:** {album_gain}",
+        "",
+        "---",
+        "",
+    ]
+    with open(log_path, "a") as f:
+        f.write("\n".join(lines))
 
 
 def _lock(argv: list[str] | None = None) -> None:
@@ -1378,8 +1459,9 @@ def _edit_locks(argv: list[str] | None, *, locking: bool) -> None:
         return
     print(f"{command.capitalize()}ed {field_list} on {len(changed)} track(s).")
 
-    if args.log and changed:
-        _write_lock_log(args.log, album, f"{command.capitalize()}: {field_list}", changed)
+    log_path = _log_path(args)
+    if log_path and changed:
+        _write_lock_log(log_path, album, f"{command.capitalize()}: {field_list}", changed)
 
 
 def _lock_parser(command: str, locking: bool) -> argparse.ArgumentParser:
@@ -1402,7 +1484,7 @@ def _lock_parser(command: str, locking: bool) -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would change without writing."
     )
-    parser.add_argument("--log", type=Path, default=None, help="Append changes to this log file.")
+    _add_log_arguments(parser)
     return parser
 
 
@@ -1485,7 +1567,7 @@ def _tag(argv: list[str] | None = None) -> None:
     parser.add_argument("path", type=Path, help="Album directory.")
     parser.add_argument("--release-id", required=True, help="MusicBrainz release UUID.")
     parser.add_argument("--dry-run", action="store_true", help="Show diff without writing.")
-    parser.add_argument("--log", type=Path, default=None, help="Append changes to this log file.")
+    _add_log_arguments(parser)
     parser.add_argument(
         "--ignore-locks",
         action="store_true",
@@ -1541,8 +1623,9 @@ def _tag(argv: list[str] | None = None) -> None:
         sys.exit(1)
     print(f"Updated {count} track(s).")
 
-    if args.log:
-        _write_log_entry(args.log, result)
+    log_path = _log_path(args)
+    if log_path:
+        _write_log_entry(log_path, result)
 
 
 _COMMANDS: dict[str, tuple[str, object]] = {}

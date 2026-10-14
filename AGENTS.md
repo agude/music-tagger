@@ -234,10 +234,14 @@ output. `write_tags` raising `NotImplementedError` for M4A is the pattern.
   once copied it because `.m3u` was in `_NON_AUDIO_EXTENSIONS`, and Navidrome
   imported each one as a junk playlist. It was dropped from that set in commit
   `85f2584` with a comment explaining why; do not re-add it.
-- **The skills must pass `--log` on every mutating step.** For a long time they
-  did not: `changes.log` had 448 sections and zero `## Genre:` entries, so no
-  genre change in the library had an audit trail. `rename` gained a `--log`
-  flag specifically to close the last gap.
+- **Every mutating album command logs by default.** For a long time the
+  skills had to pass `--log` and did not: `changes.log` had 448 sections and
+  zero `## Genre:` entries, so no genre change had an audit trail. `tag`,
+  `write-tags`, `genre`, `rename`, `lock`, `unlock`, `art`, `replaygain`, and
+  `copy` now append to `$MUSIC_TAGGER_LOG`, else
+  `~/Projects/music-tagger/changes.log`. `--log PATH` redirects; `--no-log`
+  disables. Tests point `MUSIC_TAGGER_LOG` at a temp file (autouse fixture
+  in `tests/conftest.py`); never remove that fixture.
 - `scan` and `candidates` are read-only. Safe to run directly against the
   live library.
 - `tag --dry-run` is read-only. Safe to run directly against the live library.

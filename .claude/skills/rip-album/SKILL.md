@@ -124,7 +124,7 @@ Run this step only when the dry run exited 0, or exited 3 and the user approved.
 Add `--approve-overwrites` in the second case.
 
 ```bash
-uv run music-tagger tag "$STAGING" --release-id <uuid> --log ~/Projects/music-tagger/changes.log
+uv run music-tagger tag "$STAGING" --release-id <uuid>
 ```
 
 ## Step 4: Cover art
@@ -136,19 +136,19 @@ uv run music-tagger art "$STAGING" --release-id <uuid> --full --force --embed
 ## Step 5: Genre
 
 ```bash
-uv run music-tagger genre "$STAGING" <genre> --log ~/Projects/music-tagger/changes.log
+uv run music-tagger genre "$STAGING" <genre>
 ```
 
 If multiple genres, pass them all:
 
 ```bash
-uv run music-tagger genre "$STAGING" "Genre One" "Genre Two" --log ~/Projects/music-tagger/changes.log
+uv run music-tagger genre "$STAGING" "Genre One" "Genre Two"
 ```
 
 ## Step 6: Rename
 
 ```bash
-uv run music-tagger rename "$STAGING" --log ~/Projects/music-tagger/changes.log
+uv run music-tagger rename "$STAGING"
 ```
 
 ## Step 7: ReplayGain
@@ -174,7 +174,7 @@ correct and the destination does not collide with an existing album (unless
 replacing it intentionally). Then apply:
 
 ```bash
-uv run music-tagger copy --plan "$WORK/plan.json" --log ~/Projects/music-tagger/changes.log
+uv run music-tagger copy --plan "$WORK/plan.json"
 ```
 
 ## Step 9: Cleanup
