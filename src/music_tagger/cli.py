@@ -14,8 +14,26 @@ from .discid import parse_rip_dir
 from .musicbrainz import MBRelease, MusicBrainzClient
 from .navidrome import NavidromeClient, SongRating
 from .placement import PlacementPlan, compute_placement, copy_files
-from .tagger import AlbumResult, apply_changes, build_diff, score_candidates, search_candidates
-from .tags import AUDIO_EXTENSIONS, AlbumTags, embed_cover_art, read_album, write_rating_to_file
+from .tagger import (
+    AlbumResult,
+    TrackDiff,
+    _parse_disc_number,
+    _parse_track_number,
+    apply_changes,
+    build_diff,
+    score_candidates,
+    search_candidates,
+)
+from .tags import (
+    AUDIO_EXTENSIONS,
+    LOCKABLE_FIELDS,
+    AlbumTags,
+    TrackTags,
+    embed_cover_art,
+    read_album,
+    write_locks,
+    write_rating_to_file,
+)
 
 _DEFAULT_LIBRARY_ROOT = Path("/mnt/synology/media/music")
 _DEFAULT_RATINGS_PATH = _DEFAULT_LIBRARY_ROOT / "ratings.json"
@@ -346,6 +364,10 @@ def _diff(argv: list[str] | None = None) -> None:
     for diff in result.diffs:
         if diff.conflicts:
             lines.append(f"  {diff.track.path.name}: {len(diff.conflicts)} unresolved conflict(s)")
+        if diff.locked_changes:
+            lines.append(
+                f"  {diff.track.path.name}: {len(diff.locked_changes)} locked field(s) kept"
+            )
         for warning in diff.warnings:
             lines.append(f"  {diff.track.path.name}: {warning}")
     if not changed:
@@ -383,11 +405,10 @@ def _write_tags(argv: list[str] | None = None) -> None:
 
     if args.dry_run:
         for d in result.diffs:
-            if d.effective_changes:
+            change_lines = _format_change_lines(d)
+            if change_lines:
                 print(f"  {d.track.path.name}:")
-                for c in d.effective_changes:
-                    old = c.old_value or "(empty)"
-                    print(f"    {c.field}: {old} → {c.new_value}")
+                print("\n".join(change_lines))
         print("\n(dry run — skipping write)")
         return
 
@@ -414,12 +435,11 @@ def _write_log_entry(log_path: Path, result: AlbumResult) -> None:
         "",
     ]
     for diff in result.diffs:
-        if not diff.effective_changes and not diff.conflicts:
+        change_lines = _format_change_lines(diff)
+        if not change_lines and not diff.conflicts:
             continue
         lines.append(f"  {diff.track.path.name}:")
-        for change in diff.effective_changes:
-            old = change.old_value or "(empty)"
-            lines.append(f"    {change.field}: {old} → {change.new_value}")
+        lines.extend(change_lines)
         for conflict in diff.conflicts:
             candidates = ", ".join(conflict.candidate_values)
             lines.append(
@@ -660,21 +680,35 @@ def _print_diff(result: AlbumResult) -> None:
     print()
     _print_tag_issues(result)
 
-    if not result.has_changes:
-        if result.has_unresolved_conflicts or any(diff.warnings for diff in result.diffs):
-            print("No tag changes proposed; review the reported ISRC issues.")
-        else:
-            print("No tag changes needed.")
-        return
-
     for diff in result.diffs:
-        if not diff.effective_changes:
-            continue
-        print(f"  {diff.track.path.name}:")
-        for change in diff.effective_changes:
-            old = change.old_value or "(empty)"
-            print(f"    {change.field}: {old} → {change.new_value}")
-    print()
+        change_lines = _format_change_lines(diff)
+        if change_lines:
+            print(f"  {diff.track.path.name}:")
+            print("\n".join(change_lines))
+
+    # "Locked" must never read as "already correct".
+    locked_count = sum(len(diff.locked_changes) for diff in result.diffs)
+    if result.has_changes:
+        print()
+        if locked_count:
+            print(f"{locked_count} locked field(s) kept.")
+    elif result.has_unresolved_conflicts or any(diff.warnings for diff in result.diffs):
+        print("No tag changes proposed; review the reported ISRC issues.")
+    elif locked_count:
+        print(f"No tag changes to apply; {locked_count} locked field(s) kept.")
+    else:
+        print("No tag changes needed.")
+
+
+def _format_change_lines(diff: TrackDiff) -> list[str]:
+    lines = []
+    for change in diff.effective_changes:
+        old = change.old_value or "(empty)"
+        lines.append(f"    {change.field}: {old} → {change.new_value}")
+    for change in diff.locked_changes:
+        old = change.old_value or "(empty)"
+        lines.append(f"    {change.field}: {old} (locked; release has {change.new_value})")
+    return lines
 
 
 def _path_for(argv: list[str] | None = None) -> None:
@@ -1282,6 +1316,142 @@ def _replaygain(argv: list[str] | None = None) -> None:
         print(f"Wrote ReplayGain tags to {result.track_count} track(s).")
 
 
+def _lock(argv: list[str] | None = None) -> None:
+    _edit_locks(argv, locking=True)
+
+
+def _unlock(argv: list[str] | None = None) -> None:
+    _edit_locks(argv, locking=False)
+
+
+def _edit_locks(argv: list[str] | None, *, locking: bool) -> None:
+    command = "lock" if locking else "unlock"
+    args = _lock_parser(command, locking).parse_args(argv)
+
+    target: Path = args.path.resolve()
+    if not target.is_dir():
+        print(f"Error: {target} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    album = read_album(target)
+    if not album.tracks:
+        print(f"Error: no audio files in {target}.", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.fields:
+        for track in album.tracks:
+            print(f"  {track.path.name}: {', '.join(track.locked_fields) or '(none)'}")
+        return
+
+    fields = set(args.fields)
+    tracks = _lock_targets(album, fields, args.track, args.disc)
+    changed = _rewrite_locks(tracks, fields, locking=locking, dry_run=args.dry_run)
+
+    field_list = ", ".join(sorted(fields))
+    if args.dry_run:
+        print(f"\n(dry run — {len(changed)} of {len(tracks)} tracks would change)")
+        return
+    print(f"{command.capitalize()}ed {field_list} on {len(changed)} track(s).")
+
+    if args.log and changed:
+        _write_lock_log(args.log, album, f"{command.capitalize()}: {field_list}", changed)
+
+
+def _lock_parser(command: str, locking: bool) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=f"music-tagger {command}",
+        description=(
+            "Lock fields so `tag` keeps their current value, or show locks."
+            if locking
+            else "Unlock fields so `tag` can change them again."
+        ),
+    )
+    parser.add_argument("path", type=Path, help="Album directory.")
+    parser.add_argument(
+        "fields",
+        nargs="*" if locking else "+",
+        help="Tag fields, e.g. isrc title." + (" Omit to show current locks." if locking else ""),
+    )
+    parser.add_argument("--track", type=int, default=None, help="Only this track number.")
+    parser.add_argument("--disc", type=int, default=None, help="Only this disc number.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would change without writing."
+    )
+    parser.add_argument("--log", type=Path, default=None, help="Append changes to this log file.")
+    return parser
+
+
+def _lock_targets(
+    album: AlbumTags, fields: set[str], track_number: int | None, disc: int | None
+) -> list[TrackTags]:
+    """Validate a lock edit and return its tracks, or exit before anything is written."""
+    if unknown := sorted(fields - LOCKABLE_FIELDS):
+        print(f"Error: unknown field(s): {', '.join(unknown)}", file=sys.stderr)
+        sys.exit(1)
+
+    selected = [
+        track
+        for track in album.tracks
+        if (track_number is None or _parse_track_number(track) == track_number)
+        and (disc is None or _parse_disc_number(track) == disc)
+    ]
+    selector = " ".join(
+        f"--{name} {value}"
+        for name, value in (("track", track_number), ("disc", disc))
+        if value is not None
+    )
+    if not selected:
+        print(f"Error: no track matches {selector}.", file=sys.stderr)
+        sys.exit(1)
+    if track_number is not None and len(selected) > 1:
+        names = ", ".join(track.path.name for track in selected)
+        print(f"Error: {selector} matches {names}; add --disc.", file=sys.stderr)
+        sys.exit(1)
+
+    # Check every file first so an M4A in the album cannot leave a partial edit.
+    if unsupported := [t.path.name for t in selected if t.format not in ("flac", "mp3")]:
+        print(f"Error: locks are not supported for: {', '.join(unsupported)}", file=sys.stderr)
+        sys.exit(1)
+    return selected
+
+
+def _rewrite_locks(
+    tracks: list[TrackTags], fields: set[str], *, locking: bool, dry_run: bool
+) -> list[TrackTags]:
+    """Add or remove `fields` from each track's locks. Returns the tracks that changed."""
+    stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    changed = []
+    for track in tracks:
+        old = sorted(track.locked_fields)
+        new = sorted(set(old) | fields) if locking else sorted(set(old) - fields)
+        if new == old:
+            continue
+        if dry_run:
+            print(f"  {track.path.name}: {old} → {new}")
+        else:
+            write_locks(track.path, new, timestamp=stamp)
+        changed.append(track)
+    return changed
+
+
+def _write_lock_log(
+    log_path: Path, album: AlbumTags, heading: str, tracks: list[TrackTags]
+) -> None:
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        f"## {heading}",
+        "",
+        f"- **Date:** {timestamp}",
+        f"- **Album:** {album.artist} — {album.album}",
+        f"- **Tracks:** {len(tracks)}",
+        "",
+    ]
+    lines += [f"- `{track.path.name}`" for track in tracks]
+    lines += ["", "---", ""]
+    with open(log_path, "a") as f:
+        f.write("\n".join(lines))
+
+
 def _tag(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger tag",
@@ -1291,6 +1461,11 @@ def _tag(argv: list[str] | None = None) -> None:
     parser.add_argument("--release-id", required=True, help="MusicBrainz release UUID.")
     parser.add_argument("--dry-run", action="store_true", help="Show diff without writing.")
     parser.add_argument("--log", type=Path, default=None, help="Append changes to this log file.")
+    parser.add_argument(
+        "--ignore-locks",
+        action="store_true",
+        help="Overwrite locked fields too. The locks themselves stay in place.",
+    )
     args = parser.parse_args(argv)
 
     target: Path = args.path.resolve()
@@ -1309,7 +1484,7 @@ def _tag(argv: list[str] | None = None) -> None:
     finally:
         mb_client.close()
 
-    result = build_diff(album, release)
+    result = build_diff(album, release, ignore_locks=args.ignore_locks)
     _print_diff(result)
 
     if not result.has_changes and not result.has_unresolved_conflicts:
@@ -1320,7 +1495,7 @@ def _tag(argv: list[str] | None = None) -> None:
         return
 
     try:
-        count = apply_changes(result)
+        count = apply_changes(result, ignore_locks=args.ignore_locks)
     except ValueError as error:
         print(f"Error: {error}", file=sys.stderr)
         sys.exit(1)
@@ -1351,6 +1526,8 @@ def _register_commands() -> dict[str, tuple[str, Callable[[list[str] | None], No
         "candidates": ("Show MusicBrainz candidates for an album.", _print_candidates),
         "tag": ("Apply tags from a chosen MusicBrainz release.", _tag),
         "genre": ("Set or show the genre meta-grouping tag.", _genre),
+        "lock": ("Lock fields so `tag` keeps them, or show locks.", _lock),
+        "unlock": ("Unlock fields so `tag` can change them.", _unlock),
         "rename": ("Rename files to 'NN - Title.ext' from tags.", _rename),
         "replaygain": ("Compute and write ReplayGain 2.0 tags.", _replaygain),
         "rip": ("Rip a CD to FLAC with bootstrap tags.", _rip),

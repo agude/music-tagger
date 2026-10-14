@@ -19,7 +19,14 @@ from music_tagger.tagger import (
     score_candidates,
     search_candidates,
 )
-from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album, write_tags
+from music_tagger.tags import (
+    AlbumTags,
+    TagChange,
+    TrackTags,
+    read_album,
+    write_locks,
+    write_tags,
+)
 
 
 def _make_release() -> MBRelease:
@@ -753,3 +760,169 @@ class TestApplyChanges:
         assert album2.tracks[0].tags["music_tagger_updated"] != ""
         assert "music_tagger_updated" not in album2.tracks[1].tags
         assert album2.tracks[1].tags["title"] == "Twenty-One"
+
+
+class TestBuildDiffLocks:
+    def test_withholds_locked_field_and_keeps_other_changes(self) -> None:
+        track = TrackTags(
+            Path("/music/01.flac"),
+            {"tracknumber": "1", "title": "Doolin-Dalton (Edit)"},
+            format="flac",
+            locked_fields=["title"],
+        )
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), _make_release())
+
+        diff = result.diffs[0]
+        assert not any(change.field == "title" for change in diff.changes)
+        assert diff.locked_changes == [TagChange("title", "Doolin-Dalton (Edit)", "Doolin-Dalton")]
+        assert any(change.field == "musicbrainz_albumid" for change in diff.changes)
+
+    def test_withholds_fill_of_locked_empty_field(self) -> None:
+        """A lock keeps a deliberately removed ID removed."""
+        track = TrackTags(
+            Path("/music/01.flac"),
+            {"tracknumber": "1"},
+            format="flac",
+            locked_fields=["musicbrainz_recordingid"],
+        )
+        release = _make_release()
+        release.discs[1][0].recording_id = "recording-1"
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), release)
+
+        diff = result.diffs[0]
+        assert not any(change.field == "musicbrainz_recordingid" for change in diff.changes)
+        assert diff.locked_changes == [TagChange("musicbrainz_recordingid", "", "recording-1")]
+
+    def test_unchanged_locked_field_is_not_reported(self) -> None:
+        track = TrackTags(
+            Path("/music/01.flac"),
+            {"tracknumber": "1", "title": "Doolin-Dalton"},
+            format="flac",
+            locked_fields=["title"],
+        )
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), _make_release())
+
+        assert result.diffs[0].locked_changes == []
+
+    def test_ignore_locks_proposes_locked_change(self) -> None:
+        track = TrackTags(
+            Path("/music/01.flac"),
+            {"tracknumber": "1", "title": "Doolin-Dalton (Edit)"},
+            format="flac",
+            locked_fields=["title"],
+        )
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), _make_release(), ignore_locks=True)
+
+        diff = result.diffs[0]
+        assert TagChange("title", "Doolin-Dalton (Edit)", "Doolin-Dalton") in diff.changes
+        assert diff.locked_changes == []
+
+    @pytest.mark.parametrize("isrcs", [["USDW10110279"], []], ids=["conflict", "unverified"])
+    def test_locked_isrc_skips_conflict_check(self, isrcs: list[str]) -> None:
+        track = TrackTags(
+            Path("/music/01.flac"),
+            {"tracknumber": "1", "isrc": "USIR19902220"},
+            format="flac",
+            locked_fields=["isrc"],
+        )
+        release = _make_release()
+        release.discs[1][0].isrcs = isrcs
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), release)
+
+        assert result.diffs[0].conflicts == []
+        assert result.diffs[0].warnings == []
+        assert not result.has_unresolved_conflicts
+
+    def test_ignore_locks_restores_isrc_conflict_check(self) -> None:
+        track = TrackTags(
+            Path("/music/01.flac"),
+            {"tracknumber": "1", "isrc": "USIR19902220"},
+            format="flac",
+            locked_fields=["isrc"],
+        )
+        release = _make_release()
+        release.discs[1][0].isrcs = ["USDW10110279"]
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), release, ignore_locks=True)
+
+        assert result.has_unresolved_conflicts
+
+    def test_locked_changes_do_not_count_as_changes(self) -> None:
+        track = TrackTags(Path("/music/01.flac"), {}, format="flac", locked_fields=["title"])
+        result = AlbumResult(
+            AlbumTags(Path("/music"), [track]),
+            _make_release(),
+            [TrackDiff(track, [], locked_changes=[TagChange("title", "Old", "New")])],
+        )
+
+        assert not result.has_changes
+        assert result.has_locked_changes
+
+
+class TestAlbumResultLockSerialization:
+    def test_preserves_locked_changes(self) -> None:
+        track = TrackTags(Path("/music/01.flac"), {}, format="flac")
+        locked = [TagChange("title", "Old", "New")]
+        result = AlbumResult(
+            AlbumTags(Path("/music"), [track]),
+            _make_release(),
+            [TrackDiff(track, [], locked_changes=locked)],
+        )
+
+        restored = AlbumResult.from_dict(result.to_dict())
+
+        assert restored.diffs[0].locked_changes == locked
+
+    def test_missing_key_means_no_locked_changes(self) -> None:
+        data = {"release_id": "r-1", "tracks": [{"path": "/music/01.flac", "changes": []}]}
+
+        restored = AlbumResult.from_dict(data)
+
+        assert restored.diffs[0].locked_changes == []
+
+
+class TestApplyChangesLocks:
+    def test_write_keeps_locked_field(self, flac_album: Path) -> None:
+        write_locks(sorted(flac_album.glob("*.flac"))[0], ["title"])
+        release = _make_release()
+
+        apply_changes(build_diff(read_album(flac_album), release))
+
+        updated = read_album(flac_album).tracks[0]
+        assert updated.tags["title"] == "Desperado"
+        assert updated.tags["musicbrainz_albumid"] == "release-1"
+        assert updated.locked_fields == ["title"]
+
+    def test_refuses_change_to_field_locked_in_file(self, flac_album: Path) -> None:
+        """A stale or hand-edited diff must not bypass a lock set on the file."""
+        album = read_album(flac_album)
+        write_locks(album.tracks[1].path, ["title"])
+        before = {track.path: track.path.read_bytes() for track in album.tracks}
+        result = AlbumResult(
+            album,
+            _make_release(),
+            [
+                TrackDiff(album.tracks[0], [TagChange("album", "Desperado", "New Album")]),
+                TrackDiff(album.tracks[1], [TagChange("title", "Twenty-One", "New Title")]),
+            ],
+        )
+
+        with pytest.raises(ValueError, match="Locked fields"):
+            apply_changes(result)
+
+        assert {path: path.read_bytes() for path in before} == before
+
+    def test_ignore_locks_writes_locked_field_and_keeps_lock(self, flac_album: Path) -> None:
+        write_locks(sorted(flac_album.glob("*.flac"))[0], ["title"])
+
+        result = build_diff(read_album(flac_album), _make_release(), ignore_locks=True)
+        apply_changes(result, ignore_locks=True)
+
+        updated = read_album(flac_album).tracks[0]
+        assert updated.tags["title"] == "Doolin-Dalton"
+        assert updated.locked_fields == ["title"]

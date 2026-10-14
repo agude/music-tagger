@@ -8,7 +8,15 @@ from pathlib import Path
 from typing import Any
 
 from .musicbrainz import MBRelease, MBTrack, MusicBrainzClient
-from .tags import AlbumTags, TagChange, TrackTags, compute_diff, read_album, write_tags
+from .tags import (
+    AlbumTags,
+    TagChange,
+    TrackTags,
+    compute_diff,
+    read_album,
+    read_locks,
+    write_tags,
+)
 
 
 @dataclass
@@ -49,6 +57,8 @@ class TrackDiff:
     changes: list[TagChange]
     conflicts: list[TagConflict] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Changes the release proposes for locked fields; reported, never written.
+    locked_changes: list[TagChange] = field(default_factory=list)
 
     @property
     def effective_changes(self) -> list[TagChange]:
@@ -66,6 +76,7 @@ class TrackDiff:
             "changes": [c.to_dict() for c in self.changes],
             "conflicts": [conflict.to_dict() for conflict in self.conflicts],
             "warnings": list(self.warnings),
+            "locked_changes": [change.to_dict() for change in self.locked_changes],
         }
 
 
@@ -78,6 +89,10 @@ class AlbumResult:
     @property
     def has_changes(self) -> bool:
         return any(d.effective_changes for d in self.diffs)
+
+    @property
+    def has_locked_changes(self) -> bool:
+        return any(d.locked_changes for d in self.diffs)
 
     @property
     def has_unresolved_conflicts(self) -> bool:
@@ -101,7 +116,8 @@ class AlbumResult:
             changes = [TagChange.from_dict(c) for c in td.get("changes", [])]
             conflicts = [TagConflict.from_dict(c) for c in td.get("conflicts", [])]
             warnings = list(td.get("warnings", []))
-            diffs.append(TrackDiff(track, changes, conflicts, warnings))
+            locked_changes = [TagChange.from_dict(c) for c in td.get("locked_changes", [])]
+            diffs.append(TrackDiff(track, changes, conflicts, warnings, locked_changes))
         release = MBRelease(id=data["release_id"], title=data.get("release_title", ""))
         album = AlbumTags(directory=Path("."))
         return cls(album=album, release=release, diffs=diffs)
@@ -374,12 +390,15 @@ def _check_isrc(track: TrackTags, mb_track: MBTrack) -> tuple[list[TagConflict],
     return [TagConflict("isrc", existing, list(mb_track.isrcs))], []
 
 
-def build_diff(album: AlbumTags, release: MBRelease) -> AlbumResult:
+def build_diff(album: AlbumTags, release: MBRelease, *, ignore_locks: bool = False) -> AlbumResult:
     """Compute the tag diff between current tags and a chosen release.
 
     Matches local files to MB tracks by tracknumber tag. When no tracks
     have tracknumber tags (e.g. freshly ripped files), falls back to
     positional matching by file sort order.
+
+    Changes to a track's locked fields go to `locked_changes` instead of
+    `changes`, unless `ignore_locks` is set.
     """
     import sys
 
@@ -411,25 +430,34 @@ def build_diff(album: AlbumTags, release: MBRelease) -> AlbumResult:
         elif positional:
             track_index = file_pos if file_pos < len(release.discs.get(disc_num, [])) else None
 
+        locked_fields = set() if ignore_locks else set(track.locked_fields)
         conflicts: list[TagConflict] = []
         warnings: list[str] = []
         if track_index is not None:
             new_tags = _build_new_tags(release, track, track_index, disc_num)
             mb_track = release.discs[disc_num][track_index]
-            conflicts, warnings = _check_isrc(track, mb_track)
+            # A locked ISRC is a decision already made; do not re-raise it.
+            if "isrc" not in locked_fields:
+                conflicts, warnings = _check_isrc(track, mb_track)
         else:
             new_tags = _build_new_tags(
                 release, track, len(release.discs.get(disc_num, [])), disc_num
             )
 
-        changes = compute_diff(track, new_tags)
-        diffs.append(TrackDiff(track, changes, conflicts, warnings))
+        all_changes = compute_diff(track, new_tags)
+        changes = [c for c in all_changes if c.field not in locked_fields]
+        locked_changes = [c for c in all_changes if c.field in locked_fields]
+        diffs.append(TrackDiff(track, changes, conflicts, warnings, locked_changes))
 
     return AlbumResult(album=album, release=release, diffs=diffs)
 
 
-def apply_changes(result: AlbumResult) -> int:
-    """Write all tag changes. Returns the number of tracks modified."""
+def apply_changes(result: AlbumResult, *, ignore_locks: bool = False) -> int:
+    """Write all tag changes. Returns the number of tracks modified.
+
+    Raises ValueError, before writing any track, for unresolved conflicts or
+    for a change to a field the file has locked, unless `ignore_locks` is set.
+    """
     # Check the whole album before writing any track or changing recording IDs.
     if result.has_unresolved_conflicts:
         paths = [
@@ -448,6 +476,8 @@ def apply_changes(result: AlbumResult) -> int:
             raise ValueError(
                 f"{diff.track.path}: resolve the conflict instead of adding a duplicate tag change."
             )
+    if not ignore_locks:
+        _check_locks(result)
     now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     count = 0
     for diff in result.diffs:
@@ -461,3 +491,24 @@ def apply_changes(result: AlbumResult) -> int:
             write_tags(diff.track, [*changes, timestamp])
             count += 1
     return count
+
+
+def _check_locks(result: AlbumResult) -> None:
+    """Refuse changes to fields locked in the file itself.
+
+    Reads the locks from disk because a diff JSON may be stale or hand-edited.
+    """
+    violations = []
+    for diff in result.diffs:
+        changed_fields = {change.field for change in diff.effective_changes}
+        if not changed_fields:
+            continue
+        locked = changed_fields & set(read_locks(diff.track.path))
+        if locked:
+            violations.append(f"{diff.track.path} ({', '.join(sorted(locked))})")
+    if violations:
+        raise ValueError(
+            "Locked fields: "
+            + "; ".join(violations)
+            + ". Run `unlock` on these fields, or `tag --ignore-locks`."
+        )

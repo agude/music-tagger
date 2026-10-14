@@ -9,6 +9,7 @@ import pytest
 from music_tagger.cli import (
     _diff,
     _is_album_dir,
+    _lock,
     _match,
     _mb_discid,
     _mb_release,
@@ -18,12 +19,13 @@ from music_tagger.cli import (
     _rename,
     _scan,
     _toc,
+    _unlock,
     _write_ratings,
     _write_tags,
 )
 from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.tagger import AlbumResult, TagConflict, TrackDiff
-from music_tagger.tags import TagChange, read_album, write_tags
+from music_tagger.tags import TagChange, read_album, write_locks, write_tags
 
 
 class TestIsAlbumDir:
@@ -975,3 +977,218 @@ class TestWriteRatings:
 
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "Skipped 1" in captured.err
+
+
+def _desperado_release() -> MBRelease:
+    return MBRelease(
+        id="r-1",
+        title="Desperado",
+        discs={
+            1: [
+                MBTrack(number=1, title="Doolin-Dalton"),
+                MBTrack(number=2, title="Twenty-One"),
+                MBTrack(number=3, title="Out of Control"),
+            ]
+        },
+    )
+
+
+class TestLockCommand:
+    def test_shows_locks_per_track(self, flac_album: Path, capsys: object) -> None:
+        write_locks(sorted(flac_album.glob("*.flac"))[0], ["title", "isrc"])
+
+        _lock([str(flac_album)])
+
+        out = capsys.readouterr().out  # type: ignore[attr-defined]
+        assert "01 - Track 1.flac: isrc, title" in out
+        assert "02 - Track 2.flac: (none)" in out
+
+    def test_locks_every_track(self, flac_album: Path) -> None:
+        _lock([str(flac_album), "isrc"])
+
+        assert [track.locked_fields for track in read_album(flac_album).tracks] == [
+            ["isrc"],
+            ["isrc"],
+            ["isrc"],
+        ]
+
+    def test_adds_to_existing_locks(self, flac_album: Path) -> None:
+        write_locks(sorted(flac_album.glob("*.flac"))[0], ["title"])
+
+        _lock([str(flac_album), "isrc"])
+
+        assert read_album(flac_album).tracks[0].locked_fields == ["isrc", "title"]
+
+    def test_locks_one_track(self, flac_album: Path) -> None:
+        _lock([str(flac_album), "title", "--track", "2"])
+
+        assert [track.locked_fields for track in read_album(flac_album).tracks] == [
+            [],
+            ["title"],
+            [],
+        ]
+
+    def test_unmatched_track_writes_nothing(self, flac_album: Path, capsys: object) -> None:
+        before = {path: path.read_bytes() for path in flac_album.glob("*.flac")}
+
+        with pytest.raises(SystemExit) as error:
+            _lock([str(flac_album), "title", "--track", "9"])
+
+        assert error.value.code == 1
+        assert {path: path.read_bytes() for path in before} == before
+        assert "9" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+    def test_unknown_field_writes_nothing(self, flac_album: Path, capsys: object) -> None:
+        before = {path: path.read_bytes() for path in flac_album.glob("*.flac")}
+
+        with pytest.raises(SystemExit) as error:
+            _lock([str(flac_album), "titel"])
+
+        assert error.value.code == 1
+        assert {path: path.read_bytes() for path in before} == before
+        assert "titel" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+    def test_dry_run_writes_nothing(self, flac_album: Path, capsys: object) -> None:
+        before = {path: path.read_bytes() for path in flac_album.glob("*.flac")}
+
+        _lock([str(flac_album), "title", "--dry-run"])
+
+        assert {path: path.read_bytes() for path in before} == before
+        assert "dry run" in capsys.readouterr().out  # type: ignore[attr-defined]
+
+    def test_logs_locked_files(self, flac_album: Path, tmp_path: Path) -> None:
+        log_path = tmp_path / "changes.log"
+
+        _lock([str(flac_album), "title", "--track", "1", "--log", str(log_path)])
+
+        log = log_path.read_text()
+        assert "## Lock: title" in log
+        assert "01 - Track 1.flac" in log
+        assert "02 - Track 2.flac" not in log
+
+    def test_dry_run_does_not_log(self, flac_album: Path, tmp_path: Path) -> None:
+        log_path = tmp_path / "changes.log"
+
+        _lock([str(flac_album), "title", "--dry-run", "--log", str(log_path)])
+
+        assert not log_path.exists()
+
+    def test_m4a_album_fails_before_writing(self, m4a_album: Path, capsys: object) -> None:
+        before = {path: path.read_bytes() for path in m4a_album.glob("*.m4a")}
+
+        with pytest.raises(SystemExit) as error:
+            _lock([str(m4a_album), "title"])
+
+        assert error.value.code == 1
+        assert {path: path.read_bytes() for path in before} == before
+        assert "not supported" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+
+class TestUnlockCommand:
+    def test_removes_one_field(self, flac_album: Path) -> None:
+        write_locks(sorted(flac_album.glob("*.flac"))[0], ["title", "isrc"])
+
+        _unlock([str(flac_album), "title"])
+
+        assert read_album(flac_album).tracks[0].locked_fields == ["isrc"]
+
+    def test_logs_unlocked_files(self, flac_album: Path, tmp_path: Path) -> None:
+        write_locks(sorted(flac_album.glob("*.flac"))[0], ["title"])
+        log_path = tmp_path / "changes.log"
+
+        _unlock([str(flac_album), "title", "--log", str(log_path)])
+
+        log = log_path.read_text()
+        assert "## Unlock: title" in log
+        assert "01 - Track 1.flac" in log
+
+    def test_requires_fields(self, flac_album: Path) -> None:
+        with pytest.raises(SystemExit) as error:
+            _unlock([str(flac_album)])
+
+        assert error.value.code == 2
+
+
+class TestTagCommandLocks:
+    def test_keeps_locked_field_and_reports_it(
+        self, flac_album: Path, tmp_path: Path, capsys: object
+    ) -> None:
+        from music_tagger.cli import _tag
+
+        write_locks(sorted(flac_album.glob("*.flac"))[0], ["title"])
+        log_path = tmp_path / "changes.log"
+
+        with patch("music_tagger.cli.MusicBrainzClient") as client:
+            client.return_value.fetch_release.return_value = _desperado_release()
+            _tag([str(flac_album), "--release-id", "r-1", "--log", str(log_path)])
+
+        updated = read_album(flac_album).tracks[0].tags
+        assert updated["title"] == "Desperado"
+        assert updated["musicbrainz_albumid"] == "r-1"
+        out = capsys.readouterr().out  # type: ignore[attr-defined]
+        assert "title: Desperado (locked; release has Doolin-Dalton)" in out
+        assert "title: Desperado (locked; release has Doolin-Dalton)" in log_path.read_text()
+
+    def test_only_locked_changes_are_not_reported_as_correct(
+        self, flac_album: Path, capsys: object
+    ) -> None:
+        from music_tagger.cli import _tag
+
+        release = _desperado_release()
+        release.id = "test-album-id-1"
+        _tag_album_to_match(flac_album, release)
+        first_track = read_album(flac_album).tracks[0]
+        write_tags(first_track, [TagChange("title", "Doolin-Dalton", "Desperado")])
+        write_locks(first_track.path, ["title"])
+
+        with patch("music_tagger.cli.MusicBrainzClient") as client:
+            client.return_value.fetch_release.return_value = release
+            _tag([str(flac_album), "--release-id", release.id])
+
+        out = capsys.readouterr().out  # type: ignore[attr-defined]
+        assert "No tag changes needed" not in out
+        assert "1 locked field(s) kept" in out
+
+    def test_ignore_locks_overwrites_locked_field(self, flac_album: Path) -> None:
+        from music_tagger.cli import _tag
+
+        write_locks(sorted(flac_album.glob("*.flac"))[0], ["title"])
+
+        with patch("music_tagger.cli.MusicBrainzClient") as client:
+            client.return_value.fetch_release.return_value = _desperado_release()
+            _tag([str(flac_album), "--release-id", "r-1", "--ignore-locks"])
+
+        updated = read_album(flac_album).tracks[0]
+        assert updated.tags["title"] == "Doolin-Dalton"
+        assert updated.locked_fields == ["title"]
+
+
+class TestWriteTagsCommandLocks:
+    def test_refuses_change_to_locked_field(
+        self, flac_album: Path, tmp_path: Path, capsys: object
+    ) -> None:
+        album = read_album(flac_album)
+        track = album.tracks[0]
+        result = AlbumResult(
+            album,
+            MBRelease("r-1", "Desperado"),
+            [TrackDiff(track, [TagChange("title", "Desperado", "Doolin-Dalton")])],
+        )
+        diff_path = tmp_path / "diff.json"
+        diff_path.write_text(json.dumps(result.to_dict()))
+        write_locks(track.path, ["title"])
+        before = track.path.read_bytes()
+
+        with pytest.raises(SystemExit) as error:
+            _write_tags(["--diff", str(diff_path)])
+
+        assert error.value.code == 1
+        assert track.path.read_bytes() == before
+        assert "Locked fields" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+
+def _tag_album_to_match(album_dir: Path, release: MBRelease) -> None:
+    """Apply `release` so a second `tag` run proposes no changes."""
+    from music_tagger.tagger import apply_changes, build_diff
+
+    apply_changes(build_diff(read_album(album_dir), release))

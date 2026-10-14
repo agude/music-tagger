@@ -12,7 +12,9 @@ from music_tagger.tags import (
     embed_cover_art,
     read_album,
     read_genres,
+    read_locks,
     write_genres,
+    write_locks,
     write_rating_to_file,
     write_tags,
 )
@@ -645,3 +647,137 @@ class TestRatingM4a:
 
         assert changes
         assert "----:com.apple.iTunes:FMPS_RATING" not in MP4(track_path)
+
+
+class TestTrackTagsLockedFields:
+    def test_round_trip(self) -> None:
+        track = TrackTags(
+            Path("/music/01.flac"), {}, format="flac", locked_fields=["isrc", "title"]
+        )
+
+        restored = TrackTags.from_dict(track.to_dict())
+
+        assert restored.locked_fields == ["isrc", "title"]
+
+    def test_missing_key_means_no_locks(self) -> None:
+        restored = TrackTags.from_dict({"path": "/music/01.flac"})
+
+        assert restored.locked_fields == []
+
+
+class TestLocksFlac:
+    def test_writes_separate_tag_values(self, flac_album: Path) -> None:
+        from mutagen.flac import FLAC
+
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        write_locks(track_path, ["title", "isrc"])
+
+        assert FLAC(track_path)["MUSIC_TAGGER_LOCKED"] == ["isrc", "title"]
+        assert read_locks(track_path) == ["isrc", "title"]
+
+    def test_removes_duplicates(self, flac_album: Path) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        write_locks(track_path, ["title", "title"])
+
+        assert read_locks(track_path) == ["title"]
+
+    def test_empty_list_clears(self, flac_album: Path) -> None:
+        from mutagen.flac import FLAC
+
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        write_locks(track_path, ["title"])
+        write_locks(track_path, [])
+
+        assert "MUSIC_TAGGER_LOCKED" not in FLAC(track_path)
+        assert read_locks(track_path) == []
+
+    def test_stamps_timestamp(self, flac_album: Path) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        write_locks(track_path, ["title"], timestamp="2026-10-14T00:00:00Z")
+
+        assert read_album(flac_album).tracks[0].tags["music_tagger_updated"] == (
+            "2026-10-14T00:00:00Z"
+        )
+
+    def test_read_album_exposes_locks_outside_tags(self, flac_album: Path) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        write_locks(track_path, ["title", "isrc"])
+
+        album = read_album(flac_album)
+
+        assert album.tracks[0].locked_fields == ["isrc", "title"]
+        assert album.tracks[1].locked_fields == []
+        assert "music_tagger_locked" not in album.tracks[0].tags
+
+    def test_rejects_unknown_field_without_writing(self, flac_album: Path) -> None:
+        import pytest
+
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        before = track_path.read_bytes()
+
+        with pytest.raises(ValueError, match="not-a-field"):
+            write_locks(track_path, ["title", "not-a-field"])
+
+        assert track_path.read_bytes() == before
+
+    def test_rejects_timestamp_field(self, flac_album: Path) -> None:
+        import pytest
+
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+
+        with pytest.raises(ValueError, match="music_tagger_updated"):
+            write_locks(track_path, ["music_tagger_updated"])
+
+
+class TestLocksMp3:
+    def test_writes_single_multivalue_frame(self, mp3_album: Path) -> None:
+        from mutagen.mp3 import MP3
+
+        track_path = sorted(mp3_album.glob("*.mp3"))[0]
+        write_locks(track_path, ["title", "isrc"])
+
+        frames = [
+            frame
+            for frame in MP3(track_path).tags.getall("TXXX")
+            if frame.desc == "MUSIC_TAGGER_LOCKED"
+        ]
+        assert len(frames) == 1
+        assert frames[0].text == ["isrc", "title"]
+        assert read_locks(track_path) == ["isrc", "title"]
+
+    def test_empty_list_clears(self, mp3_album: Path) -> None:
+        track_path = sorted(mp3_album.glob("*.mp3"))[0]
+        write_locks(track_path, ["title"])
+        write_locks(track_path, [])
+
+        assert read_locks(track_path) == []
+
+    def test_read_album_exposes_locks(self, mp3_album: Path) -> None:
+        track_path = sorted(mp3_album.glob("*.mp3"))[0]
+        write_locks(track_path, ["title"])
+
+        assert read_album(mp3_album).tracks[0].locked_fields == ["title"]
+
+
+class TestLocksM4a:
+    def test_write_raises_rather_than_silently_skipping(self, m4a_album: Path) -> None:
+        import pytest
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        before = track_path.read_bytes()
+
+        with pytest.raises(NotImplementedError, match="not supported"):
+            write_locks(track_path, ["title"])
+
+        assert track_path.read_bytes() == before
+
+    def test_reads_freeform_atom(self, m4a_album: Path) -> None:
+        from mutagen.mp4 import MP4
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        audio = MP4(track_path)
+        audio["----:com.apple.iTunes:MUSIC_TAGGER_LOCKED"] = [b"isrc", b"title"]
+        audio.save()
+
+        assert read_locks(track_path) == ["isrc", "title"]
+        assert read_album(m4a_album).tracks[0].locked_fields == ["isrc", "title"]

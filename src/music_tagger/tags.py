@@ -148,6 +148,13 @@ FIELD_MAP: dict[str, tuple[str, str]] = {
     "starred_at": ("STARRED_AT", "TXXX:STARRED_AT"),
 }
 
+# Fields `tag` must leave at their current value, including an empty one.
+# Stored outside FIELD_MAP because it is multi-valued and FIELD_MAP reads
+# only the first value of each field.
+LOCK_VORBIS_KEY = "MUSIC_TAGGER_LOCKED"
+LOCK_MP4_ATOM = "----:com.apple.iTunes:MUSIC_TAGGER_LOCKED"
+LOCKABLE_FIELDS = frozenset(FIELD_MAP) - {"music_tagger_updated"}
+
 
 @dataclass
 class TrackTags:
@@ -155,6 +162,7 @@ class TrackTags:
     tags: dict[str, str] = field(default_factory=dict)
     duration_secs: float = 0.0
     format: str = ""
+    locked_fields: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -162,6 +170,7 @@ class TrackTags:
             "format": self.format,
             "duration_secs": self.duration_secs,
             "tags": dict(self.tags),
+            "locked_fields": list(self.locked_fields),
         }
 
     @classmethod
@@ -171,6 +180,7 @@ class TrackTags:
             tags=data.get("tags", {}),
             duration_secs=data.get("duration_secs", 0.0),
             format=data.get("format", ""),
+            locked_fields=list(data.get("locked_fields", [])),
         )
 
 
@@ -282,7 +292,15 @@ def read_album(directory: Path) -> AlbumTags:
         else:
             continue
         duration = audio.info.length if audio.info else 0.0
-        album.tracks.append(TrackTags(path=path, tags=tags, duration_secs=duration, format=fmt))
+        album.tracks.append(
+            TrackTags(
+                path=path,
+                tags=tags,
+                duration_secs=duration,
+                format=fmt,
+                locked_fields=_read_locks(audio),
+            )
+        )
     return album
 
 
@@ -440,6 +458,63 @@ def write_genres(path: Path, genres: list[str], *, timestamp: str = "") -> bool:
             audio["----:com.apple.iTunes:MUSIC_TAGGER_UPDATED"] = [timestamp.encode()]
     audio.save()
     return True
+
+
+def read_locks(path: Path) -> list[str]:
+    """Read the fields locked against `tag` changes."""
+    audio = MutagenFile(path)
+    if audio is None:
+        return []
+    return _read_locks(audio)
+
+
+def _read_locks(audio: Any) -> list[str]:
+    if isinstance(audio, FLAC):
+        return [str(v) for v in audio.get(LOCK_VORBIS_KEY, [])]  # type: ignore[no-untyped-call]
+    if isinstance(audio, MP3) and audio.tags is not None:
+        for frame in audio.tags.getall("TXXX"):
+            if frame.desc.lower() == LOCK_VORBIS_KEY.lower():
+                return [str(t) for t in frame.text]
+        return []
+    if isinstance(audio, MP4):
+        values = audio.get(LOCK_MP4_ATOM, [])  # type: ignore[no-untyped-call]
+        return [bytes(v).decode("utf-8", "replace") for v in values]
+    return []
+
+
+def write_locks(path: Path, fields: list[str], *, timestamp: str = "") -> None:
+    """Replace the locked-field list with `fields`, one tag value each.
+
+    Raises ValueError for a field `tag` does not write, and NotImplementedError
+    for formats other than FLAC and MP3, before touching the file.
+    """
+    unknown = sorted(set(fields) - LOCKABLE_FIELDS)
+    if unknown:
+        raise ValueError(f"cannot lock unknown field(s): {', '.join(unknown)}")
+    locked = sorted(set(fields))
+
+    audio = MutagenFile(path)
+    if not isinstance(audio, FLAC | MP3):
+        # `tag` cannot write M4A either, so a lock there would protect nothing.
+        raise NotImplementedError(f"locking {path.suffix} files is not supported: {path}")
+
+    if isinstance(audio, FLAC):
+        if locked:
+            audio[LOCK_VORBIS_KEY] = locked
+        elif LOCK_VORBIS_KEY in audio:
+            del audio[LOCK_VORBIS_KEY]  # type: ignore[no-untyped-call]
+        if timestamp:
+            _write_flac_tag(audio, "music_tagger_updated", timestamp)
+    else:
+        if audio.tags is None:
+            audio.add_tags()  # type: ignore[no-untyped-call]
+        assert audio.tags is not None
+        audio.tags.delall(f"TXXX:{LOCK_VORBIS_KEY}")
+        if locked:
+            audio.tags.add(TXXX(desc=LOCK_VORBIS_KEY, text=locked))
+        if timestamp:
+            _write_mp3_tag(audio, "music_tagger_updated", timestamp)
+    audio.save()
 
 
 RATING_TO_POPM = {1: 1, 2: 64, 3: 128, 4: 196, 5: 255}

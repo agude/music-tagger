@@ -57,6 +57,14 @@ Key CLI subcommands, driven by Claude Code in conversation:
    Use `--release-id` to force a specific MB release, or `--unknown`
    to rip CDs not in MusicBrainz. Requires system package: `whipper`.
 
+8. `uv run music-tagger lock <album-dir> [field ...] [--track N] [--disc N] [--dry-run] [--log changes.log]`
+   — locks fields so `tag` keeps their current value, including an empty
+   one. Omit the fields to show current locks. `unlock` takes the same
+   arguments and removes them. `tag` reports withheld changes as
+   `field: old (locked; release has new)` and never as "no changes needed";
+   `tag --ignore-locks` overwrites locked fields and leaves the locks in
+   place. A locked `isrc` skips the ISRC conflict check.
+
 ## Library workflow
 
 **For ripping a new CD**, use the `rip-album` skill — it handles the full
@@ -137,6 +145,11 @@ src/music_tagger/
 - `releasestatus` is compared case-insensitively (`official` == `Official`).
 - Unicode from MusicBrainz (e.g. U+2010 HYPHEN in titles) is accepted as
   canonical.
+- `MUSIC_TAGGER_LOCKED` (FLAC comment, MP3 `TXXX`) holds the locked field
+  names, one value each. It is read into `TrackTags.locked_fields`, not
+  `tags`. `apply_changes` re-reads the locks from each file before writing,
+  so a stale or hand-edited diff JSON cannot bypass them. M4A raises
+  `NotImplementedError`, because `tag` cannot write M4A either.
 - `isrc` identifies a recording. MusicBrainz can list several ISRCs for
   that recording; their order does not identify the code on this CD.
   The client retains the full `MBTrack.isrcs` list. The tagger applies this
