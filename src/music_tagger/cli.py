@@ -3,21 +3,34 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from mutagen import MutagenError
+
 from .checklist import Checklist, ChecklistEntry
-from .coverart import ArtResult, fetch_cover_art, image_dimensions, use_local_cover
+from .coverart import (
+    ArtResult,
+    EmbeddedCover,
+    UnsupportedImageError,
+    embeddable_cover,
+    fetch_cover_art,
+    find_cover,
+    image_dimensions,
+    use_local_cover,
+)
 from .discid import parse_rip_dir
 from .musicbrainz import MBRelease, MusicBrainzClient
 from .navidrome import NavidromeClient, SongRating
-from .placement import PlacementPlan, compute_placement, copy_files
+from .placement import FileMapping, PlacementPlan, compute_placement, copy_files
 from .tagger import (
     ISRC_POLICIES,
     AlbumResult,
@@ -1043,9 +1056,14 @@ def _art(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--full", action="store_true", help="Fetch full-size image instead of 500px."
     )
-    parser.add_argument("--force", action="store_true", help="Overwrite existing cover.jpg.")
     parser.add_argument(
-        "--embed", action="store_true", help="Embed cover art into all audio files."
+        "--force", action="store_true", help="Replace the album's existing cover.* file."
+    )
+    parser.add_argument(
+        "--embed",
+        action="store_true",
+        help="Embed cover art into all audio files. A PNG, or a JPEG too large for a FLAC "
+        "picture block, is embedded as a converted JPEG; the folder keeps the original.",
     )
     parser.add_argument(
         "--preview",
@@ -1066,44 +1084,53 @@ def _art(argv: list[str] | None = None) -> None:
         _preview_cover(args.release_id, target)
         return
 
+    try:
+        result, embedded = _install_and_embed(target, args)
+    except (UnsupportedImageError, MutagenError, OSError) as error:
+        print(f"Error: cover art failed: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    log_path = _log_path(args)
+    if log_path and (result.saved or embedded):
+        source = (
+            str(args.cover_file)
+            if args.cover_file
+            else f"Cover Art Archive release {args.release_id}"
+        )
+        _write_art_log(log_path, target, source, result, embedded)
+
+
+def _install_and_embed(
+    target: Path, args: argparse.Namespace
+) -> tuple[ArtResult, tuple[int, EmbeddedCover] | None]:
+    """Install the folder cover, then embed it when --embed is set.
+
+    Returns the install result and, when embedding ran, the file count and image.
+    """
     if args.cover_file:
-        result = use_local_cover(
-            args.cover_file.resolve(),
-            target,
-            force=args.force,
-        )
+        result = use_local_cover(args.cover_file.resolve(), target, force=args.force)
     else:
-        result = fetch_cover_art(
-            args.release_id,
-            target,
-            full_size=args.full,
-            force=args.force,
-        )
+        result = fetch_cover_art(args.release_id, target, full_size=args.full, force=args.force)
 
     if result.not_found:
         if args.cover_file:
             print(f"Cover file not found: {args.cover_file}")
         else:
             print("No cover art available for this release.")
-    elif result.skipped:
-        print(f"cover.jpg already exists at {result.path} (use --force to overwrite).")
-    elif result.saved:
-        size_kb = result.size_bytes / 1024
-        print(f"Saved cover.jpg ({size_kb:.0f} KB) to {result.path}")
+    elif result.skipped and result.path is not None:
+        print(f"{result.path.name} already exists at {result.path} (use --force to replace).")
+    elif result.saved and result.path is not None:
+        print(f"Saved {result.path.name} ({result.size_bytes / 1024:.0f} KB) to {result.path}")
+    for removed in result.removed:
+        print(f"Removed {removed}")
 
-    embedded_count = 0
-    if args.embed and result.path is not None:
-        embedded_count = embed_cover_art(target, result.path)
-        print(f"Embedded cover art into {embedded_count} file(s).")
-
-    log_path = _log_path(args)
-    if log_path and (result.saved or embedded_count):
-        source = (
-            str(args.cover_file)
-            if args.cover_file
-            else (f"Cover Art Archive release {args.release_id}")
-        )
-        _write_art_log(log_path, target, source, result, embedded_count)
+    if not args.embed or result.path is None:
+        return result, None
+    cover = embeddable_cover(result.path)
+    count = embed_cover_art(target, cover.data, cover.mime)
+    converted = f" (converted to JPEG, {len(cover.data) / 1024:.0f} KB)" if cover.converted else ""
+    print(f"Embedded cover art into {count} file(s){converted}.")
+    return result, (count, cover)
 
 
 def _preview_cover(release_id: str, album_dir: Path) -> None:
@@ -1115,8 +1142,8 @@ def _preview_cover(release_id: str, album_dir: Path) -> None:
         sys.exit(1)
 
     print(f"Candidate: {result.path} ({_describe_image(result.path)})")
-    current = album_dir / "cover.jpg"
-    if current.is_file():
+    current = find_cover(album_dir)
+    if current is not None:
         print(f"Current: {current} ({_describe_image(current)})")
     else:
         print("Current: none")
@@ -1132,10 +1159,22 @@ def _describe_image(path: Path) -> str:
 
 
 def _write_art_log(
-    log_path: Path, album_dir: Path, source: str, result: ArtResult, embedded_count: int
+    log_path: Path,
+    album_dir: Path,
+    source: str,
+    result: ArtResult,
+    embedded: tuple[int, EmbeddedCover] | None,
 ) -> None:
     timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     saved = f"{result.path} ({result.size_bytes / 1024:.0f} KB)" if result.saved else "no"
+    if embedded is None:
+        embedded_text = "0 file(s)"
+    else:
+        count, cover = embedded
+        conversion = ", converted to JPEG" if cover.converted else ""
+        embedded_text = (
+            f"{count} file(s) ({cover.mime}, {len(cover.data) / 1024:.0f} KB{conversion})"
+        )
     lines = [
         "## Cover art",
         "",
@@ -1143,7 +1182,8 @@ def _write_art_log(
         f"- **Album:** {album_dir}",
         f"- **Source:** {source}",
         f"- **Saved:** {saved}",
-        f"- **Embedded:** {embedded_count} file(s)",
+        *(f"- **Removed:** {path}" for path in result.removed),
+        f"- **Embedded:** {embedded_text}",
         "",
         "---",
         "",
@@ -1179,13 +1219,24 @@ def _rip(argv: list[str] | None = None) -> None:
 
     target = args.path.resolve() if args.path else Path(tempfile.mkdtemp(prefix="rip-"))
 
-    print(f"Staging: {target}")
-    result = ripper.rip_cd(
-        target,
-        device=args.device,
-        release_id=args.release_id,
-        unknown=args.unknown,
-    )
+    print(f"Staging: {target}", flush=True)
+    try:
+        result = ripper.rip_cd(
+            target,
+            device=args.device,
+            release_id=args.release_id,
+            unknown=args.unknown,
+        )
+    except subprocess.CalledProcessError as error:
+        print(f"Error: whipper failed (exit {error.returncode}).", file=sys.stderr)
+        print(
+            "If whipper reported the disc is not in MusicBrainz, rerun with --unknown.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except RuntimeError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
     print(f"Ripped {result.track_count} tracks.")
 
     if result.cue_file:
@@ -1640,7 +1691,7 @@ def _apply(argv: list[str] | None = None) -> None:
     cover = parser.add_mutually_exclusive_group(required=True)
     cover.add_argument("--cover-file", type=Path, help="Install and embed this reviewed image.")
     cover.add_argument(
-        "--keep-cover", action="store_true", help="Embed the album's existing cover.jpg."
+        "--keep-cover", action="store_true", help="Embed the album's existing cover.* image."
     )
     parser.add_argument(
         "--genre", action="append", required=True, help="Genre to set. Repeat for several."
@@ -1666,9 +1717,9 @@ def _apply(argv: list[str] | None = None) -> None:
 
     log_args = ["--no-log"] if args.no_log else ["--log", str(_log_path(args))]
     tag_args = _apply_tag_args(args)
-    # Installing the album's own cover.jpg over itself would fail; it only needs embedding.
+    # The album's own cover only needs embedding; --force would replace it with itself.
     art_args = ["--cover-file", str(cover_path), "--embed"]
-    if cover_path != target / "cover.jpg":
+    if cover_path != find_cover(target):
         art_args.append("--force")
     genre_args = [*args.genre, *(["--force"] if args.force_genre else [])]
 
@@ -1687,6 +1738,11 @@ def _apply(argv: list[str] | None = None) -> None:
             if error.code:
                 print(f"apply stopped at {name} (exit {error.code}).", file=sys.stderr)
                 raise
+        except Exception as error:
+            # Unexpected step failures still get a named step, not a bare traceback.
+            print(f"Error: {type(error).__name__}: {error}", file=sys.stderr)
+            print(f"apply stopped at {name} (exit 1).", file=sys.stderr)
+            sys.exit(1)
     _mark_checklist_done(target)
     print("\nDone.")
 
@@ -1722,9 +1778,21 @@ def _check_apply_inputs(target: Path, args: argparse.Namespace) -> Path:
         print(f"Error: {target} is not a directory.", file=sys.stderr)
         sys.exit(1)
 
-    cover_path: Path = target / "cover.jpg" if args.keep_cover else args.cover_file.resolve()
-    if not cover_path.is_file():
-        print(f"Error: cover image not found: {cover_path}", file=sys.stderr)
+    if args.keep_cover:
+        existing = find_cover(target)
+        if existing is None:
+            print(f"Error: --keep-cover, but {target} has no cover.* image.", file=sys.stderr)
+            sys.exit(1)
+        cover_path = existing
+    else:
+        cover_path = args.cover_file.resolve()
+        if not cover_path.is_file():
+            print(f"Error: cover image not found: {cover_path}", file=sys.stderr)
+            sys.exit(1)
+    try:
+        embeddable_cover(cover_path)
+    except UnsupportedImageError as error:
+        print(f"Error: cover image cannot be embedded: {error}", file=sys.stderr)
         sys.exit(1)
 
     from .genres import GENRE_LIST_PATH, load_canonical
@@ -1786,14 +1854,11 @@ def _place(argv: list[str] | None = None) -> None:
         print("\n(dry run — nothing copied)")
         return
 
-    result = copy_files(plan)
+    print(f"\nCopying {len(plan.mappings)} file(s) with SHA-256 verification:", flush=True)
+    result = copy_files(plan, on_file=_copy_progress_printer(len(plan.mappings)))
     log_path = _log_path(args)
     if log_path:
         _write_copy_log(log_path, plan, result)
-    for mapping, error in result.failed:
-        print(f"Failed: {mapping.dest}: {error}", file=sys.stderr)
-    for mapping in result.skipped:
-        print(f"Skipped (exists): {mapping.dest}")
     print(f"Copied {len(result.copied)} of {len(plan.mappings)} file(s).")
     if result.failed:
         sys.exit(1)
@@ -1802,6 +1867,20 @@ def _place(argv: list[str] | None = None) -> None:
     if not result.skipped and source.is_relative_to(Path(tempfile.gettempdir()).resolve()):
         shutil.rmtree(source)
         print(f"Removed staging directory {source}")
+
+
+def _copy_progress_printer(total: int) -> Callable[[FileMapping, str], None]:
+    """Print one flushed line per file as `copy_files` finishes it."""
+    done = 0
+
+    def report(mapping: FileMapping, status: str) -> None:
+        nonlocal done
+        done += 1
+        line = f"  [{done}/{total}] {mapping.dest.name}: {status}"
+        stream = sys.stderr if status.startswith("failed") else sys.stdout
+        print(line, file=stream, flush=True)
+
+    return report
 
 
 def _parse_isrc_code(spec: str) -> tuple[tuple[int, int], str]:
@@ -2090,6 +2169,10 @@ def _print_main_help() -> None:
 def main(argv: list[str] | None = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
+    # Piped stdout is block-buffered, which hides progress until exit and puts
+    # it after whipper's and rsgain's output. Line-buffer it.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(line_buffering=True)
 
     if not argv or argv[0] in ("-h", "--help"):
         _print_main_help()

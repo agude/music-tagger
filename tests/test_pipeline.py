@@ -309,3 +309,85 @@ class TestRipStaging:
             _rip([str(tmp_path / "out")])
 
         assert rip_cd.call_args.args[0] == tmp_path / "out"
+
+
+class TestApplyCoverChecks:
+    def test_unembeddable_cover_fails_before_writing(
+        self, flac_album: Path, tmp_path: Path, capsys: object
+    ) -> None:
+        bad = tmp_path / "front.png"
+        bad.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32)
+        before = {path: path.read_bytes() for path in flac_album.glob("*.flac")}
+
+        with pytest.raises(SystemExit) as error:
+            _run_apply(flac_album, "--cover-file", str(bad), "--genre", "Retro Rock")
+
+        assert error.value.code == 1
+        assert {path: path.read_bytes() for path in before} == before
+        assert "cannot be embedded" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+    def test_keep_cover_accepts_cover_png(self, flac_album: Path) -> None:
+        import io
+
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.new("RGB", (32, 32)).save(buffer, "PNG")
+        (flac_album / "cover.png").write_bytes(buffer.getvalue())
+
+        _run_apply(flac_album, "--keep-cover", "--genre", "Retro Rock")
+
+        assert (flac_album / "cover.png").read_bytes() == buffer.getvalue()
+        picture = FLAC(sorted(flac_album.glob("*.flac"))[0]).pictures[0]
+        assert picture.mime == "image/jpeg"
+
+    def test_unexpected_step_error_names_the_step(
+        self, flac_album: Path, cover: Path, capsys: object
+    ) -> None:
+        with (
+            patch("music_tagger.cli._art", side_effect=RuntimeError("boom")),
+            pytest.raises(SystemExit) as error,
+        ):
+            _run_apply(flac_album, "--cover-file", str(cover), "--genre", "Retro Rock")
+
+        assert error.value.code == 1
+        err = capsys.readouterr().err  # type: ignore[attr-defined]
+        assert "RuntimeError: boom" in err
+        assert "apply stopped at art" in err
+
+
+class TestPlaceProgress:
+    def test_prints_a_line_per_file(self, staging: Path, tmp_path: Path, capsys: object) -> None:
+        _place([str(staging), "--root", str(tmp_path / "library")])
+
+        out = capsys.readouterr().out  # type: ignore[attr-defined]
+        assert "[1/4] 01. Desperado.flac: copied" in out
+        assert "[4/4] Eagles - Desperado.log: copied" in out
+
+    def test_failures_go_to_stderr(self, staging: Path, tmp_path: Path, capsys: object) -> None:
+        with (
+            patch("music_tagger.placement.shutil.copy2", side_effect=OSError("disk full")),
+            pytest.raises(SystemExit),
+        ):
+            _place([str(staging), "--root", str(tmp_path / "library")])
+
+        assert "[1/4] 01. Desperado.flac: failed: disk full" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+
+class TestRipFailure:
+    def test_whipper_failure_exits_without_traceback(self, tmp_path: Path, capsys: object) -> None:
+        import subprocess
+
+        with (
+            patch(
+                "music_tagger.ripper.rip_cd",
+                side_effect=subprocess.CalledProcessError(2, ["whipper"]),
+            ),
+            pytest.raises(SystemExit) as error,
+        ):
+            _rip([str(tmp_path / "out")])
+
+        assert error.value.code == 1
+        err = capsys.readouterr().err  # type: ignore[attr-defined]
+        assert "whipper failed (exit 2)" in err
+        assert "--unknown" in err

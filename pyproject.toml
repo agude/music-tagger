@@ -11,6 +11,7 @@ dependencies = [
     "mutagen>=1.47",
     "httpx>=0.28",
     "discid>=1.4.2",
+    "pillow>=12.3.0",
 ]
 
 [project.scripts]

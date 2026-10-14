@@ -4,11 +4,16 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
+import pytest
 
 from music_tagger.coverart import ArtResult, fetch_cover_art, image_dimensions, use_local_cover
 
+JPEG_START = b"\xff\xd8"
 
-def _mock_response(status_code: int = 200, content: bytes = b"JPEGDATA") -> httpx.Response:
+
+def _mock_response(
+    status_code: int = 200, content: bytes = JPEG_START + b"JPEGDATA"
+) -> httpx.Response:
     request = httpx.Request("GET", "https://example.com")
     return httpx.Response(status_code=status_code, content=content, request=request)
 
@@ -19,14 +24,14 @@ class TestFetchCoverArt:
             mock_client = MagicMock()
             mock_cls.return_value.__enter__ = MagicMock(return_value=mock_client)
             mock_cls.return_value.__exit__ = MagicMock(return_value=False)
-            mock_client.get.return_value = _mock_response(content=b"FAKEJPEG" * 100)
+            mock_client.get.return_value = _mock_response(content=JPEG_START + b"FAKEJPEG" * 100)
 
             result = fetch_cover_art("release-123", tmp_path)
 
         assert result.saved is True
         assert result.path == tmp_path / "cover.jpg"
         assert result.path.exists()
-        assert result.size_bytes == 800
+        assert result.size_bytes == 802
         mock_client.get.assert_called_once()
         assert "front-500" in mock_client.get.call_args[0][0]
 
@@ -75,12 +80,12 @@ class TestFetchCoverArt:
             mock_client = MagicMock()
             mock_cls.return_value.__enter__ = MagicMock(return_value=mock_client)
             mock_cls.return_value.__exit__ = MagicMock(return_value=False)
-            mock_client.get.return_value = _mock_response(content=b"new image")
+            mock_client.get.return_value = _mock_response(content=JPEG_START + b"new image")
 
             result = fetch_cover_art("release-123", tmp_path, force=True)
 
         assert result.saved is True
-        assert existing.read_bytes() == b"new image"
+        assert existing.read_bytes() == JPEG_START + b"new image"
 
     def test_creates_directory(self, tmp_path: Path) -> None:
         dest = tmp_path / "nested" / "album"
@@ -141,6 +146,7 @@ class TestArtCommand:
         from music_tagger.cli import _art
 
         cover = tmp_path / "cover.jpg"
+        cover.write_bytes(JPEG_START + b"COVER")
         with (
             patch("music_tagger.cli.fetch_cover_art") as mock_fetch,
             patch("music_tagger.cli.embed_cover_art") as mock_embed,
@@ -149,7 +155,7 @@ class TestArtCommand:
             mock_embed.return_value = 3
             _art([str(tmp_path), "--release-id", "abc-123", "--embed"])
 
-        mock_embed.assert_called_once_with(tmp_path, cover)
+        mock_embed.assert_called_once_with(tmp_path, JPEG_START + b"COVER", "image/jpeg")
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "Embedded cover art into 3 file(s)" in captured.out
 
@@ -157,6 +163,7 @@ class TestArtCommand:
         from music_tagger.cli import _art
 
         cover = tmp_path / "cover.jpg"
+        cover.write_bytes(JPEG_START + b"COVER")
         with (
             patch("music_tagger.cli.fetch_cover_art") as mock_fetch,
             patch("music_tagger.cli.embed_cover_art") as mock_embed,
@@ -165,7 +172,7 @@ class TestArtCommand:
             mock_embed.return_value = 2
             _art([str(tmp_path), "--release-id", "abc-123", "--embed"])
 
-        mock_embed.assert_called_once_with(tmp_path, cover)
+        mock_embed.assert_called_once_with(tmp_path, JPEG_START + b"COVER", "image/jpeg")
 
     def test_embed_not_found_skips_embed(self, tmp_path: Path, capsys: object) -> None:
         from music_tagger.cli import _art
@@ -183,7 +190,7 @@ class TestArtCommand:
 class TestUseLocalCover:
     def test_copies_file(self, tmp_path: Path) -> None:
         source = tmp_path / "input.jpg"
-        source.write_bytes(b"LOCALCOVER")
+        source.write_bytes(JPEG_START + b"LOCALCOVER")
         dest_dir = tmp_path / "album"
         dest_dir.mkdir()
 
@@ -191,8 +198,8 @@ class TestUseLocalCover:
 
         assert result.saved is True
         assert result.path == dest_dir / "cover.jpg"
-        assert result.path.read_bytes() == b"LOCALCOVER"
-        assert result.size_bytes == 10
+        assert result.path.read_bytes() == JPEG_START + b"LOCALCOVER"
+        assert result.size_bytes == 12
 
     def test_skips_existing(self, tmp_path: Path) -> None:
         source = tmp_path / "input.jpg"
@@ -210,7 +217,7 @@ class TestUseLocalCover:
 
     def test_force_overwrites(self, tmp_path: Path) -> None:
         source = tmp_path / "input.jpg"
-        source.write_bytes(b"NEW")
+        source.write_bytes(JPEG_START + b"NEW")
         dest_dir = tmp_path / "album"
         dest_dir.mkdir()
         existing = dest_dir / "cover.jpg"
@@ -219,7 +226,7 @@ class TestUseLocalCover:
         result = use_local_cover(source, dest_dir, force=True)
 
         assert result.saved is True
-        assert existing.read_bytes() == b"NEW"
+        assert existing.read_bytes() == JPEG_START + b"NEW"
 
     def test_source_not_found(self, tmp_path: Path) -> None:
         source = tmp_path / "nonexistent.jpg"
@@ -233,7 +240,7 @@ class TestUseLocalCover:
 
     def test_creates_dest_directory(self, tmp_path: Path) -> None:
         source = tmp_path / "input.jpg"
-        source.write_bytes(b"DATA")
+        source.write_bytes(JPEG_START + b"DATA")
         dest_dir = tmp_path / "nested" / "album"
 
         result = use_local_cover(source, dest_dir)
@@ -285,6 +292,7 @@ class TestArtCommandCoverFile:
         source = tmp_path / "my_cover.jpg"
         source.write_bytes(b"DATA")
         cover = tmp_path / "cover.jpg"
+        cover.write_bytes(JPEG_START + b"DATA")
 
         with (
             patch("music_tagger.cli.use_local_cover") as mock_local,
@@ -294,7 +302,7 @@ class TestArtCommandCoverFile:
             mock_embed.return_value = 5
             _art([str(tmp_path), "--cover-file", str(source), "--embed"])
 
-        mock_embed.assert_called_once_with(tmp_path, cover)
+        mock_embed.assert_called_once_with(tmp_path, JPEG_START + b"DATA", "image/jpeg")
 
 
 def _jpeg(width: int, height: int) -> bytes:
@@ -394,3 +402,213 @@ class TestArtPreview:
             _art([str(flac_album), "--cover-file", str(tmp_path / "a.jpg"), "--preview"])
 
         assert error.value.code == 2
+
+
+def _real_image(fmt: str, size: tuple[int, int] = (64, 48)) -> bytes:
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", size, (200, 30, 30)).save(buffer, fmt)
+    return buffer.getvalue()
+
+
+class TestImageFormat:
+    def test_detects_by_signature_not_name(self) -> None:
+        from music_tagger.coverart import image_format
+
+        assert image_format(_png(10, 10)) == "png"
+        assert image_format(_jpeg(10, 10)) == "jpeg"
+        assert image_format(b"GIF89a") is None
+
+
+class TestInstallCover:
+    def test_png_is_named_cover_png_and_replaces_cover_jpg(self, tmp_path: Path) -> None:
+        from music_tagger.coverart import install_cover
+
+        (tmp_path / "cover.jpg").write_bytes(_jpeg(10, 10))
+
+        result = install_cover(_png(10, 10), tmp_path, force=True)
+
+        assert result.path == tmp_path / "cover.png"
+        assert result.removed == [tmp_path / "cover.jpg"]
+        assert sorted(path.name for path in tmp_path.iterdir()) == ["cover.png"]
+
+    def test_existing_cover_of_any_format_is_kept_without_force(self, tmp_path: Path) -> None:
+        from music_tagger.coverart import install_cover
+
+        existing = tmp_path / "cover.png"
+        existing.write_bytes(_png(10, 10))
+
+        result = install_cover(_jpeg(10, 10), tmp_path)
+
+        assert result.skipped is True
+        assert result.path == existing
+        assert not (tmp_path / "cover.jpg").exists()
+
+    def test_unsupported_image_raises(self, tmp_path: Path) -> None:
+        import pytest
+
+        from music_tagger.coverart import UnsupportedImageError, install_cover
+
+        with pytest.raises(UnsupportedImageError):
+            install_cover(b"GIF89a", tmp_path, force=True)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_fetched_png_is_saved_as_cover_png(self, tmp_path: Path) -> None:
+        with patch("music_tagger.coverart.httpx.Client") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value.__enter__ = MagicMock(return_value=mock_client)
+            mock_cls.return_value.__exit__ = MagicMock(return_value=False)
+            mock_client.get.return_value = _mock_response(content=_png(10, 10))
+
+            result = fetch_cover_art("release-123", tmp_path)
+
+        assert result.path == tmp_path / "cover.png"
+
+    def test_local_cover_that_is_the_album_cover_is_skipped(self, tmp_path: Path) -> None:
+        cover = tmp_path / "cover.png"
+        cover.write_bytes(_png(10, 10))
+
+        result = use_local_cover(cover, tmp_path, force=True)
+
+        assert result.skipped is True
+        assert cover.read_bytes() == _png(10, 10)
+
+
+class TestEmbeddableCover:
+    def test_small_jpeg_is_unchanged(self, tmp_path: Path) -> None:
+        from music_tagger.coverart import embeddable_cover
+
+        path = tmp_path / "front.jpg"
+        path.write_bytes(_jpeg(10, 10))
+
+        cover = embeddable_cover(path)
+
+        assert (cover.data, cover.mime, cover.converted) == (_jpeg(10, 10), "image/jpeg", False)
+
+    def test_png_is_converted_to_jpeg(self, tmp_path: Path) -> None:
+        from music_tagger.coverart import embeddable_cover
+
+        path = tmp_path / "front.jpg"  # misnamed on purpose: the bytes decide
+        path.write_bytes(_real_image("PNG"))
+
+        cover = embeddable_cover(path)
+
+        assert cover.converted is True
+        assert cover.mime == "image/jpeg"
+        assert cover.data.startswith(b"\xff\xd8")
+
+    def test_oversized_jpeg_is_reencoded_to_fit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from music_tagger import coverart
+
+        path = tmp_path / "front.jpg"
+        path.write_bytes(_real_image("JPEG", (400, 400)))
+        limit = len(path.read_bytes()) // 4
+        monkeypatch.setattr(coverart, "MAX_EMBEDDED_BYTES", limit)
+
+        cover = coverart.embeddable_cover(path)
+
+        assert cover.converted is True
+        assert len(cover.data) <= limit
+
+    def test_undecodable_png_raises(self, tmp_path: Path) -> None:
+        import pytest
+
+        from music_tagger.coverart import UnsupportedImageError, embeddable_cover
+
+        path = tmp_path / "front.png"
+        path.write_bytes(_png(10, 10))  # header only, no image data
+
+        with pytest.raises(UnsupportedImageError):
+            embeddable_cover(path)
+
+    def test_unknown_format_raises(self, tmp_path: Path) -> None:
+        import pytest
+
+        from music_tagger.coverart import UnsupportedImageError, embeddable_cover
+
+        path = tmp_path / "front.gif"
+        path.write_bytes(b"GIF89a")
+
+        with pytest.raises(UnsupportedImageError):
+            embeddable_cover(path)
+
+
+class TestArtCommandFormats:
+    def test_png_cover_installs_cover_png_and_embeds_jpeg(
+        self, flac_album: Path, tmp_path: Path, default_log: Path
+    ) -> None:
+        from mutagen.flac import FLAC
+
+        from music_tagger.cli import _art
+
+        (flac_album / "cover.jpg").write_bytes(_jpeg(10, 10))
+        source = tmp_path / "front.png"
+        source.write_bytes(_real_image("PNG"))
+
+        _art([str(flac_album), "--cover-file", str(source), "--embed", "--force"])
+
+        assert (flac_album / "cover.png").read_bytes() == source.read_bytes()
+        assert not (flac_album / "cover.jpg").exists()
+        picture = FLAC(sorted(flac_album.glob("*.flac"))[0]).pictures[0]
+        assert picture.mime == "image/jpeg"
+        assert picture.data.startswith(b"\xff\xd8")
+        log = default_log.read_text()
+        assert f"- **Removed:** {flac_album / 'cover.jpg'}" in log
+        assert "converted to JPEG" in log
+
+    def test_unsupported_image_exits_with_error(
+        self, flac_album: Path, tmp_path: Path, capsys: object
+    ) -> None:
+        import pytest
+
+        from music_tagger.cli import _art
+
+        source = tmp_path / "front.gif"
+        source.write_bytes(b"GIF89a")
+
+        with pytest.raises(SystemExit) as error:
+            _art([str(flac_album), "--cover-file", str(source), "--embed"])
+
+        assert error.value.code == 1
+        assert "Error: cover art failed" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+    def test_embed_failure_exits_with_error(
+        self, flac_album: Path, tmp_path: Path, capsys: object
+    ) -> None:
+        import pytest
+        from mutagen.flac import error as FLACError
+
+        from music_tagger.cli import _art
+
+        source = tmp_path / "front.jpg"
+        source.write_bytes(_jpeg(10, 10))
+
+        with (
+            patch("music_tagger.cli.embed_cover_art", side_effect=FLACError("block too long")),
+            pytest.raises(SystemExit) as error,
+        ):
+            _art([str(flac_album), "--cover-file", str(source), "--embed"])
+
+        assert error.value.code == 1
+        assert "block too long" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+    def test_preview_reports_current_cover_png(self, flac_album: Path, capsys: object) -> None:
+        from music_tagger.cli import _art
+
+        (flac_album / "cover.png").write_bytes(_png(700, 700))
+
+        def fake_fetch(release_id: str, dest_dir: Path, **_: object) -> ArtResult:
+            dest = dest_dir / "cover.jpg"
+            dest.write_bytes(_jpeg(10, 10))
+            return ArtResult(saved=True, path=dest, size_bytes=1)
+
+        with patch("music_tagger.cli.fetch_cover_art", side_effect=fake_fetch):
+            _art([str(flac_album), "--release-id", "r-1", "--preview"])
+
+        out = capsys.readouterr().out  # type: ignore[attr-defined]
+        assert f"Current: {flac_album / 'cover.png'} (700x700" in out

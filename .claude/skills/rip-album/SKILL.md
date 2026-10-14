@@ -40,7 +40,9 @@ Add `--release-id <uuid>` when the user gave one. If whipper reports that
 the disc is not in MusicBrainz, rerun with `--unknown`.
 
 The first line is `Staging: <path>`; call that `$STAGING`. The output ends
-with an AccurateRip summary.
+with an AccurateRip summary. Whipper's Q-subchannel CRC warnings during the
+track-information pass are harmless when that summary passes; do not report
+them.
 
 | Exit | Meaning | Action |
 | --- | --- | --- |
@@ -65,8 +67,9 @@ whipper matched), CD, US, and earliest date. The ranking is advice. Decide:
   next rows clearly worse): use it. Confirm with the user only when it is
   not `on-files`.
 - **Several rows tie on durations** (editions that differ only in country,
-  label, or barcode): prefer a barcode match, then `on-files`, then the
-  ranking. Show the top 2–3 rows and ask with `AskUserQuestion`.
+  label, or pressing plant): use the `on-files` row, the release whipper
+  matched from the disc. Do not ask. Ask with `AskUserQuestion`, showing the
+  tied rows, only when none of them is `on-files`.
 - **`No candidates found.`, or no row fits:** retry once with different
   `--artist` or `--album` spelling. If nothing fits, tell the user the
   search terms tried and stop. Do not place an unidentified album.
@@ -81,6 +84,10 @@ It prints `Candidate:` (a temp file) with dimensions. View it with Read.
 If it shows this release's artwork, pass `--cover-file "<candidate path>"`.
 If it is wrong, or exit 1 (`No cover art available`), ask the user for an
 image path and pass `--cover-file "<path>"`.
+
+Any JPEG or PNG works, at any size. The album folder keeps the original as
+`cover.jpg` or `cover.png`; the tracks get a JPEG, converted when the
+original is a PNG or too large to embed. Do not convert images yourself.
 
 ## 4. Choose genres
 
@@ -106,7 +113,8 @@ safe.
 | 0 | `Done.` | Continue to step 6. |
 | 3 | `Gate: review` and the overwrites | Show the user the listed overwrites. If they approve, rerun with `--approve-overwrites`. If they reject them, the release is probably wrong: return to step 2. |
 | 4 | `Gate: blocked` and `ISRC conflict` lines | Rerun with `--isrc keep`. Whipper read those codes from this disc, and absence from MusicBrainz does not prove them wrong. This needs no user confirmation. |
-| Other | `apply stopped at <step>` | Report the error and the step. Do not work around it. |
+| 1 | `cover image cannot be embedded` | The image is not a readable JPEG or PNG. Ask the user for another image. Nothing was written. |
+| Other | `apply stopped at <step>` | Report the error and the step. Do not work around it. Rerunning `apply` after the cause is fixed is safe. |
 
 ## 6. Place
 
@@ -128,8 +136,10 @@ Then copy with the same flags:
 uv run music-tagger place "$STAGING"
 ```
 
-It verifies every file by SHA-256, logs the copy, and removes `$STAGING`.
-Exit 1 means a copy failed; `$STAGING` is kept. Report the failed files.
+It prints `[N/total] <file>: copied` as each file is verified by SHA-256,
+logs the copy, and removes `$STAGING`. Copying to the NAS takes minutes;
+wait for it. Exit 1 means a copy failed; `$STAGING` is kept. Report the
+`failed:` lines.
 
 ## 7. Report
 

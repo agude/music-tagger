@@ -149,6 +149,20 @@ class TestComputePlacement:
         assert "album.cue" in names
         assert "rip.log" in names
 
+    def test_sanitizes_non_audio_names(self, tmp_path: Path) -> None:
+        album_dir = tmp_path / "rip"
+        album_dir.mkdir()
+        (album_dir / "Sugar Ray - 14:59.log").write_text("log data")
+        track = TrackTags(
+            path=album_dir / "01.flac",
+            tags={"tracknumber": "1", "title": "Song", "albumartist": "A", "album": "B"},
+            format="flac",
+        )
+
+        plan = compute_placement(AlbumTags(directory=album_dir, tracks=[track]), root=Path("/m"))
+
+        assert plan.mappings[-1].dest.name == "Sugar Ray - 14-59.log"
+
     def test_excludes_non_audio_when_disabled(self, tmp_path: Path) -> None:
         album_dir = tmp_path / "rip"
         album_dir.mkdir()
@@ -275,6 +289,21 @@ class TestCopyFiles:
         result = copy_files(plan)
         assert len(result.copied) == 2
         assert dest.exists()
+
+    def test_reports_each_file(self, tmp_path: Path) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        dest = tmp_path / "dest" / "album"
+        dest.mkdir(parents=True)
+        plan = self._make_plan(src, dest)
+        (dest / "01.flac").write_bytes(b"existing")
+        reported: list[tuple[str, str]] = []
+
+        copy_files(
+            plan, on_file=lambda mapping, status: reported.append((mapping.dest.name, status))
+        )
+
+        assert reported == [("01.flac", "skipped (exists)"), ("02.flac", "copied")]
 
     def test_serialization(self, tmp_path: Path) -> None:
         src = tmp_path / "src"

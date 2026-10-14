@@ -42,8 +42,9 @@ CD, US, and earliest date. The ranking is advice. Decide:
   next rows clearly worse): use it. Confirm with the user only when it is
   not `on-files`.
 - **Several rows tie on durations** (editions that differ only in country,
-  label, or barcode): prefer `on-files`, then the ranking. Show the top 2–3
-  rows and ask with `AskUserQuestion`.
+  label, or barcode): use the `on-files` row without asking. Ask with
+  `AskUserQuestion`, showing the tied rows, only when none of them is
+  `on-files`.
 - **Only `partial` rows fit** (the files are a subset of the release): use
   the best one when every local track is within 2s.
 - **`No candidates found.`, or no row fits:** retry once with `--artist` and
@@ -71,6 +72,11 @@ with dimensions. View both images with Read, then pick one:
 - **Neither is right, or exit 1 (`No cover art available`):** ask the user
   for an image path and pass `--cover-file "<path>"`.
 
+Any JPEG or PNG works, at any size. The album folder keeps the original as
+`cover.jpg` or `cover.png` and drops the other; the tracks get a JPEG,
+converted when the original is a PNG or too large to embed. Do not convert
+images yourself.
+
 ## 4. Choose genres
 
 If the user gave genres, use them. Otherwise read
@@ -96,7 +102,8 @@ rerunning with added flags is safe.
 | 0 | `Done.` | Report. |
 | 3 | `Gate: review` and the overwrites | Show the user the listed overwrites. If they approve, rerun with `--approve-overwrites`. If they reject them, the release is probably wrong: return to step 2. |
 | 4 | `Gate: blocked` and `ISRC conflict` lines | Resolve the ISRC conflicts below, then rerun. |
-| Other | `apply stopped at <step>` | Report the error and the step. Do not work around it. |
+| 1 | `cover image cannot be embedded` | The image is not a readable JPEG or PNG. Choose the other cover or ask the user for one. Nothing was written. |
+| Other | `apply stopped at <step>` | Report the error and the step. Do not work around it. Rerunning `apply` after the cause is fixed is safe. |
 
 **ISRC conflicts.** The source of an existing library code is unknown: it
 may have been read from the CD or set by another tagger. Show the user a

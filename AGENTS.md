@@ -80,8 +80,9 @@ Key CLI subcommands, driven by Claude Code in conversation:
    temp staging directory and prints `Staging: <path>`. It parses whipper's
    log and prints an AccurateRip summary per track; it exits 3 when a track
    is a mismatch (`Found, NO exact match`) or its status is not `Copy OK`.
-   Tracks absent from the AccurateRip database are normal. Requires system
-   package: `whipper`.
+   Tracks absent from the AccurateRip database are normal. A whipper
+   failure exits 1 with `Error: whipper failed (exit N)`, not a traceback.
+   Requires system package: `whipper`.
 
 8. `uv run music-tagger lock <album-dir> [field ...] [--track N] [--disc N] [--dry-run]`
    — locks fields so `tag` keeps their current value, including an empty
@@ -93,16 +94,24 @@ Key CLI subcommands, driven by Claude Code in conversation:
 
 9. `uv run music-tagger apply <album-dir> --release-id <uuid> (--cover-file <img> | --keep-cover) --genre <g> [--genre <g> ...]`
    — runs `tag`, `art`, `genre`, `rename`, and `replaygain` in order and
-   stops at the first non-zero exit. Checks the cover image and genres
+   stops at the first non-zero exit. Checks that the cover image can be
+   embedded (a readable JPEG or PNG) and that the genres are canonical
    before any step writes. Passes `--approve-overwrites`, `--ignore-locks`,
    `--isrc`, and `--isrc-code` through to `tag`, so a gate stop (exit 3 or
    4) happens before anything is written.
+   An exception inside a step also prints `apply stopped at <step>` and
+   exits 1. `main()` line-buffers stdout so progress lines interleave with
+   whipper's and rsgain's output when piped.
 
 10. `uv run music-tagger place <album-dir> [--root <dir>] [--artist-dir <name>] [--album-dir <name>] [--merge] [--dry-run]`
     — copies a finished album into the library with SHA-256 verification.
     Refuses an existing album directory unless `--merge` (existing files are
-    kept). Removes the source only when it is under the temp directory and
-    every file was copied, so it never deletes a library album.
+    kept). Prints a flushed `[N/total] <file>: copied` line as each file is
+    verified. Removes the source only when it is under the temp directory and
+    every file was copied, so it never deletes a library album. Non-audio
+    file names are sanitized like track names: whipper names its `.log`,
+    `.cue`, and `.toc` after the disc title, and a `:` in it made the NAS
+    store them as 8.3 names such as `SFYL6N~T.LOG`.
 
 ## Library workflow
 
@@ -179,9 +188,16 @@ src/music_tagger/
 - `coverart.py` fetches front cover images from the Cover Art Archive or
   installs a local image via `use_local_cover()`. The `art` subcommand
   accepts `--cover-file <path>` as an alternative to `--release-id`.
+  The folder cover is named by its bytes, `cover.jpg` or `cover.png`, and
+  installing one removes the other: Navidrome reads `cover.*` before
+  embedded art, and which of two wins is unspecified. `art --embed` embeds
+  `embeddable_cover()`: a JPEG that fits unchanged; a PNG, or a JPEG over
+  `MAX_EMBEDDED_BYTES`, re-encoded as quality-95 4:4:4 JPEG (Pillow) and
+  downscaled until it fits. A FLAC picture block has a 24-bit length, so an
+  18.6 MB PNG raised `mutagen.flac.error: block is too long to write`.
   `art --release-id <uuid> --preview` downloads the full-size front cover to
   a temp file and prints its path and dimensions next to the album's
-  current `cover.jpg`, writing nothing to the album, so the operator can
+  current `cover.*`, writing nothing to the album, so the operator can
   look at it before passing it to `apply --cover-file`.
 - `replaygain.py` subprocess wrapper around `rsgain` for ReplayGain 2.0 tagging.
 - `navidrome.py` Subsonic API client for library scans (and future ratings).

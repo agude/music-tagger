@@ -584,10 +584,8 @@ def write_rating_to_file(
     return changes
 
 
-def embed_cover_art(album_dir: Path, image_path: Path) -> int:
+def embed_cover_art(album_dir: Path, image_data: bytes, mime: str) -> int:
     """Embed cover art into all audio files in album_dir. Returns count of files updated."""
-    image_data = image_path.read_bytes()
-    mime = "image/png" if image_path.suffix.lower() == ".png" else "image/jpeg"
 
     files = sorted(f for f in album_dir.iterdir() if f.suffix.lower() in AUDIO_EXTENSIONS)
     count = 0
