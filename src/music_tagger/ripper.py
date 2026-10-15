@@ -5,9 +5,15 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from mutagen import MutagenError
+from mutagen.flac import FLAC
+
+from .cue import rewrite_cue_references
 
 
 @dataclass
@@ -16,6 +22,12 @@ class RipResult:
     track_count: int
     log_file: Path | None = None
     cue_file: Path | None = None
+    disc_number: int | None = None
+    disc_total: int | None = None
+
+    @property
+    def is_multi_disc(self) -> bool:
+        return (self.disc_total or 1) > 1
 
 
 @dataclass
@@ -97,16 +109,22 @@ def rip_cd(
     device: str = "/dev/cdrom",
     release_id: str | None = None,
     unknown: bool = False,
+    replace: bool = False,
 ) -> RipResult:
-    """Rip a CD to FLAC files using whipper.
+    """Rip a CD to FLAC files in output_dir using whipper.
 
     Whipper handles disc ID lookup, MusicBrainz matching, AccurateRip
-    verification, and FLAC encoding. Output files are named
-    ``NN. Title.flac`` in output_dir.
+    verification, and FLAC encoding. It refuses an output directory that
+    already holds a .log, so it rips into a fresh subdirectory and the files
+    are moved up. Tracks are named ``NN. Title.flac``; on a multi-disc
+    release they get a ``D-`` prefix, so each disc of an album can be ripped
+    into the same output_dir. `replace` overwrites files from an earlier rip
+    of the same disc.
     """
     _check_tool("whipper")
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    work_dir = Path(tempfile.mkdtemp(prefix=".whipper-", dir=output_dir))
 
     cmd: list[str] = [
         "whipper",
@@ -117,7 +135,7 @@ def rip_cd(
         device,
         "rip",
         "-O",
-        str(output_dir),
+        str(work_dir),
         "--track-template",
         "%t. %n",
         "--disc-template",
@@ -131,19 +149,74 @@ def rip_cd(
 
     subprocess.run(cmd, check=True)
 
-    flac_paths = sorted(output_dir.glob("*.flac"))
-    if not flac_paths:
-        raise RuntimeError("whipper produced no FLAC files")
+    ripped = sorted(work_dir.glob("*.flac"))
+    if not ripped:
+        raise RuntimeError(f"whipper produced no FLAC files in {work_dir}")
 
-    log_files = list(output_dir.glob("*.log"))
-    cue_files = list(output_dir.glob("*.cue"))
+    disc_number, disc_total = read_disc_position(ripped[0])
+    prefix = f"{disc_number}-" if disc_number and (disc_total or 1) > 1 else ""
+    moved = _move_disc_files(work_dir, output_dir, prefix, replace)
 
+    flac_paths = sorted(path for path in moved if path.suffix == ".flac")
+    log_files = [path for path in moved if path.suffix == ".log"]
+    cue_files = [path for path in moved if path.suffix == ".cue"]
     return RipResult(
         tracks=flac_paths,
         track_count=len(flac_paths),
         log_file=log_files[0] if log_files else None,
         cue_file=cue_files[0] if cue_files else None,
+        disc_number=disc_number,
+        disc_total=disc_total,
     )
+
+
+def read_disc_position(path: Path) -> tuple[int | None, int | None]:
+    """(DISCNUMBER, DISCTOTAL) from a whipper FLAC, None where absent.
+
+    Whipper 0.10 writes both when the disc matched a MusicBrainz release.
+    """
+    try:
+        audio = FLAC(path)  # type: ignore[no-untyped-call]
+    except MutagenError:
+        return None, None
+    number = audio.get("discnumber")  # type: ignore[no-untyped-call]
+    total = audio.get("disctotal") or audio.get("totaldiscs")  # type: ignore[no-untyped-call]
+    return _first_int(number), _first_int(total)
+
+
+def _first_int(values: list[str] | None) -> int | None:
+    if not values:
+        return None
+    try:
+        return int(values[0].split("/")[0])
+    except ValueError:
+        return None
+
+
+def _move_disc_files(work_dir: Path, output_dir: Path, prefix: str, replace: bool) -> list[Path]:
+    """Move whipper's files into output_dir, prefixing FLACs and their CUE references.
+
+    Checks every destination before moving anything, so a collision leaves
+    the rip intact in work_dir.
+    """
+    sources = sorted(path for path in work_dir.iterdir() if path.is_file())
+    renames = {path.name: prefix + path.name for path in sources if path.suffix == ".flac"}
+    destinations = {path: output_dir / renames.get(path.name, path.name) for path in sources}
+
+    existing = [dest for dest in destinations.values() if dest.exists()]
+    if existing and not replace:
+        names = ", ".join(dest.name for dest in existing)
+        raise RuntimeError(
+            f"{names} already in {output_dir}; this disc may already be ripped. "
+            f"The new rip is in {work_dir}. Pass --replace to overwrite."
+        )
+
+    if prefix:
+        rewrite_cue_references(work_dir, renames)
+    for source, dest in destinations.items():
+        source.replace(dest)
+    work_dir.rmdir()
+    return list(destinations.values())
 
 
 def read_disc_id(device: str = "/dev/cdrom") -> dict[str, Any]:

@@ -27,6 +27,7 @@ from .coverart import (
     image_dimensions,
     use_local_cover,
 )
+from .cue import missing_cue_references, rewrite_cue_references
 from .discid import parse_rip_dir
 from .musicbrainz import MBRelease, MusicBrainzClient
 from .navidrome import NavidromeClient, SongRating
@@ -1213,6 +1214,11 @@ def _rip(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Continue ripping if the CD is not in MusicBrainz.",
     )
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Overwrite files from an earlier rip of this disc in the output directory.",
+    )
     args = parser.parse_args(argv)
 
     from . import ripper
@@ -1226,6 +1232,7 @@ def _rip(argv: list[str] | None = None) -> None:
             device=args.device,
             release_id=args.release_id,
             unknown=args.unknown,
+            replace=args.replace,
         )
     except subprocess.CalledProcessError as error:
         print(f"Error: whipper failed (exit {error.returncode}).", file=sys.stderr)
@@ -1247,11 +1254,17 @@ def _rip(argv: list[str] | None = None) -> None:
     print(f"Log: {result.log_file}")
     accuraterip = ripper.parse_accuraterip(result.log_file.read_text())
     print("\n".join(accuraterip.describe()))
+    disc = f"Disc {result.disc_number} of {result.disc_total}" if result.is_multi_disc else "Disc"
     if accuraterip.needs_review:
-        print("Rip needs review: see the mismatched tracks above.", file=sys.stderr)
+        print(f"{disc} needs review: see the tracks above. Safe to eject.", file=sys.stderr)
         sys.exit(EXIT_REVIEW)
 
-    print("\nNext: review tags and candidates:")
+    print(f"\n{disc} verified; safe to eject.")
+    if result.is_multi_disc and (result.disc_number or 0) < (result.disc_total or 0):
+        print(f"Next: insert disc {(result.disc_number or 0) + 1}, then run:")
+        print(f"  uv run music-tagger rip {target}")
+        return
+    print("Next: review tags and candidates:")
     print(f"  uv run music-tagger candidates {target}")
 
 
@@ -1438,16 +1451,25 @@ def _genre(argv: list[str] | None = None) -> None:
         help="List all genres in the library with track counts.",
     )
     parser.add_argument(
+        "--artist",
+        default=None,
+        help="Show the genres on each of this artist's albums in the library.",
+    )
+    parser.add_argument(
         "--root",
         type=Path,
         default=_DEFAULT_LIBRARY_ROOT,
-        help=f"Library root for --list (default: {_DEFAULT_LIBRARY_ROOT}).",
+        help=f"Library root for --list and --artist (default: {_DEFAULT_LIBRARY_ROOT}).",
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Show what would change without writing."
     )
     _add_log_arguments(parser)
     args = parser.parse_args(argv)
+
+    if args.artist is not None:
+        _print_artist_genres(args.root, args.artist)
+        return
 
     if args.list:
         genres = _scan_library_genres(args.root)
@@ -1526,6 +1548,31 @@ def _genre(argv: list[str] | None = None) -> None:
         _write_genre_log(log_path, album, str(applied), count)
 
 
+def _print_artist_genres(root: Path, artist: str) -> None:
+    from .genres import album_genres, find_artist_dirs, similar_artist_dirs
+
+    artist_dirs = find_artist_dirs(root, artist)
+    if not artist_dirs:
+        print(f"No artist directory matches '{artist}' under {root}.")
+        if similar := similar_artist_dirs(root, artist):
+            print(f"Similar: {', '.join(similar)}")
+        return
+
+    album_counts: dict[str, int] = {}
+    album_total = 0
+    for artist_dir in artist_dirs:
+        print(f"{artist_dir.name} ({artist_dir}):")
+        for album in album_genres(artist_dir):
+            album_total += 1
+            print(f"  {album.album_dir.name}: {', '.join(album.genres) or '(no genre)'}")
+            for genre in album.genres:
+                album_counts[genre] = album_counts.get(genre, 0) + 1
+
+    ranked = sorted(album_counts.items(), key=lambda item: (-item[1], item[0]))
+    summary = ", ".join(f"{genre} ({count} of {album_total})" for genre, count in ranked)
+    print(f"Genres by album count: {summary or 'none'}")
+
+
 def _write_genre_log(log_path: Path, album: AlbumTags, genre: str, count: int) -> None:
     timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     lines = [
@@ -1599,15 +1646,28 @@ def _rename(argv: list[str] | None = None) -> None:
 
     if args.dry_run:
         print(f"\n(dry run — {len(album.tracks)} tracks)")
-    else:
-        print(f"Renamed {len(renames)} file(s).")
+        return
 
+    print(f"Renamed {len(renames)} file(s).")
+    cues = _update_cue_sheets(target, dict(renames))
     log_path = _log_path(args)
-    if log_path and not args.dry_run and renames:
-        _write_rename_log(log_path, album, renames)
+    if log_path and renames:
+        _write_rename_log(log_path, album, renames, cues)
 
 
-def _write_rename_log(log_path: Path, album: AlbumTags, renames: list[tuple[str, str]]) -> None:
+def _update_cue_sheets(album_dir: Path, renames: dict[str, str]) -> list[Path]:
+    """Rewrite CUE FILE lines for renamed files and warn about dangling ones."""
+    cues = rewrite_cue_references(album_dir, renames) if renames else []
+    for cue in cues:
+        print(f"Updated CUE: {cue.name}")
+    for cue, name in missing_cue_references(album_dir):
+        print(f"Warning: {cue.name} references missing file '{name}'.", file=sys.stderr)
+    return cues
+
+
+def _write_rename_log(
+    log_path: Path, album: AlbumTags, renames: list[tuple[str, str]], cues: list[Path]
+) -> None:
     timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     lines = [
         "## Rename",
@@ -1619,7 +1679,25 @@ def _write_rename_log(log_path: Path, album: AlbumTags, renames: list[tuple[str,
     ]
     for old, new in renames:
         lines.append(f"- `{old}` → `{new}`")
+    for cue in cues:
+        lines.append(f"- CUE updated: `{cue.name}`")
     lines += ["", "---", ""]
+    with open(log_path, "a") as f:
+        f.write("\n".join(lines))
+
+
+def _write_cue_log(log_path: Path, album_dir: Path, cues: list[Path]) -> None:
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        "## CUE update",
+        "",
+        f"- **Date:** {timestamp}",
+        f"- **Album:** {album_dir}",
+        *(f"- `{cue.name}`: FILE lines point at the placed file names" for cue in cues),
+        "",
+        "---",
+        "",
+    ]
     with open(log_path, "a") as f:
         f.write("\n".join(lines))
 
@@ -1862,6 +1940,16 @@ def _place(argv: list[str] | None = None) -> None:
     print(f"Copied {len(result.copied)} of {len(plan.mappings)} file(s).")
     if result.failed:
         sys.exit(1)
+
+    renamed_audio = {
+        mapping.source.name: mapping.dest.name
+        for mapping in plan.mappings
+        if mapping.source.suffix.lower() in AUDIO_EXTENSIONS
+        and mapping.source.name != mapping.dest.name
+    }
+    cues = _update_cue_sheets(plan.album_dir, renamed_audio)
+    if log_path and cues:
+        _write_cue_log(log_path, plan.album_dir, cues)
 
     # Delete only a temp staging directory whose every file was copied and verified.
     if not result.skipped and source.is_relative_to(Path(tempfile.gettempdir()).resolve()):

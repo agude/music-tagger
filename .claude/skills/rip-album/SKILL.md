@@ -46,9 +46,20 @@ them.
 
 | Exit | Meaning | Action |
 | --- | --- | --- |
-| 0 | Rip verified, or tracks absent from the AccurateRip database | Continue. Absent tracks are normal. |
-| 3 | A track mismatched AccurateRip or did not copy OK | Show the user the summary. Ask whether to clean the disc and rip again, or continue. |
+| 0 | Rip verified, or tracks absent from the AccurateRip database | Tell the user the disc is safe to eject. Continue. Absent tracks are normal. |
+| 3 | A track mismatched AccurateRip or did not copy OK | Show the user the summary. Ask whether to clean the disc and rip again, or continue. To rip again, rerun the same command with `--replace`. |
 | Other | Rip failed | Report the error and stop. |
+
+**Multi-disc albums.** `rip` names tracks `D-NN. Title` when the release
+has several discs and ends with `Disc N of M verified; safe to eject.` and
+`Next: insert disc N+1, then run: uv run music-tagger rip <path>`. Tell the
+user to swap discs, then run that command: every disc goes into the same
+`$STAGING`. Continue to step 2 after the last disc. Do not `place` single
+discs or merge them by hand.
+
+Report only these events to the user: each disc finished and safe to eject,
+the AccurateRip result, and the album placed. Do not relay whipper's
+per-track progress.
 
 ## 2. Choose the release
 
@@ -91,9 +102,21 @@ original is a PNG or too large to embed. Do not convert images yourself.
 
 ## 4. Choose genres
 
-If the user gave genres, use them. Otherwise read
-`${CLAUDE_SKILL_DIR}/references/genre-list.md`, pick the 2–4 best fits for
-the artist and album, and confirm with a multi-select `AskUserQuestion`.
+If the user gave genres, use them. Otherwise check the artist's albums
+already in the library first:
+
+```bash
+uv run music-tagger genre --artist "<artist>"
+```
+
+- **The artist's albums agree** (a genre on every album): propose those
+  genres. Change them only for a clear reason, such as a live album or a
+  change of style.
+- **No match, or `Similar:` names a directory:** rerun with that name. If
+  the artist is not in the library, read
+  `${CLAUDE_SKILL_DIR}/references/genre-list.md` and pick the 2–4 best fits.
+
+Confirm with a multi-select `AskUserQuestion`; put the proposed genres first.
 `apply` rejects genres that are not on the list. Pass `--force-genre` only
 when the user deliberately adds a new genre.
 

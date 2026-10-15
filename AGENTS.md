@@ -46,8 +46,12 @@ Key CLI subcommands, driven by Claude Code in conversation:
    — sets the genre meta-grouping tags on all tracks. Pass each genre as its
    own argument; they are written as separate tag values, never as one
    delimited string. Omit them to show the current genres. Use `--add` and
-   `--remove` to edit incrementally without restating the rest, and
-   `genre --list` to scan the library for all genres in use. Multiple genres
+   `--remove` to edit incrementally without restating the rest,
+   `genre --list` to scan the library for all genres in use, and
+   `genre --artist "<name>"` to show the genres on each of that artist's
+   album directories (`<root>/<artist>/<album>`) with a count per genre.
+   Artist matching ignores case, a leading "The", and punctuation; a miss
+   prints `Similar:` directory names. Skills run it before proposing genres. Multiple genres
    per album are encouraged when they fit. These are broad browsing
    categories, not musicological genres. Values are validated against
    `.claude/skills/rip-album/references/genre-list.md`, the canonical list;
@@ -69,7 +73,9 @@ Key CLI subcommands, driven by Claude Code in conversation:
    files to `NN. Title.ext` (`D-NN. Title.ext` on multi-disc albums) from
    their tracknumber, discnumber, and title tags, the same names `place`
    uses. Sanitizes filesystem-unsafe characters. Skips files missing title
-   or tracknumber tags.
+   or tracknumber tags. Rewrites the `FILE "…"` lines of every `.cue` in the
+   album for the renamed files and warns about any FILE line naming a file
+   that does not exist.
 
 7. `uv run music-tagger rip [<output-dir>] [--device /dev/cdrom] [--release-id <uuid>] [--unknown]`
    — rips a CD to FLAC via whipper with AccurateRip verification.
@@ -82,6 +88,15 @@ Key CLI subcommands, driven by Claude Code in conversation:
    is a mismatch (`Found, NO exact match`) or its status is not `Copy OK`.
    Tracks absent from the AccurateRip database are normal. A whipper
    failure exits 1 with `Error: whipper failed (exit N)`, not a traceback.
+   Whipper refuses an output directory that holds a `.log`, so `rip` runs
+   it in a fresh `.whipper-*` subdirectory and moves the files up. When
+   whipper's `DISCNUMBER`/`DISCTOTAL` tags show a multi-disc release, tracks
+   get the `D-` prefix (and their CUE references with them), so every disc
+   is ripped into the same directory: `rip <staging>` once per disc. It
+   prints `Disc N of M verified; safe to eject.` and the command for the
+   next disc. A name collision (the same disc ripped twice) is refused
+   before any move; `--replace` overwrites. Whipper's `%d` already appends
+   `(Disc N of M)`, so each disc's `.cue` and `.log` names are distinct.
    Requires system package: `whipper`.
 
 8. `uv run music-tagger lock <album-dir> [field ...] [--track N] [--disc N] [--dry-run]`
@@ -108,7 +123,8 @@ Key CLI subcommands, driven by Claude Code in conversation:
     Refuses an existing album directory unless `--merge` (existing files are
     kept). Prints a flushed `[N/total] <file>: copied` line as each file is
     verified. Removes the source only when it is under the temp directory and
-    every file was copied, so it never deletes a library album. Non-audio
+    every file was copied, so it never deletes a library album. The placed
+    `.cue` files are rewritten for the placed track names. Non-audio
     file names are sanitized like track names: whipper names its `.log`,
     `.cue`, and `.toc` after the disc title, and a `:` in it made the NAS
     store them as 8.3 names such as `SFYL6N~T.LOG`.
@@ -157,6 +173,7 @@ src/music_tagger/
 ├── tags.py          # Read/write FLAC + MP3 tags via mutagen
 ├── musicbrainz.py   # MB API client with 1 req/sec rate limiting
 ├── tagger.py        # Orchestration: search → diff → write
+├── cue.py           # Keep CUE FILE lines in step with renamed audio
 ├── discid.py        # CUE sheet parser, disc ID computation
 ├── placement.py     # Library path computation + verified copy
 ├── coverart.py      # Cover Art Archive client

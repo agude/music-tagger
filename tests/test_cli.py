@@ -937,6 +937,34 @@ class TestRenameCommand:
             "2-01. Out of Control.flac",
         ]
 
+    def test_rewrites_cue_references(
+        self, flac_album: Path, default_log: Path, capsys: object
+    ) -> None:
+        cue = flac_album / "Eagles - Desperado.cue"
+        cue.write_text(
+            "".join(f'FILE "{f.name}" WAVE\n' for f in sorted(flac_album.glob("*.flac")))
+        )
+
+        _rename([str(flac_album)])
+
+        assert cue.read_text() == (
+            'FILE "01. Desperado.flac" WAVE\n'
+            'FILE "02. Twenty-One.flac" WAVE\n'
+            'FILE "03. Out of Control.flac" WAVE\n'
+        )
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "Updated CUE: Eagles - Desperado.cue" in captured.out
+        assert "Warning" not in captured.err
+        assert "- CUE updated: `Eagles - Desperado.cue`" in default_log.read_text()
+
+    def test_warns_about_dangling_cue_reference(self, flac_album: Path, capsys: object) -> None:
+        (flac_album / "album.cue").write_text('FILE "gone.flac" WAVE\n')
+
+        _rename([str(flac_album)])
+
+        err = capsys.readouterr().err  # type: ignore[attr-defined]
+        assert "album.cue references missing file 'gone.flac'" in err
+
     def test_dry_run(self, capsys: object, flac_album: Path) -> None:
         for f in sorted(flac_album.glob("*.flac")):
             f.rename(f.parent / f"track{f.stem[:2]}.flac")

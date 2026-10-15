@@ -210,6 +210,24 @@ class TestPlaceCommand:
         ]
         assert not staging.exists()
 
+    def test_placed_cue_points_at_placed_names(
+        self, staging: Path, tmp_path: Path, default_log: Path
+    ) -> None:
+        names = sorted(path.name for path in staging.glob("*.flac"))
+        (staging / "Eagles - Desperado.cue").write_text(
+            "".join(f'FILE "{name}" WAVE\n' for name in names)
+        )
+
+        _place([str(staging), "--root", str(tmp_path / "library")])
+
+        album_dir = tmp_path / "library" / "Eagles" / "Desperado (1973)"
+        assert (album_dir / "Eagles - Desperado.cue").read_text() == (
+            'FILE "01. Desperado.flac" WAVE\n'
+            'FILE "02. Twenty-One.flac" WAVE\n'
+            'FILE "03. Out of Control.flac" WAVE\n'
+        )
+        assert "## CUE update" in default_log.read_text()
+
     def test_logs_copy(self, staging: Path, tmp_path: Path, default_log: Path) -> None:
         _place([str(staging), "--root", str(tmp_path / "library")])
 

@@ -79,9 +79,21 @@ images yourself.
 
 ## 4. Choose genres
 
-If the user gave genres, use them. Otherwise read
-`${CLAUDE_SKILL_DIR}/references/genre-list.md`, pick the 2–4 best fits for
-the artist and album, and confirm with a multi-select `AskUserQuestion`.
+If the user gave genres, use them. Otherwise check the artist's other
+albums first:
+
+```bash
+uv run music-tagger genre --artist "<artist>"
+```
+
+- **The artist's other albums agree** (a genre on every album other than
+  this one): propose those genres. Change them only for a clear reason,
+  such as a live album or a change of style.
+- **No match, or `Similar:` names a directory:** rerun with that name. If
+  the artist is not in the library, read
+  `${CLAUDE_SKILL_DIR}/references/genre-list.md` and pick the 2–4 best fits.
+
+Confirm with a multi-select `AskUserQuestion`; put the proposed genres first.
 `apply` rejects genres that are not on the list. Pass `--force-genre` only
 when the user deliberately adds a new genre.
 
