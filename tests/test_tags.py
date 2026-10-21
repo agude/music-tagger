@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
+
+import pytest
+from mutagen.flac import FLAC, Picture
 
 from music_tagger.tags import (
     RATING_TO_POPM,
     AlbumTags,
     TagChange,
     TrackTags,
+    _flac_comments_from_stream,
     _rating_to_fmps,
     compute_diff,
     embed_cover_art,
     read_album,
+    read_flac_comments,
     read_genres,
     read_locks,
     write_genres,
@@ -758,3 +764,156 @@ class TestLocksM4a:
 
         assert read_locks(track_path) == ["isrc", "title"]
         assert read_album(m4a_album).tracks[0].locked_fields == ["isrc", "title"]
+
+
+class _CountingStream(io.BytesIO):
+    """BytesIO that counts the bytes handed to readers."""
+
+    def __init__(self, data: bytes) -> None:
+        super().__init__(data)
+        self.bytes_read = 0
+
+    def read(self, size: int | None = -1) -> bytes:
+        data = super().read(size)
+        self.bytes_read += len(data)
+        return data
+
+
+def _block(block_type: int, body: bytes, *, last: bool) -> bytes:
+    header = (0x80 if last else 0) | block_type
+    return bytes([header]) + len(body).to_bytes(3, "big") + body
+
+
+def _vorbis_body(*comments: str) -> bytes:
+    vendor = b"test"
+    body = len(vendor).to_bytes(4, "little") + vendor + len(comments).to_bytes(4, "little")
+    for comment in comments:
+        raw = comment.encode()
+        body += len(raw).to_bytes(4, "little") + raw
+    return body
+
+
+class TestReadFlacComments:
+    def test_matches_mutagen_on_fixtures(self, flac_album: Path) -> None:
+        for path in sorted(flac_album.glob("*.flac")):
+            audio = FLAC(path)
+            expected: dict[str, list[str]] = {}
+            for key, value in audio.tags:
+                expected.setdefault(key.upper(), []).append(value)
+            assert read_flac_comments(path) == expected
+
+    def test_skips_picture_block_contents(self, flac_album: Path) -> None:
+        path = sorted(flac_album.glob("*.flac"))[0]
+        audio = FLAC(path)
+        picture = Picture()
+        picture.type = 3
+        picture.mime = "image/png"
+        picture.data = b"\x00" * 2_000_000
+        audio.add_picture(picture)
+        audio.save()
+
+        data = path.read_bytes()
+        stream = _CountingStream(data)
+        comments = _flac_comments_from_stream(stream, len(data))
+
+        assert comments == read_flac_comments(path)
+        assert stream.bytes_read < 100_000
+
+    def test_non_flac_returns_none(self, mp3_album: Path) -> None:
+        assert read_flac_comments(sorted(mp3_album.glob("*.mp3"))[0]) is None
+
+    def test_truncated_file_returns_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "truncated.flac"
+        path.write_bytes(b"fLaC\x04\x00\x00\x40")  # VORBIS_COMMENT claims 64 bytes; none follow
+
+        assert read_flac_comments(path) is None
+
+    def test_truncated_comment_body_returns_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "short-body.flac"
+        path.write_bytes(b"fLaC" + bytes([0x04]) + (64).to_bytes(3, "big") + b"abc")
+
+        assert read_flac_comments(path) is None
+
+    def test_truncated_last_block_returns_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "short-padding.flac"
+        path.write_bytes((b"fLaC" + _block(1, b"\x00" * 100, last=True))[:-50])
+
+        assert read_flac_comments(path) is None
+
+    def test_two_vorbis_blocks_return_none(self) -> None:
+        data = (
+            b"fLaC"
+            + _block(4, _vorbis_body("TITLE=a"), last=False)
+            + _block(4, _vorbis_body("TITLE=b"), last=True)
+        )
+
+        assert _flac_comments_from_stream(_CountingStream(data), len(data)) is None
+
+    def test_no_vorbis_block_returns_empty(self) -> None:
+        data = b"fLaC" + _block(1, b"\x00" * 8, last=True)
+
+        assert _flac_comments_from_stream(_CountingStream(data), len(data)) == {}
+
+
+class TestWriteRatingFastPath:
+    @staticmethod
+    def _refuse_mutagen(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("mutagen opened the file")
+
+    def test_unchanged_file_is_not_opened_by_mutagen(
+        self, flac_album: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        write_rating_to_file(track_path, rating=4)
+        monkeypatch.setattr("music_tagger.tags.MutagenFile", self._refuse_mutagen)
+
+        assert write_rating_to_file(track_path, rating=4) == []
+
+    def test_dry_run_is_not_opened_by_mutagen(
+        self, flac_album: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        monkeypatch.setattr("music_tagger.tags.MutagenFile", self._refuse_mutagen)
+
+        changes = write_rating_to_file(track_path, rating=3, dry_run=True)
+
+        assert {c.field for c in changes} == {"fmps_rating", "rating"}
+
+    def test_fallback_gives_same_changes(
+        self, flac_album: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        fast = write_rating_to_file(
+            track_path, rating=4, starred="2024-01-15T10:00:00Z", dry_run=True
+        )
+        monkeypatch.setattr("music_tagger.tags.read_flac_comments", lambda path: None)
+        slow = write_rating_to_file(
+            track_path, rating=4, starred="2024-01-15T10:00:00Z", dry_run=True
+        )
+
+        assert len(fast) == 4
+        assert fast == slow
+
+    def test_fast_path_write_reads_back_through_header_reader(self, flac_album: Path) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        assert read_flac_comments(track_path) is not None
+
+        write_rating_to_file(track_path, rating=4, starred="2024-01-15T10:00:00Z")
+
+        comments = read_flac_comments(track_path)
+        assert comments is not None
+        assert comments["RATING"] == ["4"]
+        assert comments["FMPS_RATING"] == ["0.8"]
+        assert comments["STARRED"] == ["true"]
+        assert comments["STARRED_AT"] == ["2024-01-15T10:00:00Z"]
+
+    def test_id3_prefixed_flac_falls_back_to_mutagen(self, flac_album: Path) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        track_path.write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x00" + track_path.read_bytes())
+        assert read_flac_comments(track_path) is None
+
+        changes = write_rating_to_file(track_path, rating=4)
+
+        assert {c.field for c in changes} == {"fmps_rating", "rating"}
+        assert track_path.read_bytes().startswith(b"ID3")
+        assert FLAC(track_path)["rating"] == ["4"]

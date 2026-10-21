@@ -6,9 +6,12 @@ Field names follow Navidrome's mappings.yaml conventions.
 
 from __future__ import annotations
 
+import os
+import struct
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from mutagen import File as MutagenFile
 from mutagen.flac import FLAC, Picture
@@ -227,13 +230,92 @@ def _most_common(values: Any) -> str:
     return counts.most_common(1)[0][0] if counts else ""
 
 
-def _read_flac_tags(audio: FLAC) -> dict[str, str]:
+_FLAC_MAGIC = b"fLaC"
+_VORBIS_COMMENT_BLOCK = 4
+
+
+def _flac_tags_from_lookup(lookup: Callable[[str], Sequence[str] | None]) -> dict[str, str]:
+    """Map Vorbis comments onto FIELD_MAP names; lookup(key) returns values, first wins."""
     tags: dict[str, str] = {}
     for canonical, (vorbis_key, _) in FIELD_MAP.items():
-        values = audio.get(vorbis_key)  # type: ignore[no-untyped-call]
+        values = lookup(vorbis_key)
         if values:
             tags[canonical] = values[0]
     return tags
+
+
+def _read_flac_tags(audio: FLAC) -> dict[str, str]:
+    return _flac_tags_from_lookup(audio.get)
+
+
+def _parse_vorbis_comments(block: bytes) -> dict[str, list[str]]:
+    """Parse a VORBIS_COMMENT block into upper-case key -> values, in file order."""
+    (vendor_length,) = struct.unpack_from("<I", block, 0)
+    pos = 4 + vendor_length
+    (count,) = struct.unpack_from("<I", block, pos)
+    pos += 4
+    comments: dict[str, list[str]] = {}
+    for _ in range(count):
+        (length,) = struct.unpack_from("<I", block, pos)
+        pos += 4
+        text = block[pos : pos + length].decode("utf-8", errors="replace")
+        pos += length
+        key, separator, value = text.partition("=")
+        if separator:
+            comments.setdefault(key.upper(), []).append(value)
+    return comments
+
+
+def _read_exact(stream: BinaryIO, size: int) -> bytes:
+    data = b""
+    while len(data) < size:
+        chunk = stream.read(size - len(data))
+        if not chunk:
+            raise ValueError("FLAC metadata ends early")
+        data += chunk
+    return data
+
+
+def _flac_comments_from_stream(stream: BinaryIO, size: int) -> dict[str, list[str]] | None:
+    """Return a FLAC stream's Vorbis comments, or None if its layout is unexpected.
+
+    Reads each 4-byte block header and the VORBIS_COMMENT block, then seeks past
+    every other block, so embedded pictures are never read. size is the file
+    length; a last block that runs past it means the file is truncated.
+    """
+    if stream.read(4) != _FLAC_MAGIC:
+        return None
+    comments: dict[str, list[str]] | None = None
+    while True:
+        header = _read_exact(stream, 4)
+        is_last = header[0] & 0x80
+        block_type = header[0] & 0x7F
+        length = int.from_bytes(header[1:4], "big")
+        if block_type == _VORBIS_COMMENT_BLOCK:
+            if comments is not None:
+                return None
+            comments = _parse_vorbis_comments(_read_exact(stream, length))
+        else:
+            stream.seek(length, 1)
+        if is_last:
+            if stream.tell() > size:
+                return None
+            return comments if comments is not None else {}
+
+
+def read_flac_comments(path: Path) -> dict[str, list[str]] | None:
+    """Read a FLAC file's Vorbis comments without loading its embedded pictures.
+
+    Returns None when the file is not a plain FLAC stream or its metadata is
+    malformed; callers then fall back to mutagen. Reads are unbuffered, so an
+    open does not fill Python's default buffer, which is sized from st_blksize.
+    """
+    with open(path, "rb", buffering=0) as stream:
+        size = os.fstat(stream.fileno()).st_size
+        try:
+            return _flac_comments_from_stream(stream, size)
+        except (ValueError, struct.error):
+            return None
 
 
 def _read_mp3_tags(audio: MP3) -> dict[str, str]:
@@ -526,14 +608,7 @@ def _rating_to_fmps(rating: int) -> str:
     return f"{rating / 5:.1f}"
 
 
-def write_rating_to_file(
-    path: Path, rating: int, starred: str = "", dry_run: bool = False
-) -> list[TagChange]:
-    """Write rating and starred tags to an audio file. Returns changes made."""
-    audio = MutagenFile(path)
-    if audio is None:
-        return []
-
+def _rating_targets(rating: int, starred: str) -> dict[str, str]:
     targets: dict[str, str] = {}
     if rating:
         targets["fmps_rating"] = _rating_to_fmps(rating)
@@ -541,26 +616,19 @@ def write_rating_to_file(
     if starred:
         targets["starred"] = "true"
         targets["starred_at"] = starred
+    return targets
 
-    if isinstance(audio, FLAC):
-        current = _read_flac_tags(audio)
-    elif isinstance(audio, MP3):
-        current = _read_mp3_tags(audio)
-    elif isinstance(audio, MP4):
-        current = _read_mp4_tags(audio)
-        targets.pop("rating", None)  # see MP4_RATE_ATOM: scales collide
-    else:
-        return []
 
+def _diff_targets(targets: Mapping[str, str], current: Mapping[str, str]) -> list[TagChange]:
     changes: list[TagChange] = []
     for tag_name, new_value in sorted(targets.items()):
         old_value = current.get(tag_name, "")
         if old_value != new_value:
             changes.append(TagChange(field=tag_name, old_value=old_value, new_value=new_value))
+    return changes
 
-    if not changes or dry_run:
-        return changes
 
+def _write_rating_changes(audio: FLAC | MP3 | MP4, changes: list[TagChange], rating: int) -> None:
     if isinstance(audio, FLAC):
         for change in changes:
             _write_flac_tag(audio, change.field, change.new_value)
@@ -579,8 +647,48 @@ def write_rating_to_file(
         if rating:
             # mutagen renders `rate` as a text atom, so the 0-100 value is a string.
             audio[MP4_RATE_ATOM] = [str(rating * 20)]
-
     audio.save()
+
+
+def write_rating_to_file(
+    path: Path, rating: int, starred: str = "", dry_run: bool = False
+) -> list[TagChange]:
+    """Write rating and starred tags to an audio file. Returns changes made.
+
+    A plain FLAC is checked from its Vorbis comments, so mutagen opens it only
+    to write a change. A FLAC that changes is therefore read twice: once by the
+    header reader, then by mutagen.
+    """
+    targets = _rating_targets(rating, starred)
+
+    comments = read_flac_comments(path)
+    if comments is not None:
+        changes = _diff_targets(targets, _flac_tags_from_lookup(comments.get))
+        if not changes or dry_run:
+            return changes
+        audio = MutagenFile(path)
+        if not isinstance(audio, FLAC):
+            raise ValueError(f"{path}: FLAC header, but mutagen reads {type(audio).__name__}")
+        _write_rating_changes(audio, changes, rating)
+        return changes
+
+    audio = MutagenFile(path)
+    if audio is None:
+        return []
+    if isinstance(audio, FLAC):
+        current = _read_flac_tags(audio)
+    elif isinstance(audio, MP3):
+        current = _read_mp3_tags(audio)
+    elif isinstance(audio, MP4):
+        current = _read_mp4_tags(audio)
+        targets.pop("rating", None)  # see MP4_RATE_ATOM: scales collide
+    else:
+        return []
+
+    changes = _diff_targets(targets, current)
+    if not changes or dry_run:
+        return changes
+    _write_rating_changes(audio, changes, rating)
     return changes
 
 
