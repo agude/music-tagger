@@ -1316,9 +1316,6 @@ def _nd_ratings(argv: list[str] | None = None) -> None:
     lines = [
         f"{len(songs)} song(s): {rated} rated, {starred} starred",
     ]
-    if songs:
-        sample = songs[0]
-        lines.append(f"  e.g. {sample.artist} — {sample.title}")
 
     _output_json(data, args.out, "\n".join(lines))
 
