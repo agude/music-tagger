@@ -13,6 +13,7 @@ import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import IO
 
 import httpx
 from mutagen import MutagenError
@@ -82,6 +83,36 @@ def _add_log_arguments(parser: argparse.ArgumentParser) -> None:
         "else ~/Projects/music-tagger/changes.log).",
     )
     group.add_argument("--no-log", action="store_true", help="Do not write the change log.")
+
+
+class _BatchLog:
+    """Audit log for one run that writes entries as each file changes.
+
+    The header is written with the first entry and the footer on close, so an
+    interrupted run keeps the entries for the files it already changed. A None
+    path writes nothing.
+    """
+
+    def __init__(self, path: Path | None, header: list[str]) -> None:
+        self._path = path
+        self._header = header
+        self._file: IO[str] | None = None
+
+    def add(self, line: str) -> None:
+        if self._path is None:
+            return
+        if self._file is None:
+            self._file = self._path.open("a")
+            self._file.write("\n".join(self._header) + "\n")
+        self._file.write(line + "\n")
+        self._file.flush()
+
+    def close(self) -> None:
+        if self._file is None:
+            return
+        self._file.write("\n---\n")
+        self._file.close()
+        self._file = None
 
 
 def _log_path(args: argparse.Namespace) -> Path | None:
@@ -582,33 +613,40 @@ def _write_ratings(argv: list[str] | None = None) -> None:
     unchanged = 0
     failed = 0
     unsupported: list[str] = []
-    log_lines: list[str] = []
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    log = _BatchLog(
+        None if args.dry_run else log_path,
+        ["## Rating tags", "", f"- **Date:** {timestamp}", ""],
+    )
 
-    for song, path in targets:
-        try:
-            if not path.exists():
-                skipped += 1
+    try:
+        for song, path in targets:
+            try:
+                if not path.exists():
+                    skipped += 1
+                    continue
+                changes = write_rating_to_file(path, song.rating, dry_run=args.dry_run)
+            except UnsupportedFileError as exc:
+                unsupported.append(song.path)
+                print(f"  unsupported: {song.path}: {exc}", file=sys.stderr)
                 continue
-            changes = write_rating_to_file(path, song.rating, dry_run=args.dry_run)
-        except UnsupportedFileError as exc:
-            unsupported.append(song.path)
-            print(f"  unsupported: {song.path}: {exc}", file=sys.stderr)
-            continue
-        except (MalformedStatsError, MutagenError, OSError, ValueError) as exc:
-            failed += 1
-            print(f"  failed: {song.path}: {exc}", file=sys.stderr)
-            continue
-        if not changes:
-            unchanged += 1
-            continue
-        total_files += 1
-        if args.dry_run:
-            print(f"  {song.path}:")
-            for c in changes:
-                old = c.old_value or "(empty)"
-                print(f"    {c.field}: {old} → {c.new_value}")
-        if log_path is not None:
-            log_lines.append(f"  {song.path}: {', '.join(c.field for c in changes)}")
+            except (MalformedStatsError, MutagenError, OSError, ValueError) as exc:
+                failed += 1
+                print(f"  failed: {song.path}: {exc}", file=sys.stderr)
+                continue
+            if not changes:
+                unchanged += 1
+                continue
+            total_files += 1
+            if args.dry_run:
+                print(f"  {song.path}:")
+                for c in changes:
+                    old = c.old_value or "(empty)"
+                    print(f"    {c.field}: {old} → {c.new_value}")
+            else:
+                log.add(f"  {song.path}: {', '.join(c.field for c in changes)}")
+    finally:
+        log.close()
 
     if skipped:
         print(f"Skipped {skipped} file(s) (not found).", file=sys.stderr)
@@ -625,12 +663,6 @@ def _write_ratings(argv: list[str] | None = None) -> None:
         )
         if total_files == 0 and skipped > 0:
             sys.exit(1)
-
-    if log_path is not None and not args.dry_run and log_lines:
-        timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-        header = ["## Rating tags", "", f"- **Date:** {timestamp}", ""]
-        with open(log_path, "a") as f:
-            f.write("\n".join(header + log_lines + ["", "---", ""]))
 
     if unsupported or failed:
         sys.exit(1)
@@ -704,56 +736,70 @@ def _write_stats(argv: list[str] | None = None) -> None:
     changed = unchanged = clear_withheld = decrease_withheld = 0
     missing = unsupported = failed = 0
     rewrite_files = rewrite_bytes = 0
-    log_lines: list[str] = []
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    log = _BatchLog(
+        None if args.dry_run else log_path,
+        [
+            "## Statistics",
+            "",
+            f"- **Date:** {timestamp}",
+            f"- **Snapshot:** {args.from_file}",
+            "",
+        ],
+    )
 
-    for song, path in targets:
-        try:
-            size = path.stat().st_size
-            plan = write_stats_to_file(
-                path,
-                rating=song.rating,
-                play_count=song.play_count,
-                clear=args.clear,
-                allow_decrease=args.allow_decrease,
-                dry_run=args.dry_run,
-            )
-        except FileNotFoundError:
-            missing += 1
-            print(f"  missing: {song.path}", file=sys.stderr)
-            continue
-        except UnsupportedFileError as exc:
-            unsupported += 1
-            print(f"  unsupported: {song.path}: {exc}", file=sys.stderr)
-            continue
-        except (MalformedStatsError, MutagenError, OSError, ValueError) as exc:
-            failed += 1
-            print(f"  failed: {song.path}: {exc}", file=sys.stderr)
-            continue
+    try:
+        for song, path in targets:
+            try:
+                size = path.stat().st_size
+                plan = write_stats_to_file(
+                    path,
+                    rating=song.rating,
+                    play_count=song.play_count,
+                    clear=args.clear,
+                    allow_decrease=args.allow_decrease,
+                    dry_run=args.dry_run,
+                )
+            except FileNotFoundError:
+                missing += 1
+                print(f"  missing: {song.path}", file=sys.stderr)
+                continue
+            except UnsupportedFileError as exc:
+                unsupported += 1
+                print(f"  unsupported: {song.path}: {exc}", file=sys.stderr)
+                continue
+            except (MalformedStatsError, MutagenError, OSError, ValueError) as exc:
+                failed += 1
+                print(f"  failed: {song.path}: {exc}", file=sys.stderr)
+                continue
 
-        if plan.clear_withheld:
-            clear_withheld += 1
-            print(f"  clear withheld: {song.path} (snapshot rating 0; pass --clear)")
-        if plan.decrease_withheld:
-            decrease_withheld += 1
-            print(
-                f"  decrease withheld: {song.path} (snapshot count is lower; pass --allow-decrease)"
-            )
-        if not plan.changes:
-            unchanged += 1
-            continue
+            if plan.clear_withheld:
+                clear_withheld += 1
+                print(f"  clear withheld: {song.path} (snapshot rating 0; pass --clear)")
+            if plan.decrease_withheld:
+                decrease_withheld += 1
+                print(
+                    f"  decrease withheld: {song.path} "
+                    "(snapshot count is lower; pass --allow-decrease)"
+                )
+            if not plan.changes:
+                unchanged += 1
+                continue
 
-        changed += 1
-        rewrite_files += 1
-        rewrite_bytes += size
-        if args.dry_run:
-            print(f"  {song.path}:")
-            for c in plan.changes:
-                print(f"    {c.field}: {c.old_value or '(empty)'} → {c.new_value}")
-        elif log_path is not None:
-            detail = "; ".join(
-                f"{c.field} {c.old_value or '(empty)'} → {c.new_value}" for c in plan.changes
-            )
-            log_lines.append(f"  {song.path}: {detail}")
+            changed += 1
+            rewrite_files += 1
+            rewrite_bytes += size
+            if args.dry_run:
+                print(f"  {song.path}:")
+                for c in plan.changes:
+                    print(f"    {c.field}: {c.old_value or '(empty)'} → {c.new_value}")
+            else:
+                detail = "; ".join(
+                    f"{c.field} {c.old_value or '(empty)'} → {c.new_value}" for c in plan.changes
+                )
+                log.add(f"  {song.path}: {detail}")
+    finally:
+        log.close()
 
     verb = "would change" if args.dry_run else "changed"
     rewrite_verb = "would rewrite" if args.dry_run else "rewrote"
@@ -763,18 +809,6 @@ def _write_stats(argv: list[str] | None = None) -> None:
         f"{unsupported} unsupported, {failed} failed."
     )
     print(f"{rewrite_verb} {rewrite_files} file(s), {rewrite_bytes} bytes.")
-
-    if log_path is not None and not args.dry_run and log_lines:
-        timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
-        header = [
-            "## Statistics",
-            "",
-            f"- **Date:** {timestamp}",
-            f"- **Snapshot:** {args.from_file}",
-            "",
-        ]
-        with open(log_path, "a") as f:
-            f.write("\n".join(header + log_lines + ["", "---", ""]))
 
     if missing or unsupported or failed:
         sys.exit(1)

@@ -10,6 +10,7 @@ from mutagen.flac import FLAC
 from mutagen.id3 import TXXX
 from mutagen.mp3 import MP3
 
+from music_tagger import cli as cli_module
 from music_tagger.cli import (
     EXIT_BLOCKED,
     EXIT_REVIEW,
@@ -1679,6 +1680,106 @@ class TestWriteRatingsLogging:
         )
 
         assert not default_log.exists()
+
+
+class TestAuditLogSurvivesInterrupt:
+    """Entries for files already changed are kept when a run is interrupted."""
+
+    def test_write_stats_keeps_completed_entries(
+        self,
+        flac_album: Path,
+        tmp_path: Path,
+        default_log: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        tracks = sorted(flac_album.glob("*.flac"))
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [
+                {"id": str(index), "path": str(track), "rating": 4}
+                for index, track in enumerate(tracks[:2])
+            ],
+        )
+        original = cli_module.write_stats_to_file
+        calls = 0
+
+        def interrupt_second(path: Path, **kwargs: object) -> object:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise KeyboardInterrupt
+            return original(path, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(cli_module, "write_stats_to_file", interrupt_second)
+
+        with pytest.raises(KeyboardInterrupt):
+            _write_stats(["--from", str(snap), "--root", str(tmp_path)])
+
+        log = default_log.read_text()
+        assert "## Statistics" in log
+        assert f"  {tracks[0]}: " in log
+        assert str(tracks[1]) not in log
+        assert log.endswith("\n---\n")
+
+    def test_write_ratings_keeps_completed_entries(
+        self,
+        flac_album: Path,
+        tmp_path: Path,
+        default_log: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        tracks = sorted(flac_album.glob("*.flac"))
+        ratings_file = tmp_path / "ratings.json"
+        ratings_file.write_text(
+            json.dumps(
+                [
+                    {"id": str(index), "path": str(track), "rating": 4}
+                    for index, track in enumerate(tracks[:2])
+                ]
+            )
+        )
+        original = cli_module.write_rating_to_file
+        calls = 0
+
+        def interrupt_second(path: Path, rating: int, dry_run: bool = False) -> object:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise KeyboardInterrupt
+            return original(path, rating, dry_run=dry_run)
+
+        monkeypatch.setattr(cli_module, "write_rating_to_file", interrupt_second)
+
+        with pytest.raises(KeyboardInterrupt):
+            _write_ratings(["--from", str(ratings_file), "--root", str(tmp_path)])
+
+        log = default_log.read_text()
+        assert log.startswith("## Rating tags\n\n- **Date:** ")
+        assert f"  {tracks[0]}: fmps_rating, rating" in log
+        assert str(tracks[1]) not in log
+        assert log.endswith("\n---\n")
+
+    def test_completed_run_writes_header_once_and_one_footer(
+        self, flac_album: Path, tmp_path: Path, default_log: Path
+    ) -> None:
+        tracks = sorted(flac_album.glob("*.flac"))
+        ratings_file = tmp_path / "ratings.json"
+        ratings_file.write_text(
+            json.dumps(
+                [
+                    {"id": str(index), "path": str(track), "rating": 4}
+                    for index, track in enumerate(tracks[:2])
+                ]
+            )
+        )
+
+        _write_ratings(["--from", str(ratings_file), "--root", str(tmp_path)])
+
+        log = default_log.read_text()
+        assert log.count("## Rating tags") == 1
+        assert log.count("\n---\n") == 1
+        assert log.endswith("\n\n---\n")
+        assert f"  {tracks[1]}: fmps_rating, rating\n" in log
 
 
 class TestWriteRatingsUnsupported:
