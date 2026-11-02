@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from mutagen.flac import FLAC, Picture
-from mutagen.id3 import POPM, TXXX
+from mutagen.id3 import ID3, POPM, TXXX
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4
 
@@ -677,6 +677,15 @@ def _set_mp3_txxx(path: Path, frames: dict[str, str]) -> None:
     audio.save()
 
 
+def _rating_frames(tags: ID3) -> dict[str, list[str]]:
+    """Each TXXX frame whose description is a case variant of RATING, keyed by its description."""
+    return {
+        frame.desc: list(frame.text)
+        for frame in tags.getall("TXXX")
+        if frame.desc.lower() == "rating"
+    }
+
+
 def _set_m4a_freeform(path: Path, atoms: dict[str, str]) -> None:
     audio = MP4(path)
     for name, text in atoms.items():
@@ -875,6 +884,39 @@ class TestWriteStats:
         assert "TXXX:FMPS_RATING" not in id3
         assert id3["TXXX:FMPS_Rating"].text == ["0.8"]
         assert write_stats_to_file(mp3, rating=4).changes == []
+
+    def test_rating_case_variant_is_replaced_by_canonical(self, mp3_album: Path) -> None:
+        mp3 = self._track(mp3_album, "mp3")
+        _set_mp3_txxx(mp3, {"Rating": "3"})
+
+        write_stats_to_file(mp3, rating=4)
+
+        id3 = MP3(mp3).tags
+        assert id3 is not None
+        assert _rating_frames(id3) == {"RATING": ["4"]}
+        assert write_stats_to_file(mp3, rating=4).changes == []
+
+    def test_clear_removes_every_rating_case_variant(self, mp3_album: Path) -> None:
+        mp3 = self._track(mp3_album, "mp3")
+        _set_mp3_txxx(mp3, {"Rating": "3"})
+
+        plan = write_stats_to_file(mp3, rating=0, clear=True)
+
+        assert [c.field for c in plan.changes] == ["rating"]
+        id3 = MP3(mp3).tags
+        assert id3 is not None
+        assert _rating_frames(id3) == {}
+        assert write_stats_to_file(mp3, rating=0, clear=True).changes == []
+
+    def test_conflicting_rating_case_variants_refuse_the_write(self, mp3_album: Path) -> None:
+        mp3 = self._track(mp3_album, "mp3")
+        _set_mp3_txxx(mp3, {"Rating": "3", "RATING": "4"})
+        before = mp3.read_bytes()
+
+        with pytest.raises(MalformedStatsError, match="RATING spellings disagree"):
+            write_stats_to_file(mp3, rating=5)
+
+        assert mp3.read_bytes() == before
 
     def test_conflicting_play_count_aliases_refuse_the_write(self, mp3_album: Path) -> None:
         mp3 = self._track(mp3_album, "mp3")

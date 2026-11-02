@@ -687,7 +687,6 @@ _FLAC_KEYS = {"fmps_rating": "FMPS_RATING", "rating": "RATING", "fmps_playcount"
 _MP3_ALIASES: dict[str, tuple[str, ...]] = {
     "fmps_rating": FMPS_RATING_ALIASES,
     "fmps_playcount": FMPS_PLAYCOUNT_ALIASES,
-    "rating": ("RATING",),
 }
 _MP4_ALIASES: dict[str, tuple[str, ...]] = {
     "fmps_rating": FMPS_RATING_ALIASES,
@@ -766,6 +765,24 @@ def _set_own_popm(tags: ID3, rating: int | None = None, count: int | None = None
         frame.count = count
 
 
+def _txxx_frames(tags: ID3, desc: str) -> list[Any]:
+    """Every TXXX frame whose description matches desc, ignoring case."""
+    frames: list[Any] = tags.getall("TXXX")  # type: ignore[no-untyped-call]
+    return [frame for frame in frames if frame.desc.lower() == desc.lower()]
+
+
+def _txxx_values(tags: ID3, desc: str) -> set[str]:
+    """The distinct non-empty first text values of the TXXX frames matching desc."""
+    return {frame.text[0] for frame in _txxx_frames(tags, desc) if frame.text and frame.text[0]}
+
+
+def _delete_txxx(tags: ID3, desc: str) -> None:
+    """Delete every case variant of a TXXX frame."""
+    for frame in _txxx_frames(tags, desc):
+        if frame.HashKey in tags:
+            del tags[frame.HashKey]  # type: ignore[no-untyped-call]
+
+
 def _set_mp3_field(audio: MP3, aliases: tuple[str, ...], value: str) -> None:
     """Replace every accepted spelling of a TXXX field. An empty value removes the field."""
     if audio.tags is None and not value:
@@ -775,6 +792,16 @@ def _set_mp3_field(audio: MP3, aliases: tuple[str, ...], value: str) -> None:
         tags.delall(f"TXXX:{name}")  # type: ignore[no-untyped-call]
     if value:
         tags.add(TXXX(encoding=3, desc=aliases[0], text=[value]))  # type: ignore[no-untyped-call]
+
+
+def _set_mp3_rating(audio: MP3, value: str) -> None:
+    """Replace every case variant of TXXX:RATING. An empty value removes the field."""
+    if audio.tags is None and not value:
+        return
+    tags = _mp3_tags(audio)
+    _delete_txxx(tags, "RATING")
+    if value:
+        tags.add(TXXX(encoding=3, desc="RATING", text=[value]))  # type: ignore[no-untyped-call]
 
 
 def _set_mp4_field(audio: MP4, aliases: tuple[str, ...], value: str) -> None:
@@ -805,6 +832,8 @@ def _apply_stats_changes(audio: FLAC | MP3 | MP4, changes: list[TagChange]) -> N
                 _set_own_popm(_mp3_tags(audio), rating=int(value))
             elif field == POPM_COUNT_FIELD:
                 _set_own_popm(_mp3_tags(audio), count=int(value))
+            elif field == "rating":
+                _set_mp3_rating(audio, value)
             else:
                 _set_mp3_field(audio, _MP3_ALIASES[field], value)
         elif field == RATE_FIELD:
@@ -833,17 +862,19 @@ def _conflicts(fmps: FmpsStats) -> frozenset[str]:
 
 def _mp3_stats(audio: MP3) -> tuple[dict[str, str], frozenset[str]]:
     fmps = read_fmps(audio)
-    current = {
-        "rating": _read_mp3_tags(audio).get("rating", ""),
-        "fmps_rating": fmps.rating.value,
-        "fmps_playcount": fmps.play_count.value,
-    }
+    current = {"fmps_rating": fmps.rating.value, "fmps_playcount": fmps.play_count.value}
+    conflicts = set(_conflicts(fmps))
     if audio.tags is not None:
+        ratings = _txxx_values(audio.tags, "RATING")
+        if len(ratings) > 1:
+            conflicts.add("rating")
+        elif ratings:
+            current["rating"] = ratings.pop()
         own = _own_popm(audio.tags)
         if own is not None:
             current[POPM_RATING_FIELD] = str(own.rating)
             current[POPM_COUNT_FIELD] = str(own.count)
-    return current, _conflicts(fmps)
+    return current, frozenset(conflicts)
 
 
 def _mp4_stats(audio: MP4) -> tuple[dict[str, str], frozenset[str]]:
@@ -882,6 +913,8 @@ def _plan_stats(
     """Diff the snapshot's values against a file's current values. Writes nothing."""
     if rating is not None and "fmps_rating" in conflicts:
         raise MalformedStatsError("FMPS rating spellings disagree; nothing written")
+    if rating is not None and "rating" in conflicts:
+        raise MalformedStatsError("RATING spellings disagree; nothing written")
     if play_count is not None and "fmps_playcount" in conflicts:
         raise MalformedStatsError("FMPS play count spellings disagree; nothing written")
 
