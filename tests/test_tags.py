@@ -346,18 +346,30 @@ class TestRatingToFmps:
 class TestWriteRatingFlac:
     def test_writes_rating_tags(self, flac_album: Path) -> None:
         track_path = sorted(flac_album.glob("*.flac"))[0]
-        changes = write_rating_to_file(track_path, rating=4, starred="2024-01-15T10:00:00Z")
+        changes = write_rating_to_file(track_path, rating=4)
 
-        assert len(changes) == 4
+        assert len(changes) == 2
         fields = {c.field for c in changes}
-        assert fields == {"fmps_rating", "rating", "starred", "starred_at"}
+        assert fields == {"fmps_rating", "rating"}
 
         album = read_album(flac_album)
         tags = album.tracks[0].tags
         assert tags["fmps_rating"] == "0.8"
         assert tags["rating"] == "4"
-        assert tags["starred"] == "true"
-        assert tags["starred_at"] == "2024-01-15T10:00:00Z"
+        assert "starred" not in tags
+        assert "starred_at" not in tags
+
+    def test_existing_favorite_is_preserved(self, flac_album: Path) -> None:
+        track_path = sorted(flac_album.glob("*.flac"))[0]
+        audio = FLAC(track_path)
+        audio["STARRED"] = "2020-01-01T00:00:00Z"
+        audio.save()
+
+        changes = write_rating_to_file(track_path, rating=2)
+
+        assert {c.field for c in changes} == {"fmps_rating", "rating"}
+        album = read_album(flac_album)
+        assert album.tracks[0].tags["starred"] == "2020-01-01T00:00:00Z"
 
     def test_rating_only(self, flac_album: Path) -> None:
         track_path = sorted(flac_album.glob("*.flac"))[0]
@@ -390,16 +402,16 @@ class TestWriteRatingMp3:
         from mutagen.mp3 import MP3
 
         track_path = sorted(mp3_album.glob("*.mp3"))[0]
-        changes = write_rating_to_file(track_path, rating=5, starred="2024-06-01T00:00:00Z")
+        changes = write_rating_to_file(track_path, rating=5)
 
         fields = {c.field for c in changes}
-        assert fields == {"fmps_rating", "rating", "popm", "starred", "starred_at"}
+        assert fields == {"fmps_rating", "rating", "popm"}
 
         album = read_album(mp3_album)
         tags = album.tracks[0].tags
         assert tags["fmps_rating"] == "1.0"
         assert tags["rating"] == "5"
-        assert tags["starred"] == "true"
+        assert "starred" not in tags
 
         audio = MP3(track_path)
         popm_frames = audio.tags.getall("POPM")
@@ -417,20 +429,18 @@ class TestWriteRatingMp3:
             assert len(popm) == 1
             assert popm[0].rating == popm_value, f"rating {star_rating} → POPM {popm_value}"
 
-    def test_starred_only_no_popm(self, mp3_album: Path) -> None:
+    def test_zero_rating_writes_nothing(self, mp3_album: Path) -> None:
         from mutagen.mp3 import MP3
 
         track_path = sorted(mp3_album.glob("*.mp3"))[0]
-        changes = write_rating_to_file(track_path, rating=0, starred="2024-03-01T00:00:00Z")
+        changes = write_rating_to_file(track_path, rating=0)
 
-        fields = {c.field for c in changes}
-        assert fields == {"starred", "starred_at"}
+        assert changes == []
 
         album = read_album(mp3_album)
         tags = album.tracks[0].tags
-        assert tags["starred"] == "true"
-        assert tags["starred_at"] == "2024-03-01T00:00:00Z"
         assert "rating" not in tags
+        assert "starred" not in tags
 
         audio = MP3(track_path)
         popm_frames = audio.tags.getall("POPM")
@@ -584,14 +594,14 @@ class TestRatingM4a:
         from mutagen.mp4 import MP4
 
         track_path = sorted(m4a_album.glob("*.m4a"))[0]
-        changes = write_rating_to_file(track_path, rating=4, starred="2026-08-03T10:00:00Z")
+        changes = write_rating_to_file(track_path, rating=4)
 
         fields = {c.field for c in changes}
-        assert fields == {"fmps_rating", "starred", "starred_at"}
+        assert fields == {"fmps_rating"}
 
         a = MP4(track_path)
         assert bytes(a["----:com.apple.iTunes:FMPS_Rating"][0]).decode() == "0.8"
-        assert bytes(a["----:com.apple.iTunes:STARRED"][0]).decode() == "true"
+        assert "----:com.apple.iTunes:STARRED" not in a
         assert a["rate"] == ["80"]
 
     def test_omits_bare_rating_atom(self, m4a_album: Path) -> None:
@@ -613,20 +623,35 @@ class TestRatingM4a:
 
     def test_idempotent(self, m4a_album: Path) -> None:
         track_path = sorted(m4a_album.glob("*.m4a"))[0]
-        write_rating_to_file(track_path, rating=4, starred="2026-08-03T10:00:00Z")
-        again = write_rating_to_file(track_path, rating=4, starred="2026-08-03T10:00:00Z")
+        write_rating_to_file(track_path, rating=4)
+        again = write_rating_to_file(track_path, rating=4)
 
         assert again == []
 
-    def test_starred_only_no_rating(self, m4a_album: Path) -> None:
+    def test_zero_rating_writes_nothing(self, m4a_album: Path) -> None:
         from mutagen.mp4 import MP4
 
         track_path = sorted(m4a_album.glob("*.m4a"))[0]
-        write_rating_to_file(track_path, rating=0, starred="2026-08-03T10:00:00Z")
+        assert write_rating_to_file(track_path, rating=0) == []
 
         a = MP4(track_path)
         assert "rate" not in a
+        assert "----:com.apple.iTunes:STARRED" not in a
+
+    def test_existing_favorite_is_preserved(self, m4a_album: Path) -> None:
+        from mutagen.mp4 import MP4
+
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        audio = MP4(track_path)
+        audio["----:com.apple.iTunes:STARRED"] = [b"true"]
+        audio["----:com.apple.iTunes:STARRED_AT"] = [b"2020-01-01T00:00:00Z"]
+        audio.save()
+
+        write_rating_to_file(track_path, rating=3)
+
+        a = MP4(track_path)
         assert bytes(a["----:com.apple.iTunes:STARRED"][0]).decode() == "true"
+        assert bytes(a["----:com.apple.iTunes:STARRED_AT"][0]).decode() == "2020-01-01T00:00:00Z"
 
     def test_dry_run(self, m4a_album: Path) -> None:
         from mutagen.mp4 import MP4
@@ -1092,29 +1117,24 @@ class TestWriteRatingFastPath:
         self, flac_album: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         track_path = sorted(flac_album.glob("*.flac"))[0]
-        fast = write_rating_to_file(
-            track_path, rating=4, starred="2024-01-15T10:00:00Z", dry_run=True
-        )
+        fast = write_rating_to_file(track_path, rating=4, dry_run=True)
         monkeypatch.setattr("music_tagger.tags.read_flac_comments", lambda path: None)
-        slow = write_rating_to_file(
-            track_path, rating=4, starred="2024-01-15T10:00:00Z", dry_run=True
-        )
+        slow = write_rating_to_file(track_path, rating=4, dry_run=True)
 
-        assert len(fast) == 4
+        assert len(fast) == 2
         assert fast == slow
 
     def test_fast_path_write_reads_back_through_header_reader(self, flac_album: Path) -> None:
         track_path = sorted(flac_album.glob("*.flac"))[0]
         assert read_flac_comments(track_path) is not None
 
-        write_rating_to_file(track_path, rating=4, starred="2024-01-15T10:00:00Z")
+        write_rating_to_file(track_path, rating=4)
 
         comments = read_flac_comments(track_path)
         assert comments is not None
         assert comments["RATING"] == ["4"]
         assert comments["FMPS_RATING"] == ["0.8"]
-        assert comments["STARRED"] == ["true"]
-        assert comments["STARRED_AT"] == ["2024-01-15T10:00:00Z"]
+        assert "STARRED" not in comments
 
     def test_id3_prefixed_flac_falls_back_to_mutagen(self, flac_album: Path) -> None:
         track_path = sorted(flac_album.glob("*.flac"))[0]

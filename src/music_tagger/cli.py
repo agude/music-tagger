@@ -515,7 +515,9 @@ def _write_log_entry(log_path: Path, result: AlbumResult) -> None:
 def _write_ratings(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger write-ratings",
-        description="Write rating and starred tags to audio files from a ratings JSON.",
+        description=(
+            "Write rating tags to audio files from a ratings JSON. Favorites are not written."
+        ),
     )
     parser.add_argument(
         "--from",
@@ -555,7 +557,7 @@ def _write_ratings(argv: list[str] | None = None) -> None:
             skipped += 1
             continue
 
-        changes = write_rating_to_file(path, song.rating, song.starred, dry_run=args.dry_run)
+        changes = write_rating_to_file(path, song.rating, dry_run=args.dry_run)
         if changes:
             total_files += 1
             if args.dry_run:

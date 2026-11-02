@@ -1140,7 +1140,7 @@ class TestWriteRatings:
         album = read_album(flac_album)
         assert album.tracks[0].tags["fmps_rating"] == "0.8"
         assert album.tracks[0].tags["rating"] == "4"
-        assert album.tracks[0].tags["starred"] == "true"
+        assert "starred" not in album.tracks[0].tags
 
     def test_dry_run(self, flac_album: Path, capsys: object) -> None:
         ratings = [

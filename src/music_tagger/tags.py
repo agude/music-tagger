@@ -680,14 +680,13 @@ def _rating_to_fmps(rating: int) -> str:
     return f"{rating / 5:.1f}"
 
 
-def _rating_targets(rating: int, starred: str) -> dict[str, str]:
+def _rating_targets(rating: int) -> dict[str, str]:
+    # Favorites are never written here. Navidrome stores stars apart from
+    # ratings, and file export keeps only the five-star rating.
     targets: dict[str, str] = {}
     if rating:
         targets["fmps_rating"] = _rating_to_fmps(rating)
         targets["rating"] = str(rating)
-    if starred:
-        targets["starred"] = "true"
-        targets["starred_at"] = starred
     return targets
 
 
@@ -744,16 +743,17 @@ def _write_rating_changes(audio: FLAC | MP3 | MP4, changes: list[TagChange], rat
     audio.save()
 
 
-def write_rating_to_file(
-    path: Path, rating: int, starred: str = "", dry_run: bool = False
-) -> list[TagChange]:
-    """Write rating and starred tags to an audio file. Returns changes made.
+def write_rating_to_file(path: Path, rating: int, dry_run: bool = False) -> list[TagChange]:
+    """Write the rating tags to an audio file. Returns changes made.
+
+    Favorites (STARRED, STARRED_AT) are neither written nor cleared; existing
+    values stay as they are.
 
     A plain FLAC is checked from its Vorbis comments, so mutagen opens it only
     to write a change. A FLAC that changes is therefore read twice: once by the
     header reader, then by mutagen.
     """
-    targets = _rating_targets(rating, starred)
+    targets = _rating_targets(rating)
 
     comments = read_flac_comments(path)
     if comments is not None:
