@@ -1385,7 +1385,7 @@ class TestWriteStatsCommand:
         assert exit_info.value.code == 1
         assert (
             "1 changed, 2 unchanged, 0 clear withheld, 0 decrease withheld, "
-            "1 missing, 1 unsupported, 0 failed." in captured.out
+            "0 other library, 1 missing, 1 unsupported, 0 failed." in captured.out
         )
         assert "rewrote 1 file(s)" in captured.out
         comments = _flac_keys(flac_album / "01 - Track 1.flac")
@@ -1573,6 +1573,194 @@ class TestWriteStatsCommand:
 
         assert exit_info.value.code == 1
         assert "cannot read snapshot" in capsys.readouterr().err
+
+    def test_other_library_songs_are_counted_not_listed_and_exit_zero(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [
+                {
+                    "id": "s1",
+                    "path": TRACK_1,
+                    "rating": 4,
+                    "libraryId": 1,
+                    "libraryName": "Music Library",
+                },
+                {
+                    "id": "s2",
+                    "path": "podcasts/show/episode.mp3",
+                    "rating": 3,
+                    "libraryId": 2,
+                    "libraryName": "Podcasts",
+                },
+                {
+                    "id": "s3",
+                    "path": "audiobooks/book/part.m4b",
+                    "rating": 3,
+                    "libraryId": 2,
+                    "libraryName": "Podcasts",
+                },
+            ],
+        )
+
+        _write_stats(["--from", str(snap), "--root", str(tmp_path), "--no-log"])
+
+        captured = capsys.readouterr()
+        assert (
+            "1 changed, 0 unchanged, 0 clear withheld, 0 decrease withheld, "
+            "2 other library, 0 missing, 0 unsupported, 0 failed." in captured.out
+        )
+        assert "podcasts/" not in captured.err
+        assert "podcasts/" not in captured.out
+        assert "predates" not in captured.err
+        assert _flac_keys(flac_album / "01 - Track 1.flac")["FMPS_RATING"] == ["0.8"]
+
+    def test_library_all_writes_every_library(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [
+                {
+                    "id": "s1",
+                    "path": "podcasts/show/episode.mp3",
+                    "rating": 3,
+                    "libraryId": 2,
+                    "libraryName": "Podcasts",
+                },
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exit_info:
+            _write_stats(
+                ["--from", str(snap), "--root", str(tmp_path), "--library", "all", "--no-log"]
+            )
+
+        captured = capsys.readouterr()
+        assert exit_info.value.code == 1
+        assert "0 other library, 1 missing" in captured.out
+        assert "missing: podcasts/show/episode.mp3" in captured.err
+
+    def test_library_accepts_numeric_id(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [
+                {
+                    "id": "s1",
+                    "path": TRACK_1,
+                    "rating": 4,
+                    "libraryId": 1,
+                    "libraryName": "Music Library",
+                },
+                {
+                    "id": "s2",
+                    "path": "podcasts/a.mp3",
+                    "rating": 3,
+                    "libraryId": 2,
+                    "libraryName": "Podcasts",
+                },
+            ],
+        )
+
+        _write_stats(["--from", str(snap), "--root", str(tmp_path), "--library", "1", "--no-log"])
+
+        assert "1 changed" in capsys.readouterr().out
+        assert _flac_keys(flac_album / "01 - Track 1.flac")["FMPS_RATING"] == ["0.8"]
+
+    def test_old_snapshot_without_library_fields_warns_and_is_processed(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [
+                {"id": "s1", "path": TRACK_1, "rating": 4},
+                {"id": "s2", "path": TRACK_2, "rating": 3},
+            ],
+        )
+
+        _write_stats(["--from", str(snap), "--root", str(tmp_path), "--no-log"])
+
+        captured = capsys.readouterr()
+        assert (
+            "warning: snapshot predates library fields; "
+            "--library could not be applied to 2 song(s)." in captured.err
+        )
+        assert "2 changed" in captured.out
+        assert "0 other library" in captured.out
+        assert _flac_keys(flac_album / "01 - Track 1.flac")["FMPS_RATING"] == ["0.8"]
+
+    def test_library_all_suppresses_old_snapshot_warning(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        snap = _snapshot(tmp_path / "stats.json", [{"id": "s1", "path": TRACK_1, "rating": 4}])
+
+        _write_stats(["--from", str(snap), "--root", str(tmp_path), "--library", "all", "--no-log"])
+
+        assert "predates" not in capsys.readouterr().err
+
+    def test_containment_check_skips_other_library_songs(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [
+                {
+                    "id": "s1",
+                    "path": TRACK_1,
+                    "rating": 4,
+                    "libraryId": 1,
+                    "libraryName": "Music Library",
+                },
+                {
+                    "id": "s2",
+                    "path": "../outside.mp3",
+                    "rating": 3,
+                    "libraryId": 2,
+                    "libraryName": "Podcasts",
+                },
+            ],
+        )
+
+        _write_stats(["--from", str(snap), "--root", str(tmp_path), "--no-log"])
+
+        captured = capsys.readouterr()
+        assert "outside --root" not in captured.err
+        assert "1 changed" in captured.out
+        assert "1 other library" in captured.out
+
+    def test_containment_check_still_refuses_music_library_songs(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [
+                {
+                    "id": "s1",
+                    "path": "../outside.mp3",
+                    "rating": 3,
+                    "libraryId": 1,
+                    "libraryName": "Music Library",
+                },
+                {
+                    "id": "s2",
+                    "path": "podcasts/a.mp3",
+                    "rating": 3,
+                    "libraryId": 2,
+                    "libraryName": "Podcasts",
+                },
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exit_info:
+            _write_stats(["--from", str(snap), "--root", str(tmp_path), "--no-log"])
+
+        captured = capsys.readouterr()
+        assert exit_info.value.code == 1
+        assert "outside --root: ../outside.mp3" in captured.err
+        assert "podcasts/a.mp3" not in captured.err
 
 
 class TestStatsEndToEnd:

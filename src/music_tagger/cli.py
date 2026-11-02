@@ -87,6 +87,10 @@ def _add_log_arguments(parser: argparse.ArgumentParser) -> None:
 
 # write-stats lists at most this many missing files, then a count of the rest.
 _MAX_LISTED_MISSING = 20
+# write-stats processes only songs in this Navidrome library. Podcasts and
+# audiobooks live in other libraries, whose paths are not under the music root.
+_DEFAULT_LIBRARY = "Music Library"
+_ALL_LIBRARIES = "all"
 
 
 class _BatchLog:
@@ -158,6 +162,13 @@ def _resolve_song_path(root: Path, relative: str) -> Path | None:
     if resolved == root or not resolved.is_relative_to(root):
         return None
     return resolved
+
+
+def _in_library(song: SongStats, library: str) -> bool:
+    """True when the song is in the library named, or numbered if all digits."""
+    if library.isdigit():
+        return song.library_id == int(library)
+    return song.library_name == library
 
 
 def _is_album_dir(path: Path) -> bool:
@@ -709,6 +720,14 @@ def _write_stats(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Write play counts lower than the file's count. Without it they are kept.",
     )
+    parser.add_argument(
+        "--library",
+        default=_DEFAULT_LIBRARY,
+        help=(
+            "Navidrome library to write, by name or numeric id; songs in other libraries "
+            f"are skipped (default: {_DEFAULT_LIBRARY!r}). 'all' writes every library."
+        ),
+    )
     _add_log_arguments(parser)
     args = parser.parse_args(argv)
     log_path = _log_path(args)
@@ -719,16 +738,30 @@ def _write_stats(argv: list[str] | None = None) -> None:
         print(f"Error: {exc}. Nothing written.", file=sys.stderr)
         sys.exit(1)
 
+    # Filter first, so songs outside the library are never checked against --root.
     # Check every path before the first write: one bad path stops the whole run.
     root = args.root.resolve()
     targets: list[tuple[SongStats, Path]] = []
     outside: list[str] = []
+    other_library = unlabelled = 0
     for song in snapshot.songs:
+        if args.library != _ALL_LIBRARIES:
+            if song.library_id is None and song.library_name is None:
+                unlabelled += 1
+            elif not _in_library(song, args.library):
+                other_library += 1
+                continue
         resolved = _resolve_song_path(root, song.path)
         if resolved is None:
             outside.append(song.path)
         else:
             targets.append((song, resolved))
+    if unlabelled:
+        print(
+            "warning: snapshot predates library fields; "
+            f"--library could not be applied to {unlabelled} song(s).",
+            file=sys.stderr,
+        )
     if outside:
         for rel in outside:
             print(f"  outside --root: {rel}", file=sys.stderr)
@@ -814,8 +847,8 @@ def _write_stats(argv: list[str] | None = None) -> None:
     rewrite_verb = "would rewrite" if args.dry_run else "rewrote"
     print(
         f"{changed} {verb}, {unchanged} unchanged, {clear_withheld} clear withheld, "
-        f"{decrease_withheld} decrease withheld, {missing} missing, "
-        f"{unsupported} unsupported, {failed} failed."
+        f"{decrease_withheld} decrease withheld, {other_library} other library, "
+        f"{missing} missing, {unsupported} unsupported, {failed} failed."
     )
     print(f"{rewrite_verb} {rewrite_files} file(s), {rewrite_bytes} bytes.")
 

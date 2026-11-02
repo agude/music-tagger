@@ -61,6 +61,15 @@ def _optional_int(
     return value
 
 
+def _optional_text(data: dict[str, Any], key: str, where: str) -> str | None:
+    if key not in data:
+        return None
+    value = data[key]
+    if not isinstance(value, str):
+        raise SnapshotError(f"{where}.{key}: expected a string, got {value!r}")
+    return value
+
+
 def _optional_bool(data: dict[str, Any], key: str, where: str) -> bool | None:
     if key not in data:
         return None
@@ -95,6 +104,10 @@ class SongStats:
     starred_at: str | None = None
     play_count: int | None = None
     play_date: str | None = None
+    # The Navidrome library the song belongs to. Absent in snapshots written
+    # before these fields existed, so None means "unknown", not "no library".
+    library_id: int | None = None
+    library_name: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -111,6 +124,8 @@ class SongStats:
             "starredAt": self.starred_at,
             "playCount": self.play_count,
             "playDate": self.play_date,
+            "libraryId": self.library_id,
+            "libraryName": self.library_name,
         }
         # Keep explicit zero and false; drop only None, which is "no instruction".
         data.update({key: value for key, value in optional.items() if value is not None})
@@ -130,6 +145,8 @@ class SongStats:
             starred_at=_optional_timestamp(data, "starredAt", where),
             play_count=_optional_int(data, "playCount", where, minimum=0),
             play_date=_optional_timestamp(data, "playDate", where),
+            library_id=_optional_int(data, "libraryId", where, minimum=0),
+            library_name=_optional_text(data, "libraryName", where),
         )
 
     @classmethod

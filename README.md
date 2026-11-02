@@ -86,7 +86,9 @@ just sync-stats               # write ratings and play counts into the files
 
 Favorites are never written to files. A snapshot rating of 0 clears the file's
 rating only with `--clear`. A play count lower than the file's is written only
-with `--allow-decrease`. Both withheld changes are reported. The tag mapping,
+with `--allow-decrease`. Both withheld changes are reported. Only the
+`Music Library` Navidrome library is written by default; `--library all`
+includes others such as `Podcasts`. The tag mapping,
 policy, and recovery limits are in AGENTS.md under "Ratings and play counts".
 
 ## Supported formats

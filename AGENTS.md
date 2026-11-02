@@ -244,13 +244,22 @@ Commands (all through `just`, which loads `.env`):
 - `just sync-stats --dry-run` runs `write-stats` as a preview. It lists each
   changed field with old and new values, and the number of files and bytes
   a real run would rewrite. `just sync-stats` writes.
+- `write-stats --library NAME_OR_ID` selects the Navidrome library to write.
+  The default is `Music Library` (`_DEFAULT_LIBRARY` in cli.py). Songs in
+  other libraries, such as `Podcasts` (podcast episodes and audiobooks, whose
+  paths are not under the music root), are counted as `other library` and do
+  not affect the exit code. `--library all` writes every library. A numeric
+  value matches `libraryId`; any other value matches `libraryName`.
 - `just sync-ratings` runs `write-ratings`, which writes ratings only, from
   the legacy `ratings.json` written by `nd ratings`.
 
 Snapshot (`stats.json`, version 1): `version`, `sourceUser`, `exportedAt`
 (UTC), and `songs`. Each song has `id`, `path`, `title`, `artist`, `album`,
-`rating`, `ratedAt`, `starred`, `starredAt`, `playCount`, and `playDate`.
-Navidrome's native API omits zero and false, so the exporter writes
+`rating`, `ratedAt`, `starred`, `starredAt`, `playCount`, `playDate`,
+`libraryId` (int), and `libraryName` (string). The library fields are
+optional: snapshots written before them still load. Without them,
+`write-stats` cannot apply `--library` and warns about the songs it could not
+filter. Navidrome's native API omits zero and false, so the exporter writes
 `rating: 0`, `playCount: 0`, and `starred: false` explicitly. In a snapshot,
 an absent key means "no instruction", and the writer leaves that value
 alone. Timestamps stay in the JSON only.

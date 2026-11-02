@@ -119,6 +119,44 @@ class TestRoundTrip:
         assert song.rated_at is None
         assert song.play_date is None
 
+    def test_library_fields_round_trip(self) -> None:
+        song = SongStats(id="s1", path="a.flac", library_id=1, library_name="Music Library")
+
+        data = song.to_dict()
+
+        assert data["libraryId"] == 1
+        assert data["libraryName"] == "Music Library"
+        assert SongStats.from_dict(data, "songs[0]") == song
+
+    def test_library_fields_stay_absent_when_unknown(self) -> None:
+        data = SongStats(id="s1", path="a.flac").to_dict()
+
+        assert "libraryId" not in data
+        assert "libraryName" not in data
+
+    def test_native_library_fields_map_to_snapshot_fields(self) -> None:
+        song = SongStats.from_native(
+            {"id": "s1", "path": "a.flac", "libraryId": 2, "libraryName": "Podcasts"}
+        )
+
+        assert song.library_id == 2
+        assert song.library_name == "Podcasts"
+
+    def test_old_snapshot_without_library_fields_loads(self) -> None:
+        snapshot = parse_snapshot(_envelope([_song(rating=4)]))
+
+        assert snapshot.songs[0].library_id is None
+        assert snapshot.songs[0].library_name is None
+        assert snapshot.songs[0].rating == 4
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("libraryId", True), ("libraryId", "1"), ("libraryId", -1), ("libraryName", 7)],
+    )
+    def test_malformed_library_field_is_rejected(self, field: str, value: object) -> None:
+        with pytest.raises(SnapshotError, match=field):
+            SongStats.from_dict(_song(**{field: value}), "songs[0]")
+
     def test_snapshot_envelope_round_trip(self) -> None:
         snapshot = StatsSnapshot(
             source_user="alex",
