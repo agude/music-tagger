@@ -362,7 +362,7 @@ class TestDropGuard:
         previous = read_snapshot(tmp_path / "stats.json.previous")
         assert sum(song.starred is True for song in previous.songs) == 10
 
-    def test_corrupt_current_is_replaced_without_rotating_over_previous(
+    def test_corrupt_current_is_moved_aside_without_rotating_over_previous(
         self, tmp_path: Path
     ) -> None:
         dest = tmp_path / "stats.json"
@@ -375,5 +375,31 @@ class TestDropGuard:
         write_snapshot_file(_snapshot(rating=4), dest)
 
         assert read_snapshot(dest).songs[0].rating == 4
+        assert previous.read_bytes() == before_previous
+        assert (tmp_path / "stats.json.invalid").read_text(encoding="utf-8") == "{not json"
+        assert _names(tmp_path) == ["stats.json", "stats.json.invalid", "stats.json.previous"]
+
+    def test_unreadable_current_is_refused_and_nothing_changes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dest = tmp_path / "stats.json"
+        previous = tmp_path / "stats.json.previous"
+        write_snapshot_file(_snapshot(rating=2), dest)
+        write_snapshot_file(_snapshot(rating=5), dest)
+        before_dest, before_previous = dest.read_bytes(), previous.read_bytes()
+        real_read_bytes = Path.read_bytes
+
+        def failing_read_bytes(self: Path) -> bytes:
+            if self == dest:
+                raise OSError(5, "Input/output error")
+            return real_read_bytes(self)
+
+        monkeypatch.setattr(Path, "read_bytes", failing_read_bytes)
+
+        with pytest.raises(SnapshotError, match="cannot read the current snapshot"):
+            write_snapshot_file(_snapshot(rating=4), dest)
+
+        monkeypatch.undo()
+        assert dest.read_bytes() == before_dest
         assert previous.read_bytes() == before_previous
         assert _names(tmp_path) == ["stats.json", "stats.json.previous"]

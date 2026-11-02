@@ -236,8 +236,9 @@ Commands (all through `just`, which loads `.env`):
   with ratings, play counts, favorites, and timestamps, to
   `/mnt/synology/media/music/stats.json`. The whole listing is fetched and
   checked against the server's `x-total-count` before the destination is
-  touched. A valid current snapshot is renamed `stats.json.previous`; an
-  unreadable one is replaced without rotation. A new export that loses more
+  touched. A valid current snapshot is renamed `stats.json.previous`; one
+  that does not parse is moved to `stats.json.invalid`, and a read error
+  refuses the export. A new export that loses more
   than 10% of the songs, rated songs, or starred songs is refused with no
   file written, unless `--force` is passed.
 - `just sync-stats --dry-run` runs `write-stats` as a preview. It lists each
@@ -300,10 +301,10 @@ Recovery limits:
   value, and the new value. Nothing is rotated or written. Pass `--force` to
   replace the snapshot after confirming the drop is real. A drop of exactly
   10% is allowed.
-- Corrupt current file: a `stats.json` that does not read as a snapshot is
-  replaced without rotation, so `stats.json.previous` keeps the last valid
-  snapshot. An unreadable file is treated the same way, even when the
-  cause is a transient NAS read error.
+- Corrupt current file: a `stats.json` that does not parse as a snapshot is
+  moved to `stats.json.invalid`, not rotated, so `stats.json.previous` keeps
+  the last valid snapshot. A read error (for example a transient NAS failure)
+  refuses the export and changes nothing.
 - `write-stats` cannot restore the snapshot to Navidrome. `nd set-rating`
   reads only the legacy `ratings.json`, and play counts are never written
   back to Navidrome.

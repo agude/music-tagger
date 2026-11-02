@@ -22,6 +22,7 @@ from typing import Any
 SNAPSHOT_VERSION = 1
 MAX_RATING = 5
 PREVIOUS_SUFFIX = ".previous"
+INVALID_SUFFIX = ".invalid"
 # A new snapshot may not drop a count (songs, rated, starred) by more than this
 # fraction of the current snapshot's count unless the caller forces it.
 MAX_DROP_FRACTION = 0.10
@@ -246,13 +247,21 @@ def _check_no_mass_drop(current: StatsSnapshot, new: StatsSnapshot, dest: Path) 
             )
 
 
-def _readable_current(dest: Path) -> StatsSnapshot | None:
-    """The snapshot at dest, or None if dest is absent or does not read as a snapshot."""
-    if not dest.exists():
-        return None
+def _read_current(dest: Path) -> StatsSnapshot | None:
+    """The snapshot at dest, or None if dest is absent or does not parse as one.
+
+    A read error raises instead, so a transient NAS failure never makes a valid
+    snapshot look corrupt and get replaced.
+    """
     try:
-        return read_snapshot(dest)
-    except SnapshotError:
+        raw = dest.read_bytes()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise SnapshotError(f"{dest}: cannot read the current snapshot: {exc}") from exc
+    try:
+        return parse_snapshot(json.loads(raw.decode("utf-8")))
+    except (UnicodeDecodeError, json.JSONDecodeError, SnapshotError):
         return None
 
 
@@ -262,8 +271,10 @@ def write_snapshot_file(snapshot: StatsSnapshot, dest: Path, *, force: bool = Fa
     The snapshot is validated first, so an invalid one never touches `dest`.
     If `dest` reads as a valid snapshot, the new one may not drop the song,
     rated, or starred count by more than MAX_DROP_FRACTION unless `force` is
-    set; the guard runs before any file is touched. A `dest` that does not read
-    is replaced without rotation, so it never overwrites a valid `.previous`.
+    set; the guard runs before any file is touched. A `dest` that cannot be read
+    raises SnapshotError and nothing is touched. A `dest` that reads but does not
+    parse is moved to `<name>.invalid`, not rotated, so it never overwrites a
+    valid `.previous`.
     Otherwise the snapshot is written to a temporary file in the same directory,
     the current file is renamed to `.previous`, and the temporary file is
     renamed to `dest`. A failure before the last rename leaves a complete valid
@@ -273,7 +284,7 @@ def write_snapshot_file(snapshot: StatsSnapshot, dest: Path, *, force: bool = Fa
     data = snapshot.to_dict()
     parse_snapshot(data)
 
-    current = _readable_current(dest)
+    current = _read_current(dest)
     if current is not None and not force:
         _check_no_mass_drop(current, snapshot, dest)
 
@@ -290,6 +301,8 @@ def write_snapshot_file(snapshot: StatsSnapshot, dest: Path, *, force: bool = Fa
         os.chmod(temp, 0o644)
         if current is not None:
             os.replace(dest, previous)
+        elif dest.exists():
+            os.replace(dest, dest.with_name(dest.name + INVALID_SUFFIX))
         os.replace(temp, dest)
     finally:
         temp.unlink(missing_ok=True)
