@@ -110,6 +110,18 @@ def _output_json(data: object, out: Path | None, digest: str) -> None:
         sys.stdout.write(text)
 
 
+def _resolve_song_path(root: Path, relative: str) -> Path | None:
+    """Return a song's real path under root, or None when it lies outside root.
+
+    root must already be resolved. Symlinks are followed, so a link that leads
+    out of the library is refused too. The root itself is not a song.
+    """
+    resolved = (root / relative).resolve()
+    if resolved == root or not resolved.is_relative_to(root):
+        return None
+    return resolved
+
+
 def _is_album_dir(path: Path) -> bool:
     return any(f.suffix.lower() in AUDIO_EXTENSIONS for f in path.iterdir() if f.is_file())
 
@@ -547,12 +559,30 @@ def _write_ratings(argv: list[str] | None = None) -> None:
 
     songs = [SongRating.from_dict(s) for s in json.loads(args.from_file.read_text())]
 
+    # Check every path before the first write: one bad path stops the whole run.
+    root = args.root.resolve()
+    targets: list[tuple[SongRating, Path]] = []
+    outside: list[str] = []
+    for song in songs:
+        resolved = _resolve_song_path(root, song.path)
+        if resolved is None:
+            outside.append(song.path)
+        else:
+            targets.append((song, resolved))
+    if outside:
+        for rel in outside:
+            print(f"  outside --root: {rel}", file=sys.stderr)
+        print(
+            f"Error: {len(outside)} path(s) resolve outside {root}. Nothing written.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     total_files = 0
     skipped = 0
     log_lines: list[str] = []
 
-    for song in songs:
-        path = args.root / song.path
+    for song, path in targets:
         if not path.exists():
             skipped += 1
             continue

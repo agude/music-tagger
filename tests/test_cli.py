@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from mutagen.flac import FLAC
 
 from music_tagger.cli import (
     EXIT_BLOCKED,
@@ -1197,6 +1199,64 @@ def _desperado_release() -> MBRelease:
             ]
         },
     )
+
+
+class TestWriteRatingsContainment:
+    @pytest.mark.parametrize("kind", ["traversal", "absolute", "root"])
+    def test_refuses_path_outside_root_before_any_write(
+        self,
+        kind: str,
+        flac_album: Path,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        lib = tmp_path / "lib"
+        lib.mkdir()
+        shutil.copy(sorted(flac_album.glob("*.flac"))[0], lib / "inside.flac")
+        track = sorted(flac_album.glob("*.flac"))[0]
+        outside = {
+            "traversal": f"../album_flac/{track.name}",
+            "absolute": str(track),
+            "root": ".",
+        }[kind]
+        ratings = [
+            {"id": "s1", "path": "inside.flac", "rating": 4},
+            {"id": "s2", "path": outside, "rating": 4},
+        ]
+        ratings_file = tmp_path / "ratings.json"
+        ratings_file.write_text(json.dumps(ratings))
+
+        with pytest.raises(SystemExit) as exit_info:
+            _write_ratings(["--from", str(ratings_file), "--root", str(lib)])
+
+        assert exit_info.value.code == 1
+        assert FLAC(lib / "inside.flac").get("RATING") is None
+        assert FLAC(track).get("RATING") is None
+        assert "outside --root" in capsys.readouterr().err
+
+    def test_refuses_symlink_out_of_root(self, flac_album: Path, tmp_path: Path) -> None:
+        lib = tmp_path / "lib"
+        lib.mkdir()
+        track = sorted(flac_album.glob("*.flac"))[0]
+        (lib / "link.flac").symlink_to(track)
+        ratings_file = tmp_path / "ratings.json"
+        ratings_file.write_text(json.dumps([{"id": "s1", "path": "link.flac", "rating": 4}]))
+
+        with pytest.raises(SystemExit) as exit_info:
+            _write_ratings(["--from", str(ratings_file), "--root", str(lib)])
+
+        assert exit_info.value.code == 1
+        assert FLAC(track).get("RATING") is None
+
+    def test_writes_path_inside_root(self, flac_album: Path, tmp_path: Path) -> None:
+        ratings_file = tmp_path / "ratings.json"
+        ratings_file.write_text(
+            json.dumps([{"id": "s1", "path": "album_flac/01 - Track 1.flac", "rating": 4}])
+        )
+
+        _write_ratings(["--from", str(ratings_file), "--root", str(flac_album.parent)])
+
+        assert read_album(flac_album).tracks[0].tags["rating"] == "4"
 
 
 class TestLockCommand:
