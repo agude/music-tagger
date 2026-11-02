@@ -16,6 +16,7 @@ from music_tagger.cli import (
     _mb_discid,
     _mb_release,
     _mb_search,
+    _nd,
     _print_diff,
     _read,
     _rename,
@@ -26,6 +27,7 @@ from music_tagger.cli import (
     _write_tags,
 )
 from music_tagger.musicbrainz import MBRelease, MBTrack
+from music_tagger.stats import SongStats
 from music_tagger.tagger import AlbumResult, TagConflict, TrackDiff
 from music_tagger.tags import TagChange, read_album, write_locks, write_tags
 
@@ -1025,6 +1027,93 @@ class TestRenameCommand:
         _rename([str(flac_album)])
         capsys.readouterr()  # type: ignore[attr-defined]
         assert (flac_album / "01. What-Is-This-.flac").exists()
+
+
+class _FakeNavidromeClient:
+    user = "alex"
+
+    def __init__(
+        self, songs: list[SongStats] | None = None, error: Exception | None = None
+    ) -> None:
+        self._songs = songs or []
+        self._error = error
+
+    def get_all_stats(self, page_size: int = 500) -> list[SongStats]:
+        if self._error is not None:
+            raise self._error
+        return self._songs
+
+    def close(self) -> None:
+        pass
+
+
+class TestNdStats:
+    def _songs(self) -> list[SongStats]:
+        return [
+            SongStats(id="s1", path="a.flac", rating=5, play_count=3, starred=True),
+            SongStats(id="s2", path="b.flac", rating=0, play_count=0, starred=False),
+        ]
+
+    def test_writes_snapshot_with_explicit_zeros_and_reports_counts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = tmp_path / "stats.json"
+        monkeypatch.setattr(
+            "music_tagger.cli.NavidromeClient", lambda: _FakeNavidromeClient(self._songs())
+        )
+
+        _nd(["stats", "--out", str(out)])
+
+        data = json.loads(out.read_text())
+        assert data["sourceUser"] == "alex"
+        assert data["songs"][1]["rating"] == 0
+        assert data["songs"][1]["playCount"] == 0
+        assert data["songs"][1]["starred"] is False
+        assert data["exportedAt"].endswith("Z")
+        assert "Exported 2 song(s): 1 rated, 1 played, 1 starred" in capsys.readouterr().out
+
+    def test_rotates_previous_snapshot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = tmp_path / "stats.json"
+        out.write_text('{"old": true}')
+        monkeypatch.setattr(
+            "music_tagger.cli.NavidromeClient", lambda: _FakeNavidromeClient(self._songs())
+        )
+
+        _nd(["stats", "--out", str(out)])
+
+        assert (tmp_path / "stats.json.previous").read_text() == '{"old": true}'
+        assert "songs" in json.loads(out.read_text())
+
+    def test_export_failure_keeps_existing_snapshot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = tmp_path / "stats.json"
+        out.write_text('{"old": true}')
+        failing = _FakeNavidromeClient(error=RuntimeError("count mismatch"))
+        monkeypatch.setattr("music_tagger.cli.NavidromeClient", lambda: failing)
+
+        with pytest.raises(SystemExit) as exit_info:
+            _nd(["stats", "--out", str(out)])
+
+        assert exit_info.value.code == 1
+        assert out.read_text() == '{"old": true}'
+        assert not (tmp_path / "stats.json.previous").exists()
+        assert "no snapshot written: count mismatch" in capsys.readouterr().err
+
+    def test_missing_directory_fails_before_connecting(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def unexpected() -> _FakeNavidromeClient:
+            pytest.fail("connected to Navidrome for a missing output directory")
+
+        monkeypatch.setattr("music_tagger.cli.NavidromeClient", unexpected)
+
+        with pytest.raises(SystemExit) as exit_info:
+            _nd(["stats", "--out", str(tmp_path / "absent" / "stats.json")])
+
+        assert exit_info.value.code == 1
 
 
 class TestWriteRatings:

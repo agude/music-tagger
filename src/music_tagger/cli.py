@@ -14,6 +14,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 from mutagen import MutagenError
 
 from .checklist import Checklist, ChecklistEntry
@@ -32,6 +33,7 @@ from .discid import parse_rip_dir
 from .musicbrainz import MBRelease, MusicBrainzClient
 from .navidrome import NavidromeClient, SongRating
 from .placement import FileMapping, PlacementPlan, compute_placement, copy_files
+from .stats import SnapshotError, StatsSnapshot, write_snapshot_file
 from .tagger import (
     ISRC_POLICIES,
     AlbumResult,
@@ -95,6 +97,7 @@ def _default_checklist_path() -> Path:
 EXIT_REVIEW = 3  # An overwrite needs --approve-overwrites.
 EXIT_BLOCKED = 4  # Unresolved conflicts; nothing can be written.
 _DEFAULT_RATINGS_PATH = _DEFAULT_LIBRARY_ROOT / "ratings.json"
+_DEFAULT_STATS_PATH = _DEFAULT_LIBRARY_ROOT / "stats.json"
 
 
 def _output_json(data: object, out: Path | None, digest: str) -> None:
@@ -1326,6 +1329,62 @@ def _nd_ratings(argv: list[str] | None = None) -> None:
     _output_json(data, args.out, "\n".join(lines))
 
 
+def _nd_stats(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger nd stats",
+        description=(
+            "Export a complete statistics snapshot (ratings, play counts, stars) "
+            "from Navidrome as JSON. The previous snapshot is kept as <name>.previous."
+        ),
+    )
+    parser.add_argument(
+        "-o",
+        "--out",
+        type=Path,
+        default=_DEFAULT_STATS_PATH,
+        help=f"Output snapshot file (default: {_DEFAULT_STATS_PATH}).",
+    )
+    args = parser.parse_args(argv)
+
+    if not args.out.parent.is_dir():
+        print(f"Error: output directory does not exist: {args.out.parent}", file=sys.stderr)
+        if args.out == _DEFAULT_STATS_PATH:
+            print("Check that the music library is mounted.", file=sys.stderr)
+        sys.exit(1)
+
+    client = NavidromeClient()
+    try:
+        songs = client.get_all_stats()
+        user = client.user
+    except (RuntimeError, httpx.HTTPError) as exc:
+        print(f"Error: export failed; no snapshot written: {exc}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        client.close()
+
+    snapshot = StatsSnapshot(
+        source_user=user,
+        exported_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        songs=tuple(songs),
+    )
+    try:
+        write_snapshot_file(snapshot, args.out)
+    except SnapshotError as exc:
+        print(f"Error: invalid snapshot; no file written: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except OSError as exc:
+        print(f"Error: could not write {args.out}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    rated = sum(1 for s in songs if s.rating)
+    played = sum(1 for s in songs if s.play_count)
+    starred = sum(1 for s in songs if s.starred)
+    print(
+        f"Exported {len(songs)} song(s): {rated} rated, {played} played, "
+        f"{starred} starred, to {args.out}"
+    )
+
+
 def _nd_set_rating(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger nd set-rating",
@@ -1386,6 +1445,7 @@ def _nd(argv: list[str] | None = None) -> None:
     nd_commands: dict[str, tuple[str, Callable[[list[str] | None], None]]] = {
         "rescan": ("Trigger a library scan.", _nd_rescan),
         "ratings": ("Export rated/starred songs as JSON.", _nd_ratings),
+        "stats": ("Export a complete statistics snapshot as JSON.", _nd_stats),
         "set-rating": ("Push ratings/stars back into Navidrome.", _nd_set_rating),
     }
 

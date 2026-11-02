@@ -12,13 +12,16 @@ means never played, and `starred: false` means not a favorite.
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 SNAPSHOT_VERSION = 1
 MAX_RATING = 5
+PREVIOUS_SUFFIX = ".previous"
 
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 
@@ -221,3 +224,34 @@ def read_snapshot(path: Path) -> StatsSnapshot:
         return parse_snapshot(data)
     except SnapshotError as exc:
         raise SnapshotError(f"{path}: {exc}") from exc
+
+
+def write_snapshot_file(snapshot: StatsSnapshot, dest: Path) -> None:
+    """Write a snapshot, keeping the prior one as `<name>.previous`.
+
+    The snapshot is validated first, so an invalid one never touches `dest`.
+    It is then written to a temporary file in the same directory, the current
+    file is renamed to `.previous`, and the temporary file is renamed to `dest`.
+    A failure before the last rename leaves a complete valid snapshot at `dest`
+    or at `.previous`. Rename atomicity depends on the mount, so that is the
+    full guarantee.
+    """
+    data = snapshot.to_dict()
+    parse_snapshot(data)
+
+    previous = dest.with_name(dest.name + PREVIOUS_SUFFIX)
+    fd, temp_name = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
+    temp = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        # mkstemp creates 0600; match a file opened with the usual umask.
+        os.chmod(temp, 0o644)
+        if dest.exists():
+            os.replace(dest, previous)
+        os.replace(temp, dest)
+    finally:
+        temp.unlink(missing_ok=True)

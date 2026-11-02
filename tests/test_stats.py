@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from music_tagger.stats import (
     StatsSnapshot,
     parse_snapshot,
     read_snapshot,
+    write_snapshot_file,
 )
 
 
@@ -203,3 +205,89 @@ class TestReadSnapshot:
     def test_missing_file_is_reported(self, tmp_path: Path) -> None:
         with pytest.raises(SnapshotError, match="cannot read snapshot"):
             read_snapshot(tmp_path / "absent.json")
+
+
+def _snapshot(rating: int = 5) -> StatsSnapshot:
+    return StatsSnapshot(
+        source_user="alex",
+        exported_at="2026-11-02T12:00:00Z",
+        songs=(SongStats(id="s1", path="a.flac", rating=rating, play_count=0, starred=False),),
+    )
+
+
+def _names(directory: Path) -> list[str]:
+    return sorted(p.name for p in directory.iterdir())
+
+
+class TestWriteSnapshotFile:
+    def test_first_write_creates_snapshot_without_previous(self, tmp_path: Path) -> None:
+        dest = tmp_path / "stats.json"
+
+        write_snapshot_file(_snapshot(), dest)
+
+        assert read_snapshot(dest) == _snapshot()
+        assert _names(tmp_path) == ["stats.json"]
+
+    def test_second_write_keeps_prior_snapshot_as_previous(self, tmp_path: Path) -> None:
+        dest = tmp_path / "stats.json"
+        write_snapshot_file(_snapshot(rating=2), dest)
+
+        write_snapshot_file(_snapshot(rating=5), dest)
+
+        assert read_snapshot(dest).songs[0].rating == 5
+        assert read_snapshot(tmp_path / "stats.json.previous").songs[0].rating == 2
+        assert _names(tmp_path) == ["stats.json", "stats.json.previous"]
+
+    def test_invalid_snapshot_leaves_destination_untouched(self, tmp_path: Path) -> None:
+        dest = tmp_path / "stats.json"
+        write_snapshot_file(_snapshot(rating=2), dest)
+        before = dest.read_bytes()
+        invalid = _snapshot(rating=9)
+
+        with pytest.raises(SnapshotError, match=r"rating: 9 is outside"):
+            write_snapshot_file(invalid, dest)
+
+        assert dest.read_bytes() == before
+        assert _names(tmp_path) == ["stats.json"]
+
+    def test_failed_rotation_leaves_current_snapshot_intact(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dest = tmp_path / "stats.json"
+        write_snapshot_file(_snapshot(rating=2), dest)
+        before = dest.read_bytes()
+        real_replace = os.replace
+
+        def fail_first(src: str | os.PathLike[str], dst: str | os.PathLike[str]) -> None:
+            raise OSError("simulated rotation failure")
+
+        monkeypatch.setattr(os, "replace", fail_first)
+        with pytest.raises(OSError, match="simulated rotation failure"):
+            write_snapshot_file(_snapshot(rating=5), dest)
+        monkeypatch.setattr(os, "replace", real_replace)
+
+        assert dest.read_bytes() == before
+        assert _names(tmp_path) == ["stats.json"]
+
+    def test_failed_final_rename_leaves_previous_snapshot_valid(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dest = tmp_path / "stats.json"
+        write_snapshot_file(_snapshot(rating=2), dest)
+        real_replace = os.replace
+        calls: list[str] = []
+
+        def fail_second(src: str | os.PathLike[str], dst: str | os.PathLike[str]) -> None:
+            calls.append(str(dst))
+            if len(calls) == 2:
+                raise OSError("simulated final rename failure")
+            real_replace(src, dst)
+
+        monkeypatch.setattr(os, "replace", fail_second)
+        with pytest.raises(OSError, match="simulated final rename failure"):
+            write_snapshot_file(_snapshot(rating=5), dest)
+        monkeypatch.setattr(os, "replace", real_replace)
+
+        assert not dest.exists()
+        assert read_snapshot(tmp_path / "stats.json.previous").songs[0].rating == 2
+        assert _names(tmp_path) == ["stats.json.previous"]
