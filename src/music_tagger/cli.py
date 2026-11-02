@@ -33,7 +33,7 @@ from .discid import parse_rip_dir
 from .musicbrainz import MBRelease, MusicBrainzClient
 from .navidrome import NavidromeClient, SongRating
 from .placement import FileMapping, PlacementPlan, compute_placement, copy_files
-from .stats import SnapshotError, StatsSnapshot, write_snapshot_file
+from .stats import SnapshotError, SongStats, StatsSnapshot, read_snapshot, write_snapshot_file
 from .tagger import (
     ISRC_POLICIES,
     AlbumResult,
@@ -52,12 +52,14 @@ from .tags import (
     AUDIO_EXTENSIONS,
     LOCKABLE_FIELDS,
     AlbumTags,
+    MalformedStatsError,
     TrackTags,
     UnsupportedFileError,
     embed_cover_art,
     read_album,
     write_locks,
     write_rating_to_file,
+    write_stats_to_file,
 )
 
 _DEFAULT_LIBRARY_ROOT = Path("/mnt/synology/media/music")
@@ -627,6 +629,150 @@ def _write_ratings(argv: list[str] | None = None) -> None:
             f.write("\n".join(header + log_lines + ["", "---", ""]))
 
     if unsupported:
+        sys.exit(1)
+
+
+def _write_stats(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger write-stats",
+        description=(
+            "Write ratings and play counts from a statistics snapshot to audio files. "
+            "Favorites are not written."
+        ),
+    )
+    parser.add_argument(
+        "--from",
+        type=Path,
+        default=_DEFAULT_STATS_PATH,
+        dest="from_file",
+        help=f"Statistics snapshot (default: {_DEFAULT_STATS_PATH}).",
+    )
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=_DEFAULT_LIBRARY_ROOT,
+        help=f"Library root to resolve paths (default: {_DEFAULT_LIBRARY_ROOT}).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would change, and the rewrite cost, without writing.",
+    )
+    parser.add_argument(
+        "--clear",
+        action="store_true",
+        help="Clear the rating of files the snapshot marks unrated (0). Without it they are kept.",
+    )
+    parser.add_argument(
+        "--allow-decrease",
+        action="store_true",
+        help="Write play counts lower than the file's count. Without it they are kept.",
+    )
+    _add_log_arguments(parser)
+    args = parser.parse_args(argv)
+    log_path = _log_path(args)
+
+    try:
+        snapshot = read_snapshot(args.from_file)
+    except SnapshotError as exc:
+        print(f"Error: {exc}. Nothing written.", file=sys.stderr)
+        sys.exit(1)
+
+    # Check every path before the first write: one bad path stops the whole run.
+    root = args.root.resolve()
+    targets: list[tuple[SongStats, Path]] = []
+    outside: list[str] = []
+    for song in snapshot.songs:
+        resolved = _resolve_song_path(root, song.path)
+        if resolved is None:
+            outside.append(song.path)
+        else:
+            targets.append((song, resolved))
+    if outside:
+        for rel in outside:
+            print(f"  outside --root: {rel}", file=sys.stderr)
+        print(
+            f"Error: {len(outside)} path(s) resolve outside {root}. Nothing written.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    changed = unchanged = clear_withheld = decrease_withheld = 0
+    missing = unsupported = failed = 0
+    rewrite_files = rewrite_bytes = 0
+    log_lines: list[str] = []
+
+    for song, path in targets:
+        if not path.exists():
+            missing += 1
+            print(f"  missing: {song.path}", file=sys.stderr)
+            continue
+        size = path.stat().st_size
+        try:
+            plan = write_stats_to_file(
+                path,
+                rating=song.rating,
+                play_count=song.play_count,
+                clear=args.clear,
+                allow_decrease=args.allow_decrease,
+                dry_run=args.dry_run,
+            )
+        except UnsupportedFileError as exc:
+            unsupported += 1
+            print(f"  unsupported: {song.path}: {exc}", file=sys.stderr)
+            continue
+        except (MalformedStatsError, MutagenError, OSError, ValueError) as exc:
+            failed += 1
+            print(f"  failed: {song.path}: {exc}", file=sys.stderr)
+            continue
+
+        if plan.clear_withheld:
+            clear_withheld += 1
+            print(f"  clear withheld: {song.path} (snapshot rating 0; pass --clear)")
+        if plan.decrease_withheld:
+            decrease_withheld += 1
+            print(
+                f"  decrease withheld: {song.path} (snapshot count is lower; pass --allow-decrease)"
+            )
+        if not plan.changes:
+            unchanged += 1
+            continue
+
+        changed += 1
+        rewrite_files += 1
+        rewrite_bytes += size
+        if args.dry_run:
+            print(f"  {song.path}:")
+            for c in plan.changes:
+                print(f"    {c.field}: {c.old_value or '(empty)'} → {c.new_value}")
+        elif log_path is not None:
+            detail = "; ".join(
+                f"{c.field} {c.old_value or '(empty)'} → {c.new_value}" for c in plan.changes
+            )
+            log_lines.append(f"  {song.path}: {detail}")
+
+    verb = "would change" if args.dry_run else "changed"
+    rewrite_verb = "would rewrite" if args.dry_run else "rewrote"
+    print(
+        f"{changed} {verb}, {unchanged} unchanged, {clear_withheld} clear withheld, "
+        f"{decrease_withheld} decrease withheld, {missing} missing, "
+        f"{unsupported} unsupported, {failed} failed."
+    )
+    print(f"{rewrite_verb} {rewrite_files} file(s), {rewrite_bytes} bytes.")
+
+    if log_path is not None and not args.dry_run and log_lines:
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+        header = [
+            "## Statistics",
+            "",
+            f"- **Date:** {timestamp}",
+            f"- **Snapshot:** {args.from_file}",
+            "",
+        ]
+        with open(log_path, "a") as f:
+            f.write("\n".join(header + log_lines + ["", "---", ""]))
+
+    if missing or unsupported or failed:
         sys.exit(1)
 
 
@@ -2333,7 +2479,8 @@ def _register_commands() -> dict[str, tuple[str, Callable[[list[str] | None], No
         "match": ("Score candidates by duration match.", _match),
         "diff": ("Compute tag diff against a MusicBrainz release.", _diff),
         "write-tags": ("Apply tag changes from a diff JSON.", _write_tags),
-        "write-ratings": ("Write rating/starred tags to audio files.", _write_ratings),
+        "write-ratings": ("Write rating tags to audio files.", _write_ratings),
+        "write-stats": ("Write ratings and play counts from a snapshot.", _write_stats),
         "path-for": ("Compute library destination paths.", _path_for),
         "copy": ("Copy files to library per a placement plan.", _copy),
         "art": ("Fetch or install cover art for an album.", _art),

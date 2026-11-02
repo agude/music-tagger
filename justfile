@@ -39,6 +39,14 @@ check: lint type-check test
 dump-ratings:
     uv run music-tagger nd ratings
 
-# Write rating/starred tags from ratings.json into FLAC files
+# Write rating tags from ratings.json into audio files
 sync-ratings *args:
     uv run music-tagger write-ratings {{ args }}
+
+# Export ratings, play counts, and stars from Navidrome into stats.json
+dump-stats *args:
+    uv run music-tagger nd stats {{ args }}
+
+# Write ratings and play counts from stats.json into audio files (preview with --dry-run)
+sync-stats *args:
+    uv run music-tagger write-stats {{ args }}

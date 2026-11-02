@@ -26,12 +26,13 @@ from music_tagger.cli import (
     _toc,
     _unlock,
     _write_ratings,
+    _write_stats,
     _write_tags,
 )
 from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.stats import SongStats
 from music_tagger.tagger import AlbumResult, TagConflict, TrackDiff
-from music_tagger.tags import TagChange, read_album, write_locks, write_tags
+from music_tagger.tags import TagChange, read_album, read_flac_comments, write_locks, write_tags
 
 
 class TestIsAlbumDir:
@@ -1199,6 +1200,244 @@ def _desperado_release() -> MBRelease:
             ]
         },
     )
+
+
+def _snapshot(path: Path, songs: list[dict[str, object]]) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "sourceUser": "alex",
+                "exportedAt": "2026-11-02T12:00:00Z",
+                "songs": songs,
+            }
+        )
+    )
+    return path
+
+
+TRACK_1 = "album_flac/01 - Track 1.flac"
+TRACK_2 = "album_flac/02 - Track 2.flac"
+TRACK_3 = "album_flac/03 - Track 3.flac"
+
+
+def _flac_keys(path: Path) -> dict[str, list[str]]:
+    comments = read_flac_comments(path)
+    assert comments is not None
+    return comments
+
+
+class TestWriteStatsCommand:
+    def test_mixed_outcomes_summarize_and_exit_nonzero(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "notes.flac").write_text("not audio")
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [
+                {"id": "s1", "path": TRACK_1, "rating": 4, "playCount": 9},
+                {"id": "s2", "path": TRACK_2},
+                {"id": "s3", "path": TRACK_3},
+                {"id": "s4", "path": "missing.flac", "rating": 3},
+                {"id": "s5", "path": "notes.flac", "rating": 3},
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exit_info:
+            _write_stats(["--from", str(snap), "--root", str(tmp_path), "--no-log"])
+
+        captured = capsys.readouterr()
+        assert exit_info.value.code == 1
+        assert (
+            "1 changed, 2 unchanged, 0 clear withheld, 0 decrease withheld, "
+            "1 missing, 1 unsupported, 0 failed." in captured.out
+        )
+        assert "rewrote 1 file(s)" in captured.out
+        comments = _flac_keys(flac_album / "01 - Track 1.flac")
+        assert comments["FMPS_RATING"] == ["0.8"]
+        assert comments["FMPS_PLAYCOUNT"] == ["9"]
+        assert "unsupported: notes.flac" in captured.err
+        assert "missing: missing.flac" in captured.err
+
+    def test_clean_run_exits_zero(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [{"id": "s1", "path": TRACK_1, "rating": 4, "playCount": 9}],
+        )
+
+        _write_stats(["--from", str(snap), "--root", str(tmp_path), "--no-log"])
+
+        assert "1 changed, 0 unchanged" in capsys.readouterr().out
+
+    def test_withheld_clear_and_decrease_are_reported_and_keep_values(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        first = _snapshot(
+            tmp_path / "first.json",
+            [{"id": "s1", "path": TRACK_1, "rating": 4, "playCount": 9}],
+        )
+        _write_stats(["--from", str(first), "--root", str(tmp_path), "--no-log"])
+        capsys.readouterr()
+        second = _snapshot(
+            tmp_path / "second.json",
+            [{"id": "s1", "path": TRACK_1, "rating": 0, "playCount": 5}],
+        )
+
+        _write_stats(["--from", str(second), "--root", str(tmp_path), "--no-log"])
+
+        captured = capsys.readouterr()
+        assert "clear withheld: " + TRACK_1 in captured.out
+        assert "decrease withheld: " + TRACK_1 in captured.out
+        assert "0 changed, 1 unchanged, 1 clear withheld, 1 decrease withheld" in captured.out
+        comments = read_flac_comments(flac_album / "01 - Track 1.flac")
+        assert comments is not None
+        assert comments["RATING"] == ["4"]
+        assert comments["FMPS_PLAYCOUNT"] == ["9"]
+
+    def test_clear_and_allow_decrease_apply(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        first = _snapshot(
+            tmp_path / "first.json",
+            [{"id": "s1", "path": TRACK_1, "rating": 4, "playCount": 9}],
+        )
+        _write_stats(["--from", str(first), "--root", str(tmp_path), "--no-log"])
+        second = _snapshot(
+            tmp_path / "second.json",
+            [{"id": "s1", "path": TRACK_1, "rating": 0, "playCount": 5}],
+        )
+
+        _write_stats(
+            [
+                "--from",
+                str(second),
+                "--root",
+                str(tmp_path),
+                "--no-log",
+                "--clear",
+                "--allow-decrease",
+            ]
+        )
+
+        comments = read_flac_comments(flac_album / "01 - Track 1.flac")
+        assert comments is not None
+        assert "RATING" not in comments
+        assert comments["FMPS_PLAYCOUNT"] == ["5"]
+
+    def test_dry_run_previews_changes_and_writes_nothing(
+        self,
+        flac_album: Path,
+        tmp_path: Path,
+        default_log: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [{"id": "s1", "path": TRACK_1, "rating": 4, "playCount": 9}],
+        )
+        track = flac_album / "01 - Track 1.flac"
+        before = track.read_bytes()
+
+        _write_stats(["--from", str(snap), "--root", str(tmp_path), "--dry-run"])
+
+        captured = capsys.readouterr()
+        assert f"  {TRACK_1}:" in captured.out
+        assert "fmps_playcount: (empty) → 9" in captured.out
+        assert "1 would change" in captured.out
+        assert "would rewrite 1 file(s), " in captured.out
+        assert track.read_bytes() == before
+        assert not default_log.exists()
+
+    def test_logs_real_changes_to_default_log(
+        self, flac_album: Path, tmp_path: Path, default_log: Path
+    ) -> None:
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [{"id": "s1", "path": TRACK_1, "rating": 4, "playCount": 9}],
+        )
+
+        _write_stats(["--from", str(snap), "--root", str(tmp_path)])
+
+        log = default_log.read_text()
+        assert "## Statistics" in log
+        assert f"  {TRACK_1}: " in log
+        assert "fmps_playcount (empty) → 9" in log
+
+    def test_no_log_writes_nothing(
+        self, flac_album: Path, tmp_path: Path, default_log: Path
+    ) -> None:
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [{"id": "s1", "path": TRACK_1, "rating": 4, "playCount": 9}],
+        )
+
+        _write_stats(["--from", str(snap), "--root", str(tmp_path), "--no-log"])
+
+        assert not default_log.exists()
+
+    def test_invalid_snapshot_writes_nothing(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [
+                {"id": "s1", "path": TRACK_1, "rating": 4},
+                {"id": "s2", "path": TRACK_2, "rating": 9},
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exit_info:
+            _write_stats(["--from", str(snap), "--root", str(tmp_path), "--no-log"])
+
+        assert exit_info.value.code == 1
+        assert "RATING" not in _flac_keys(flac_album / "01 - Track 1.flac")
+        assert "Nothing written." in capsys.readouterr().err
+
+    def test_outside_root_path_writes_nothing(self, flac_album: Path, tmp_path: Path) -> None:
+        lib = tmp_path / "lib"
+        lib.mkdir()
+        snap = _snapshot(
+            lib / "stats.json",
+            [
+                {"id": "s1", "path": "../" + TRACK_1, "rating": 4},
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exit_info:
+            _write_stats(["--from", str(snap), "--root", str(lib), "--no-log"])
+
+        assert exit_info.value.code == 1
+        assert "RATING" not in _flac_keys(flac_album / "01 - Track 1.flac")
+
+    def test_per_file_failure_does_not_stop_later_files(
+        self, flac_album: Path, tmp_path: Path
+    ) -> None:
+        (tmp_path / "notes.flac").write_text("not audio")
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [
+                {"id": "s1", "path": TRACK_1, "rating": 4},
+                {"id": "s2", "path": "notes.flac", "rating": 4},
+                {"id": "s3", "path": TRACK_3, "rating": 2},
+            ],
+        )
+
+        with pytest.raises(SystemExit):
+            _write_stats(["--from", str(snap), "--root", str(tmp_path), "--no-log"])
+
+        assert _flac_keys(flac_album / "01 - Track 1.flac")["FMPS_RATING"] == ["0.8"]
+        assert _flac_keys(flac_album / "03 - Track 3.flac")["FMPS_RATING"] == ["0.4"]
+
+    def test_missing_snapshot_is_reported(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exit_info:
+            _write_stats(["--from", str(tmp_path / "absent.json"), "--root", str(tmp_path)])
+
+        assert exit_info.value.code == 1
+        assert "cannot read snapshot" in capsys.readouterr().err
 
 
 class TestWriteRatingsLogging:
