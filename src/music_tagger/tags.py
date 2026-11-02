@@ -713,7 +713,8 @@ class UnsupportedFileError(ValueError):
 class MalformedStatsError(ValueError):
     """A stored rating or play count cannot be trusted, so nothing is written.
 
-    Raised when two accepted spellings disagree, or a stored count is not a number.
+    Raised when stored values (two spellings, or a repeated tag) disagree, or a
+    stored count is not a number.
     """
 
 
@@ -926,11 +927,11 @@ def _plan_stats(
 ) -> StatsWrite:
     """Diff the snapshot's values against a file's current values. Writes nothing."""
     if rating is not None and "fmps_rating" in conflicts:
-        raise MalformedStatsError("FMPS rating spellings disagree; nothing written")
+        raise MalformedStatsError("FMPS rating stored values disagree; nothing written")
     if rating is not None and "rating" in conflicts:
-        raise MalformedStatsError("RATING spellings disagree; nothing written")
+        raise MalformedStatsError("RATING stored values disagree; nothing written")
     if play_count is not None and "fmps_playcount" in conflicts:
-        raise MalformedStatsError("FMPS play count spellings disagree; nothing written")
+        raise MalformedStatsError("FMPS play count stored values disagree; nothing written")
 
     targets: dict[str, str] = {}
     clear_withheld = False

@@ -1208,7 +1208,7 @@ class TestWriteRatings:
         captured = capsys.readouterr()
         assert exit_info.value.code == 1
         assert "1 failed" in captured.out
-        assert "FMPS rating spellings disagree" in captured.err
+        assert "FMPS rating stored values disagree" in captured.err
         assert tracks[1].read_bytes() == before[1]
         if dry_run:
             assert [track.read_bytes() for track in tracks] == before

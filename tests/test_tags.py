@@ -913,7 +913,7 @@ class TestWriteStats:
         _set_mp3_txxx(mp3, {"Rating": "3", "RATING": "4"})
         before = mp3.read_bytes()
 
-        with pytest.raises(MalformedStatsError, match="RATING spellings disagree"):
+        with pytest.raises(MalformedStatsError, match="RATING stored values disagree"):
             write_stats_to_file(mp3, rating=5)
 
         assert mp3.read_bytes() == before
@@ -923,7 +923,7 @@ class TestWriteStats:
         _set_mp3_txxx(mp3, {"FMPS_Playcount": "5", "FMPS_PLAYCOUNT": "6"})
         before = mp3.read_bytes()
 
-        with pytest.raises(MalformedStatsError, match="play count spellings disagree"):
+        with pytest.raises(MalformedStatsError, match="play count stored values disagree"):
             write_stats_to_file(mp3, play_count=7)
 
         assert mp3.read_bytes() == before
@@ -978,7 +978,7 @@ class TestFlacMultiValueStats:
         self._set_comments(flac, {"FMPS_PLAYCOUNT": ["5", "9"]})
         before = flac.read_bytes()
 
-        with pytest.raises(MalformedStatsError, match="play count spellings disagree"):
+        with pytest.raises(MalformedStatsError, match="play count stored values disagree"):
             write_stats_to_file(flac, play_count=7)
 
         assert flac.read_bytes() == before
@@ -999,7 +999,7 @@ class TestFlacMultiValueStats:
         self._set_comments(flac, {"RATING": ["3", "4"]})
         before = flac.read_bytes()
 
-        with pytest.raises(MalformedStatsError, match="RATING spellings disagree"):
+        with pytest.raises(MalformedStatsError, match="RATING stored values disagree"):
             write_stats_to_file(flac, rating=5)
 
         assert flac.read_bytes() == before
