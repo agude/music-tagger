@@ -1201,6 +1201,62 @@ def _desperado_release() -> MBRelease:
     )
 
 
+class TestWriteRatingsLogging:
+    @staticmethod
+    def _ratings_file(tmp_path: Path) -> Path:
+        ratings_file = tmp_path / "ratings.json"
+        ratings_file.write_text(
+            json.dumps([{"id": "s1", "path": "album_flac/01 - Track 1.flac", "rating": 4}])
+        )
+        return ratings_file
+
+    def test_logs_to_default_log_by_default(
+        self, flac_album: Path, tmp_path: Path, default_log: Path
+    ) -> None:
+        _write_ratings(["--from", str(self._ratings_file(tmp_path)), "--root", str(tmp_path)])
+
+        log = default_log.read_text()
+        assert "## Rating tags" in log
+        assert "album_flac/01 - Track 1.flac: fmps_rating, rating" in log
+
+    def test_log_flag_redirects_the_log(
+        self, flac_album: Path, tmp_path: Path, default_log: Path
+    ) -> None:
+        custom = tmp_path / "custom.log"
+
+        _write_ratings(
+            [
+                "--from",
+                str(self._ratings_file(tmp_path)),
+                "--root",
+                str(tmp_path),
+                "--log",
+                str(custom),
+            ]
+        )
+
+        assert "## Rating tags" in custom.read_text()
+        assert not default_log.exists()
+
+    def test_no_log_writes_nothing(
+        self, flac_album: Path, tmp_path: Path, default_log: Path
+    ) -> None:
+        _write_ratings(
+            ["--from", str(self._ratings_file(tmp_path)), "--root", str(tmp_path), "--no-log"]
+        )
+
+        assert not default_log.exists()
+
+    def test_dry_run_appends_no_log(
+        self, flac_album: Path, tmp_path: Path, default_log: Path
+    ) -> None:
+        _write_ratings(
+            ["--from", str(self._ratings_file(tmp_path)), "--root", str(tmp_path), "--dry-run"]
+        )
+
+        assert not default_log.exists()
+
+
 class TestWriteRatingsUnsupported:
     def test_unsupported_file_is_counted_separately(
         self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]

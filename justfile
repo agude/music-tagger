@@ -41,4 +41,4 @@ dump-ratings:
 
 # Write rating/starred tags from ratings.json into FLAC files
 sync-ratings *args:
-    uv run music-tagger write-ratings --log changes.log {{ args }}
+    uv run music-tagger write-ratings {{ args }}

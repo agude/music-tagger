@@ -550,13 +550,9 @@ def _write_ratings(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Show what would change without writing.",
     )
-    parser.add_argument(
-        "--log",
-        type=Path,
-        default=None,
-        help="Append changes to this log file.",
-    )
+    _add_log_arguments(parser)
     args = parser.parse_args(argv)
+    log_path = _log_path(args)
 
     songs = [SongRating.from_dict(s) for s in json.loads(args.from_file.read_text())]
 
@@ -605,7 +601,7 @@ def _write_ratings(argv: list[str] | None = None) -> None:
             for c in changes:
                 old = c.old_value or "(empty)"
                 print(f"    {c.field}: {old} → {c.new_value}")
-        if args.log:
+        if log_path is not None:
             log_lines.append(f"  {song.path}: {', '.join(c.field for c in changes)}")
 
     if skipped:
@@ -624,10 +620,10 @@ def _write_ratings(argv: list[str] | None = None) -> None:
         if total_files == 0 and skipped > 0:
             sys.exit(1)
 
-    if args.log and not args.dry_run and log_lines:
+    if log_path is not None and not args.dry_run and log_lines:
         timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
         header = ["## Rating tags", "", f"- **Date:** {timestamp}", ""]
-        with open(args.log, "a") as f:
+        with open(log_path, "a") as f:
             f.write("\n".join(header + log_lines + ["", "---", ""]))
 
     if unsupported:
