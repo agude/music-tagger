@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from mutagen import File as MutagenFile
+from mutagen import MutagenError
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import APIC, ID3, POPM, TCON, TXXX
 from mutagen.mp3 import MP3
@@ -680,6 +681,14 @@ def _rating_to_fmps(rating: int) -> str:
     return f"{rating / 5:.1f}"
 
 
+class UnsupportedFileError(ValueError):
+    """A file mutagen cannot read, or whose format has no rating tags.
+
+    Raised instead of returning no changes, so an unsupported file is never
+    reported the same way as one that is already correct.
+    """
+
+
 def _rating_targets(rating: int) -> dict[str, str]:
     # Favorites are never written here. Navidrome stores stars apart from
     # ratings, and file export keeps only the five-star rating.
@@ -747,7 +756,8 @@ def write_rating_to_file(path: Path, rating: int, dry_run: bool = False) -> list
     """Write the rating tags to an audio file. Returns changes made.
 
     Favorites (STARRED, STARRED_AT) are neither written nor cleared; existing
-    values stay as they are.
+    values stay as they are. A file that cannot be read, or has no rating
+    support, raises UnsupportedFileError.
 
     A plain FLAC is checked from its Vorbis comments, so mutagen opens it only
     to write a change. A FLAC that changes is therefore read twice: once by the
@@ -766,9 +776,12 @@ def write_rating_to_file(path: Path, rating: int, dry_run: bool = False) -> list
         _write_rating_changes(audio, changes, rating)
         return changes
 
-    audio = MutagenFile(path)
+    try:
+        audio = MutagenFile(path)
+    except MutagenError as exc:
+        raise UnsupportedFileError(f"mutagen cannot read it: {exc}") from exc
     if audio is None:
-        return []
+        raise UnsupportedFileError("mutagen does not recognize the format")
     if isinstance(audio, FLAC):
         current = _read_flac_tags(audio)
     elif isinstance(audio, MP3):
@@ -782,7 +795,7 @@ def write_rating_to_file(path: Path, rating: int, dry_run: bool = False) -> list
         current = _read_mp4_tags(audio)
         targets.pop("rating", None)  # see MP4_RATE_ATOM: scales collide
     else:
-        return []
+        raise UnsupportedFileError(f"{type(audio).__name__} has no rating support")
 
     changes = _diff_targets(targets, current)
     if not changes or dry_run:

@@ -53,6 +53,7 @@ from .tags import (
     LOCKABLE_FIELDS,
     AlbumTags,
     TrackTags,
+    UnsupportedFileError,
     embed_cover_art,
     read_album,
     write_locks,
@@ -580,6 +581,8 @@ def _write_ratings(argv: list[str] | None = None) -> None:
 
     total_files = 0
     skipped = 0
+    unchanged = 0
+    unsupported: list[str] = []
     log_lines: list[str] = []
 
     for song, path in targets:
@@ -587,24 +590,37 @@ def _write_ratings(argv: list[str] | None = None) -> None:
             skipped += 1
             continue
 
-        changes = write_rating_to_file(path, song.rating, dry_run=args.dry_run)
-        if changes:
-            total_files += 1
-            if args.dry_run:
-                print(f"  {song.path}:")
-                for c in changes:
-                    old = c.old_value or "(empty)"
-                    print(f"    {c.field}: {old} → {c.new_value}")
-            if args.log:
-                log_lines.append(f"  {song.path}: {', '.join(c.field for c in changes)}")
+        try:
+            changes = write_rating_to_file(path, song.rating, dry_run=args.dry_run)
+        except UnsupportedFileError as exc:
+            unsupported.append(song.path)
+            print(f"  unsupported: {song.path}: {exc}", file=sys.stderr)
+            continue
+        if not changes:
+            unchanged += 1
+            continue
+        total_files += 1
+        if args.dry_run:
+            print(f"  {song.path}:")
+            for c in changes:
+                old = c.old_value or "(empty)"
+                print(f"    {c.field}: {old} → {c.new_value}")
+        if args.log:
+            log_lines.append(f"  {song.path}: {', '.join(c.field for c in changes)}")
 
     if skipped:
         print(f"Skipped {skipped} file(s) (not found).", file=sys.stderr)
 
     if args.dry_run:
-        print(f"\n(dry run — {len(songs)} songs, {total_files} would change)")
+        print(
+            f"\n(dry run — {len(songs)} songs, {total_files} would change, "
+            f"{unchanged} unchanged, {len(unsupported)} unsupported)"
+        )
     else:
-        print(f"Wrote rating tags to {total_files} file(s).")
+        print(
+            f"Wrote rating tags to {total_files} file(s); {unchanged} unchanged, "
+            f"{skipped} missing, {len(unsupported)} unsupported."
+        )
         if total_files == 0 and skipped > 0:
             sys.exit(1)
 
@@ -613,6 +629,9 @@ def _write_ratings(argv: list[str] | None = None) -> None:
         header = ["## Rating tags", "", f"- **Date:** {timestamp}", ""]
         with open(args.log, "a") as f:
             f.write("\n".join(header + log_lines + ["", "---", ""]))
+
+    if unsupported:
+        sys.exit(1)
 
 
 def _scan(argv: list[str] | None = None) -> None:

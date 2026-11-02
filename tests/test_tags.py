@@ -16,6 +16,7 @@ from music_tagger.tags import (
     FmpsStats,
     TagChange,
     TrackTags,
+    UnsupportedFileError,
     _flac_comments_from_stream,
     _rating_to_fmps,
     compute_diff,
@@ -678,6 +679,22 @@ def _set_m4a_freeform(path: Path, atoms: dict[str, str]) -> None:
     for name, text in atoms.items():
         audio[f"----:com.apple.iTunes:{name}"] = [text.encode("utf-8")]
     audio.save()
+
+
+class TestUnsupportedRatingTarget:
+    def test_unrecognized_file_raises(self, tmp_path: Path) -> None:
+        path = tmp_path / "notes.flac"
+        path.write_text("not audio")
+
+        with pytest.raises(UnsupportedFileError, match="mutagen"):
+            write_rating_to_file(path, rating=4)
+
+    def test_dry_run_raises_too(self, tmp_path: Path) -> None:
+        path = tmp_path / "notes.flac"
+        path.write_text("not audio")
+
+        with pytest.raises(UnsupportedFileError, match="mutagen"):
+            write_rating_to_file(path, rating=4, dry_run=True)
 
 
 class TestMp3PopmFrame:

@@ -1201,6 +1201,45 @@ def _desperado_release() -> MBRelease:
     )
 
 
+class TestWriteRatingsUnsupported:
+    def test_unsupported_file_is_counted_separately(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "notes.flac").write_text("not audio")
+        ratings_file = tmp_path / "ratings.json"
+        ratings_file.write_text(
+            json.dumps(
+                [
+                    {"id": "s1", "path": "album_flac/01 - Track 1.flac", "rating": 4},
+                    {"id": "s2", "path": "notes.flac", "rating": 4},
+                ]
+            )
+        )
+
+        with pytest.raises(SystemExit) as exit_info:
+            _write_ratings(["--from", str(ratings_file), "--root", str(tmp_path)])
+
+        captured = capsys.readouterr()
+        assert exit_info.value.code == 1
+        assert read_album(flac_album).tracks[0].tags["rating"] == "4"
+        assert "1 unsupported" in captured.out
+        assert "unsupported: notes.flac" in captured.err
+
+    def test_already_correct_file_is_reported_as_unchanged(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ratings_file = tmp_path / "ratings.json"
+        ratings_file.write_text(
+            json.dumps([{"id": "s1", "path": "album_flac/01 - Track 1.flac", "rating": 4}])
+        )
+        _write_ratings(["--from", str(ratings_file), "--root", str(tmp_path)])
+        capsys.readouterr()
+
+        _write_ratings(["--from", str(ratings_file), "--root", str(tmp_path)])
+
+        assert "0 file(s); 1 unchanged" in capsys.readouterr().out
+
+
 class TestWriteRatingsContainment:
     @pytest.mark.parametrize("kind", ["traversal", "absolute", "root"])
     def test_refuses_path_outside_root_before_any_write(
