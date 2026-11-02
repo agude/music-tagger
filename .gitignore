@@ -25,6 +25,7 @@ checklist-all.md
 checklist.json
 changes.log
 issues.md
+/plan.md
 notes/
 
 # Undo records from one-off library migrations. Dated, kept locally until
