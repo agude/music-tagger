@@ -1327,14 +1327,12 @@ def _flac_keys(path: Path) -> dict[str, list[str]]:
 
 
 class TestWriteStatsCommand:
-    @pytest.mark.parametrize("error", [PermissionError, FileNotFoundError])
     def test_stat_failure_continues_and_logs_completed_writes(
         self,
         flac_album: Path,
         tmp_path: Path,
         default_log: Path,
         capsys: pytest.CaptureFixture[str],
-        error: type[OSError],
     ) -> None:
         tracks = sorted(flac_album.glob("*.flac"))
         before = tracks[1].read_bytes()
@@ -1349,7 +1347,7 @@ class TestWriteStatsCommand:
 
         def failing_stat(path: Path, *, follow_symlinks: bool = True) -> object:
             if path == tracks[1]:
-                raise error("simulated NAS failure")
+                raise PermissionError("simulated NAS failure")
             return original_stat(path, follow_symlinks=follow_symlinks)
 
         with patch.object(Path, "stat", failing_stat), pytest.raises(SystemExit) as exit_info:
@@ -1357,11 +1355,8 @@ class TestWriteStatsCommand:
 
         captured = capsys.readouterr()
         assert exit_info.value.code == 1
-        if error is FileNotFoundError:
-            assert "1 missing, 0 unsupported, 0 failed" in captured.out
-        else:
-            assert "0 missing, 0 unsupported, 1 failed" in captured.out
-            assert "simulated NAS failure" in captured.err
+        assert "0 missing, 0 unsupported, 1 failed" in captured.out
+        assert "simulated NAS failure" in captured.err
         assert tracks[1].read_bytes() == before
         for track in (tracks[0], tracks[2]):
             assert _flac_keys(track)["RATING"] == ["4"]
@@ -1808,6 +1803,85 @@ class TestAuditLogSurvivesInterrupt:
         assert log.count("\n---\n") == 1
         assert log.endswith("\n\n---\n")
         assert f"  {tracks[1]}: fmps_rating, rating\n" in log
+
+
+class TestMissingFileReporting:
+    def test_missing_lines_are_capped_with_a_count(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [
+                {"id": str(index), "path": f"album_flac/absent {index:02d}.flac", "rating": 4}
+                for index in range(25)
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exit_info:
+            _write_stats(["--from", str(snap), "--root", str(tmp_path), "--no-log"])
+
+        captured = capsys.readouterr()
+        assert exit_info.value.code == 1
+        assert captured.err.count("  missing: ") == 20
+        assert "  … and 5 more missing" in captured.err
+        assert "0 changed" in captured.out
+        assert "25 missing" in captured.out
+
+    def test_file_not_found_after_exists_counts_as_failed(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        tracks = sorted(flac_album.glob("*.flac"))
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [
+                {"id": str(index), "path": str(track), "rating": 4}
+                for index, track in enumerate(tracks)
+            ],
+        )
+        original_exists = Path.exists
+        original_stat = Path.stat
+
+        def exists(path: Path, *, follow_symlinks: bool = True) -> bool:
+            if path == tracks[1]:
+                return True
+            return original_exists(path, follow_symlinks=follow_symlinks)
+
+        def vanishing_stat(path: Path, *, follow_symlinks: bool = True) -> object:
+            if path == tracks[1]:
+                raise FileNotFoundError("vanished after the existence check")
+            return original_stat(path, follow_symlinks=follow_symlinks)
+
+        with (
+            patch.object(Path, "exists", exists),
+            patch.object(Path, "stat", vanishing_stat),
+            pytest.raises(SystemExit),
+        ):
+            _write_stats(["--from", str(snap), "--root", str(tmp_path), "--no-log"])
+
+        captured = capsys.readouterr()
+        assert "0 missing, 0 unsupported, 1 failed" in captured.out
+        assert "vanished after the existence check" in captured.err
+
+    def test_dry_run_summary_counts_missing(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ratings_file = tmp_path / "ratings.json"
+        ratings_file.write_text(
+            json.dumps(
+                [
+                    {"id": "s1", "path": "album_flac/01 - Track 1.flac", "rating": 4},
+                    {"id": "s2", "path": "album_flac/absent.flac", "rating": 4},
+                ]
+            )
+        )
+
+        _write_ratings(
+            ["--from", str(ratings_file), "--root", str(tmp_path), "--dry-run", "--no-log"]
+        )
+
+        assert "1 would change, 0 unchanged, 1 missing, 0 unsupported, 0 failed" in (
+            capsys.readouterr().out
+        )
 
 
 class TestWriteRatingsUnsupported:

@@ -928,14 +928,39 @@ class TestWriteStats:
 
         assert mp3.read_bytes() == before
 
-    def test_non_integer_play_count_refuses_the_write(self, flac_album: Path) -> None:
+    @pytest.mark.parametrize("stored", ["many", "1e3", "3.5.1"])
+    def test_non_count_play_count_refuses_the_write(self, flac_album: Path, stored: str) -> None:
         flac = self._track(flac_album, "flac")
         audio = FLAC(flac)
-        audio["FMPS_PLAYCOUNT"] = "many"
+        audio["FMPS_PLAYCOUNT"] = stored
+        audio.save()
+        before = flac.read_bytes()
+
+        with pytest.raises(MalformedStatsError, match="is not a count"):
+            write_stats_to_file(flac, play_count=3)
+
+        assert flac.read_bytes() == before
+
+    def test_fractional_count_with_same_value_is_not_rewritten(self, flac_album: Path) -> None:
+        flac = self._track(flac_album, "flac")
+        audio = FLAC(flac)
+        audio["FMPS_PLAYCOUNT"] = "3.0"
         audio.save()
 
-        with pytest.raises(MalformedStatsError, match="not a whole number"):
-            write_stats_to_file(flac, play_count=3)
+        assert write_stats_to_file(flac, play_count=3) == StatsWrite(changes=[])
+
+    def test_fractional_count_above_snapshot_is_withheld(self, flac_album: Path) -> None:
+        flac = self._track(flac_album, "flac")
+        audio = FLAC(flac)
+        audio["FMPS_PLAYCOUNT"] = "3.5"
+        audio.save()
+
+        plan = write_stats_to_file(flac, play_count=3)
+
+        assert plan == StatsWrite(changes=[], decrease_withheld=True)
+        comments = read_flac_comments(flac)
+        assert comments is not None
+        assert comments["FMPS_PLAYCOUNT"] == ["3.5"]
 
 
 class TestFlacMultiValueStats:

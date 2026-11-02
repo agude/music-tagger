@@ -7,9 +7,11 @@ Field names follow Navidrome's mappings.yaml conventions.
 from __future__ import annotations
 
 import os
+import re
 import struct
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -711,7 +713,7 @@ class UnsupportedFileError(ValueError):
 class MalformedStatsError(ValueError):
     """A stored rating or play count cannot be trusted, so nothing is written.
 
-    Raised when two accepted spellings disagree, or a stored count is not a whole number.
+    Raised when two accepted spellings disagree, or a stored count is not a number.
     """
 
 
@@ -893,16 +895,22 @@ def _mp4_stats(audio: MP4) -> tuple[dict[str, str], frozenset[str]]:
     return current, _conflicts(fmps)
 
 
-def _file_count(current: Mapping[str, str]) -> int | None:
-    """The file's play count: the larger of its FMPS and POPM counts, or None if neither is set."""
-    counts: list[int] = []
+_COUNT_TEXT = re.compile(r"[0-9]+(\.[0-9]+)?")
+
+
+def _file_count(current: Mapping[str, str]) -> Decimal | None:
+    """The file's play count: the larger of its FMPS and POPM counts, or None if neither is set.
+
+    A stored count may carry a fraction, such as "3.0"; it is compared as a Decimal.
+    """
+    counts: list[Decimal] = []
     for name in ("fmps_playcount", POPM_COUNT_FIELD):
         text = current.get(name, "")
         if not text:
             continue
-        if not (text.isascii() and text.isdigit()):
-            raise MalformedStatsError(f"{name} holds {text!r}, which is not a whole number")
-        counts.append(int(text))
+        if not _COUNT_TEXT.fullmatch(text):
+            raise MalformedStatsError(f"{name} holds {text!r}, which is not a count")
+        counts.append(Decimal(text))
     return max(counts) if counts else None
 
 
@@ -958,6 +966,10 @@ def _plan_stats(
             targets["fmps_playcount"] = str(play_count)
             if kind == "mp3":
                 targets[POPM_COUNT_FIELD] = str(play_count)
+            # A stored count with the same value, such as "3.0", is left as it is.
+            for name in ("fmps_playcount", POPM_COUNT_FIELD):
+                if name in targets and current.get(name) and Decimal(current[name]) == play_count:
+                    del targets[name]
         else:
             decrease_withheld = True
 

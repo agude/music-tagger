@@ -85,6 +85,10 @@ def _add_log_arguments(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--no-log", action="store_true", help="Do not write the change log.")
 
 
+# write-stats lists at most this many missing files, then a count of the rest.
+_MAX_LISTED_MISSING = 20
+
+
 class _BatchLog:
     """Audit log for one run that writes entries as each file changes.
 
@@ -654,7 +658,8 @@ def _write_ratings(argv: list[str] | None = None) -> None:
     if args.dry_run:
         print(
             f"\n(dry run — {len(songs)} songs, {total_files} would change, "
-            f"{unchanged} unchanged, {len(unsupported)} unsupported, {failed} failed)"
+            f"{unchanged} unchanged, {skipped} missing, {len(unsupported)} unsupported, "
+            f"{failed} failed)"
         )
     else:
         print(
@@ -751,6 +756,11 @@ def _write_stats(argv: list[str] | None = None) -> None:
     try:
         for song, path in targets:
             try:
+                if not path.exists():
+                    missing += 1
+                    if missing <= _MAX_LISTED_MISSING:
+                        print(f"  missing: {song.path}", file=sys.stderr)
+                    continue
                 size = path.stat().st_size
                 plan = write_stats_to_file(
                     path,
@@ -760,10 +770,6 @@ def _write_stats(argv: list[str] | None = None) -> None:
                     allow_decrease=args.allow_decrease,
                     dry_run=args.dry_run,
                 )
-            except FileNotFoundError:
-                missing += 1
-                print(f"  missing: {song.path}", file=sys.stderr)
-                continue
             except UnsupportedFileError as exc:
                 unsupported += 1
                 print(f"  unsupported: {song.path}: {exc}", file=sys.stderr)
@@ -800,6 +806,9 @@ def _write_stats(argv: list[str] | None = None) -> None:
                 log.add(f"  {song.path}: {detail}")
     finally:
         log.close()
+
+    if missing > _MAX_LISTED_MISSING:
+        print(f"  … and {missing - _MAX_LISTED_MISSING} more missing", file=sys.stderr)
 
     verb = "would change" if args.dry_run else "changed"
     rewrite_verb = "would rewrite" if args.dry_run else "rewrote"
