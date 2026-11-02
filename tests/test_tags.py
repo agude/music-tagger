@@ -5,10 +5,15 @@ from pathlib import Path
 
 import pytest
 from mutagen.flac import FLAC, Picture
+from mutagen.id3 import TXXX
+from mutagen.mp3 import MP3
+from mutagen.mp4 import MP4
 
 from music_tagger.tags import (
     RATING_TO_POPM,
     AlbumTags,
+    FmpsField,
+    FmpsStats,
     TagChange,
     TrackTags,
     _flac_comments_from_stream,
@@ -17,6 +22,7 @@ from music_tagger.tags import (
     embed_cover_art,
     read_album,
     read_flac_comments,
+    read_fmps,
     read_genres,
     read_locks,
     write_genres,
@@ -584,7 +590,7 @@ class TestRatingM4a:
         assert fields == {"fmps_rating", "starred", "starred_at"}
 
         a = MP4(track_path)
-        assert bytes(a["----:com.apple.iTunes:FMPS_RATING"][0]).decode() == "0.8"
+        assert bytes(a["----:com.apple.iTunes:FMPS_Rating"][0]).decode() == "0.8"
         assert bytes(a["----:com.apple.iTunes:STARRED"][0]).decode() == "true"
         assert a["rate"] == ["80"]
 
@@ -629,7 +635,123 @@ class TestRatingM4a:
         changes = write_rating_to_file(track_path, rating=3, dry_run=True)
 
         assert changes
-        assert "----:com.apple.iTunes:FMPS_RATING" not in MP4(track_path)
+        assert "----:com.apple.iTunes:FMPS_Rating" not in MP4(track_path)
+
+
+def _set_mp3_txxx(path: Path, frames: dict[str, str]) -> None:
+    audio = MP3(path)
+    if audio.tags is None:
+        audio.add_tags()  # type: ignore[no-untyped-call]
+    assert audio.tags is not None
+    for desc, text in frames.items():
+        audio.tags.add(TXXX(encoding=3, desc=desc, text=[text]))
+    audio.save()
+
+
+def _set_m4a_freeform(path: Path, atoms: dict[str, str]) -> None:
+    audio = MP4(path)
+    for name, text in atoms.items():
+        audio[f"----:com.apple.iTunes:{name}"] = [text.encode("utf-8")]
+    audio.save()
+
+
+class TestReadFmps:
+    """Accepted FMPS spellings, aliases, and conflicts (plan A3)."""
+
+    def test_mp3_canonical_spelling(self, mp3_album: Path) -> None:
+        path = sorted(mp3_album.glob("*.mp3"))[0]
+        _set_mp3_txxx(path, {"FMPS_Rating": "0.8", "FMPS_Playcount": "12"})
+
+        stats = read_fmps(MP3(path))
+
+        assert stats.rating == FmpsField(value="0.8")
+        assert stats.play_count == FmpsField(value="12")
+
+    def test_mp3_uppercase_spelling(self, mp3_album: Path) -> None:
+        path = sorted(mp3_album.glob("*.mp3"))[0]
+        _set_mp3_txxx(path, {"FMPS_RATING": "0.4", "FMPS_PLAYCOUNT": "3"})
+
+        stats = read_fmps(MP3(path))
+
+        assert stats.rating == FmpsField(value="0.4")
+        assert stats.play_count == FmpsField(value="3")
+
+    def test_mp3_clementine_playcount_spelling(self, mp3_album: Path) -> None:
+        path = sorted(mp3_album.glob("*.mp3"))[0]
+        _set_mp3_txxx(path, {"FMPS_PlayCount": "7"})
+
+        assert read_fmps(MP3(path)).play_count == FmpsField(value="7")
+
+    def test_mp3_conflicting_aliases_are_reported(self, mp3_album: Path) -> None:
+        path = sorted(mp3_album.glob("*.mp3"))[0]
+        _set_mp3_txxx(path, {"FMPS_Rating": "0.8", "FMPS_RATING": "0.4"})
+
+        rating = read_fmps(MP3(path)).rating
+
+        assert rating == FmpsField(conflict=True)
+
+    def test_mp3_agreeing_aliases_are_one_value(self, mp3_album: Path) -> None:
+        path = sorted(mp3_album.glob("*.mp3"))[0]
+        _set_mp3_txxx(path, {"FMPS_Rating": "0.8", "FMPS_RATING": "0.8"})
+
+        assert read_fmps(MP3(path)).rating == FmpsField(value="0.8")
+
+    def test_mp3_unlisted_casing_is_not_read(self, mp3_album: Path) -> None:
+        path = sorted(mp3_album.glob("*.mp3"))[0]
+        _set_mp3_txxx(path, {"fmps_rating": "0.9"})
+
+        assert read_fmps(MP3(path)) == FmpsStats(rating=FmpsField(), play_count=FmpsField())
+
+    def test_mp3_empty_value_is_absent(self, mp3_album: Path) -> None:
+        path = sorted(mp3_album.glob("*.mp3"))[0]
+        _set_mp3_txxx(path, {"FMPS_Rating": "", "FMPS_RATING": "0.6"})
+
+        assert read_fmps(MP3(path)).rating == FmpsField(value="0.6")
+
+    def test_m4a_canonical_spelling(self, m4a_album: Path) -> None:
+        path = sorted(m4a_album.glob("*.m4a"))[0]
+        _set_m4a_freeform(path, {"FMPS_Rating": "0.8", "FMPS_Playcount": "12"})
+
+        stats = read_fmps(MP4(path))
+
+        assert stats.rating == FmpsField(value="0.8")
+        assert stats.play_count == FmpsField(value="12")
+
+    def test_m4a_uppercase_spelling(self, m4a_album: Path) -> None:
+        path = sorted(m4a_album.glob("*.m4a"))[0]
+        _set_m4a_freeform(path, {"FMPS_RATING": "0.4", "FMPS_PLAYCOUNT": "3"})
+
+        stats = read_fmps(MP4(path))
+
+        assert stats.rating == FmpsField(value="0.4")
+        assert stats.play_count == FmpsField(value="3")
+
+    def test_m4a_conflicting_aliases_are_reported(self, m4a_album: Path) -> None:
+        path = sorted(m4a_album.glob("*.m4a"))[0]
+        _set_m4a_freeform(path, {"FMPS_Playcount": "5", "FMPS_PLAYCOUNT": "6"})
+
+        assert read_fmps(MP4(path)).play_count == FmpsField(conflict=True)
+
+    def test_m4a_absent_fields_are_empty(self, m4a_album: Path) -> None:
+        path = sorted(m4a_album.glob("*.m4a"))[0]
+
+        assert read_fmps(MP4(path)) == FmpsStats(rating=FmpsField(), play_count=FmpsField())
+
+    def test_unsupported_container_is_refused(self, flac_album: Path) -> None:
+        path = sorted(flac_album.glob("*.flac"))[0]
+
+        with pytest.raises(TypeError, match="MP3 and MP4 only"):
+            read_fmps(FLAC(path))  # type: ignore[arg-type]
+
+    def test_mp3_rating_is_written_in_canonical_spelling(self, mp3_album: Path) -> None:
+        path = sorted(mp3_album.glob("*.mp3"))[0]
+
+        write_rating_to_file(path, rating=4)
+
+        frames = MP3(path).tags
+        assert frames is not None
+        assert frames["TXXX:FMPS_Rating"].text == ["0.8"]
+        assert "TXXX:FMPS_RATING" not in frames
 
 
 class TestTrackTagsLockedFields:

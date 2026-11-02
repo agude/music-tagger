@@ -21,6 +21,22 @@ from mutagen.mp4 import MP4
 
 AUDIO_EXTENSIONS = {".flac", ".mp3", ".m4a"}
 
+# FMPS spellings. MP3 TXXX descriptions and MP4 freeform names are
+# case-sensitive, so each output spelling is fixed here.
+#
+# Output is "FMPS_Rating" and "FMPS_Playcount". That is the FMPS spelling, and
+# the one Clementine's MP4 reader matches. Clementine's ID3 writer emits
+# "FMPS_PlayCount" and its readers match exact keys, so the other casings are
+# read as aliases and never written. FLAC Vorbis keys are case-insensitive and
+# keep the uppercase FMPS_RATING.
+#
+# Readers accept the uppercase names earlier versions of this tool wrote. Two
+# aliases holding different values are a conflict; neither is chosen.
+FMPS_RATING_OUTPUT = "FMPS_Rating"
+FMPS_RATING_ALIASES = ("FMPS_Rating", "FMPS_RATING")
+FMPS_PLAYCOUNT_OUTPUT = "FMPS_Playcount"
+FMPS_PLAYCOUNT_ALIASES = ("FMPS_Playcount", "FMPS_PlayCount", "FMPS_PLAYCOUNT")
+
 # MP4 atoms, for reading only. Genre is the one MP4 field this tool writes;
 # see write_tags, which refuses the rest rather than silently dropping them.
 MP4_MAP: dict[str, str] = {
@@ -32,7 +48,7 @@ MP4_MAP: dict[str, str] = {
     "genre": "\xa9gen",
     "composer": "\xa9wrt",
     "musicbrainz_albumid": "----:com.apple.iTunes:MusicBrainz Album Id",
-    "fmps_rating": "----:com.apple.iTunes:FMPS_RATING",
+    "fmps_rating": f"----:com.apple.iTunes:{FMPS_RATING_OUTPUT}",
     "starred": "----:com.apple.iTunes:STARRED",
     "starred_at": "----:com.apple.iTunes:STARRED_AT",
 }
@@ -145,7 +161,7 @@ FIELD_MAP: dict[str, tuple[str, str]] = {
         "MUSIC_TAGGER_UPDATED",
         "TXXX:MUSIC_TAGGER_UPDATED",
     ),
-    "fmps_rating": ("FMPS_RATING", "TXXX:FMPS_RATING"),
+    "fmps_rating": ("FMPS_RATING", f"TXXX:{FMPS_RATING_OUTPUT}"),
     "rating": ("RATING", "TXXX:RATING"),
     "starred": ("STARRED", "TXXX:STARRED"),
     "starred_at": ("STARRED_AT", "TXXX:STARRED_AT"),
@@ -352,6 +368,57 @@ def _read_mp4_tags(audio: MP4) -> dict[str, str]:
             bytes(first).decode("utf-8", "replace") if isinstance(first, bytes) else str(first)
         )
     return tags
+
+
+@dataclass(frozen=True)
+class FmpsField:
+    """One FMPS value. `value` is "" when absent, or when `conflict` is set."""
+
+    value: str = ""
+    conflict: bool = False
+
+
+@dataclass(frozen=True)
+class FmpsStats:
+    rating: FmpsField
+    play_count: FmpsField
+
+
+def _resolve_fmps(texts: Mapping[str, str], aliases: tuple[str, ...]) -> FmpsField:
+    present = {texts[name] for name in aliases if texts.get(name)}
+    if len(present) > 1:
+        return FmpsField(conflict=True)
+    return FmpsField(value=present.pop() if present else "")
+
+
+def read_fmps(audio: MP3 | MP4) -> FmpsStats:
+    """Read rating and play count from every accepted spelling. Read-only.
+
+    Lookups use exact keys, as the spellings are case-sensitive. An empty
+    value counts as absent. Aliases that agree are one value; aliases that
+    differ are a conflict.
+    """
+    texts: dict[str, str] = {}
+    if isinstance(audio, MP3):
+        id3 = audio.tags
+        if id3 is not None:
+            for name in FMPS_RATING_ALIASES + FMPS_PLAYCOUNT_ALIASES:
+                frame = id3.get(f"TXXX:{name}")
+                if frame is not None and frame.text:
+                    texts[name] = str(frame.text[0])
+    elif isinstance(audio, MP4):
+        atoms = audio.tags
+        if atoms is not None:
+            for name in FMPS_RATING_ALIASES + FMPS_PLAYCOUNT_ALIASES:
+                values = atoms.get(f"----:com.apple.iTunes:{name}")
+                if values:
+                    texts[name] = bytes(values[0]).decode("utf-8", "replace")
+    else:
+        raise TypeError(f"read_fmps reads MP3 and MP4 only, not {type(audio).__name__}")
+    return FmpsStats(
+        rating=_resolve_fmps(texts, FMPS_RATING_ALIASES),
+        play_count=_resolve_fmps(texts, FMPS_PLAYCOUNT_ALIASES),
+    )
 
 
 def read_album(directory: Path) -> AlbumTags:
