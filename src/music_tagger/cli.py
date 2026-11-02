@@ -756,6 +756,14 @@ def _write_stats(argv: list[str] | None = None) -> None:
             outside.append(song.path)
         else:
             targets.append((song, resolved))
+    if other_library and not targets and not outside:
+        names = sorted({str(s.library_name or s.library_id) for s in snapshot.songs})
+        print(
+            f"Error: no song is in library {args.library!r}. "
+            f"Libraries in the snapshot: {', '.join(names)}. Nothing written.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     if unlabelled:
         print(
             "warning: snapshot predates library fields; "

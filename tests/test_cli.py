@@ -1616,6 +1616,41 @@ class TestWriteStatsCommand:
         assert "predates" not in captured.err
         assert _flac_keys(flac_album / "01 - Track 1.flac")["FMPS_RATING"] == ["0.8"]
 
+    def test_unknown_library_is_refused(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [
+                {
+                    "id": "s1",
+                    "path": TRACK_1,
+                    "rating": 4,
+                    "libraryId": 1,
+                    "libraryName": "Music Library",
+                },
+                {
+                    "id": "s2",
+                    "path": "podcasts/a.mp3",
+                    "rating": 3,
+                    "libraryId": 2,
+                    "libraryName": "Podcasts",
+                },
+            ],
+        )
+        before = (flac_album / "01 - Track 1.flac").read_bytes()
+
+        with pytest.raises(SystemExit) as exit_info:
+            _write_stats(
+                ["--from", str(snap), "--root", str(tmp_path), "--library", "Music", "--no-log"]
+            )
+
+        assert exit_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "no song is in library 'Music'" in err
+        assert "Music Library, Podcasts" in err
+        assert (flac_album / "01 - Track 1.flac").read_bytes() == before
+
     def test_library_all_writes_every_library(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
