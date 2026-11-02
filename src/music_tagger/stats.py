@@ -125,6 +125,28 @@ class SongStats:
             play_date=_optional_timestamp(data, "playDate", where),
         )
 
+    @classmethod
+    def from_native(cls, data: dict[str, Any]) -> SongStats:
+        """Map one native /api/song record.
+
+        The native API omits zero and false, so an absent rating, play count,
+        or star becomes an explicit 0 or false here. Values are not coerced:
+        parse_snapshot rejects malformed ones before any file is written.
+        """
+        return cls(
+            id=data.get("id", ""),
+            path=data.get("path", ""),
+            title=data.get("title") or "",
+            artist=data.get("artist") or "",
+            album=data.get("album") or "",
+            rating=data.get("rating") or 0,
+            rated_at=data.get("ratedAt") or None,
+            starred=data.get("starred", False),
+            starred_at=data.get("starredAt") or None,
+            play_count=data.get("playCount") or 0,
+            play_date=data.get("playDate") or None,
+        )
+
 
 @dataclass(frozen=True)
 class StatsSnapshot:

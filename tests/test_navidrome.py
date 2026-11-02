@@ -208,6 +208,138 @@ class TestGetAllRatings:
         assert result == []
 
 
+def _stats_page(songs: list[dict], total: int | None) -> httpx.Response:  # type: ignore[type-arg]
+    request = httpx.Request("GET", "http://localhost:4533/api/song")
+    headers = {} if total is None else {"x-total-count": str(total)}
+    return httpx.Response(200, json=songs, headers=headers, request=request)
+
+
+class TestGetAllStats:
+    def _make_client(self) -> NavidromeClient:
+        return NavidromeClient(url="http://localhost:4533", user="admin", password="secret")
+
+    def _login(self) -> httpx.Response:
+        request = httpx.Request("POST", "http://localhost:4533/auth/login")
+        return httpx.Response(200, json={"token": "fake-jwt"}, request=request)
+
+    def test_every_song_once_across_pages(self) -> None:
+        client = self._make_client()
+        pages = [
+            [
+                {"id": "s1", "path": "a.flac", "rating": 5, "playCount": 2},
+                {"id": "s2", "path": "b.flac"},
+            ],
+            [
+                {"id": "s3", "path": "c.flac", "playCount": 3, "playDate": "2014-03-01T18:48:33Z"},
+                {
+                    "id": "s4",
+                    "path": "d.flac",
+                    "starred": True,
+                    "starredAt": "2026-01-01T00:00:00Z",
+                },
+            ],
+            [{"id": "s5", "path": "e.flac", "rating": 0, "playCount": 0}],
+        ]
+        responses = [_stats_page(page, total=5) for page in pages]
+        with (
+            patch.object(client._client, "post", return_value=self._login()),
+            patch.object(client._client, "get", side_effect=responses) as get,
+        ):
+            result = client.get_all_stats(page_size=2)
+
+        assert [s.id for s in result] == ["s1", "s2", "s3", "s4", "s5"]
+        assert get.call_count == 3
+        played_only = result[2]
+        assert (played_only.rating, played_only.play_count, played_only.starred) == (0, 3, False)
+        assert played_only.play_date == "2014-03-01T18:48:33Z"
+        unplayed = result[1]
+        assert (unplayed.rating, unplayed.play_count, unplayed.starred) == (0, 0, False)
+        assert unplayed.rated_at is None
+        assert unplayed.play_date is None
+        starred = result[3]
+        assert (starred.rating, starred.starred, starred.starred_at) == (
+            0,
+            True,
+            "2026-01-01T00:00:00Z",
+        )
+
+    def test_empty_library(self) -> None:
+        client = self._make_client()
+        with (
+            patch.object(client._client, "post", return_value=self._login()),
+            patch.object(client._client, "get", return_value=_stats_page([], total=0)),
+        ):
+            assert client.get_all_stats() == []
+
+    def test_missing_total_refuses_to_export(self) -> None:
+        client = self._make_client()
+        with (
+            patch.object(client._client, "post", return_value=self._login()),
+            patch.object(client._client, "get", return_value=_stats_page([], total=None)),
+            pytest.raises(RuntimeError, match="x-total-count"),
+        ):
+            client.get_all_stats()
+
+    def test_count_mismatch_refuses_partial_export(self) -> None:
+        client = self._make_client()
+        page = [{"id": "s1", "path": "a.flac"}]
+        with (
+            patch.object(client._client, "post", return_value=self._login()),
+            patch.object(client._client, "get", return_value=_stats_page(page, total=3)),
+            pytest.raises(RuntimeError, match=r"Exported 1 song.*reports 3"),
+        ):
+            client.get_all_stats()
+
+    def test_repeated_song_refuses_export(self) -> None:
+        client = self._make_client()
+        page = [{"id": "s1", "path": "a.flac"}, {"id": "s1", "path": "a.flac"}]
+        with (
+            patch.object(client._client, "post", return_value=self._login()),
+            patch.object(client._client, "get", return_value=_stats_page(page, total=2)),
+            pytest.raises(RuntimeError, match="appeared twice"),
+        ):
+            client.get_all_stats(page_size=500)
+
+    def test_non_object_song_refuses_export(self) -> None:
+        client = self._make_client()
+        with (
+            patch.object(client._client, "post", return_value=self._login()),
+            patch.object(client._client, "get", return_value=_stats_page(["x"], total=1)),
+            pytest.raises(RuntimeError, match="non-object"),
+        ):
+            client.get_all_stats()
+
+    def test_page_error_propagates(self) -> None:
+        client = self._make_client()
+        failure = httpx.Response(
+            500, request=httpx.Request("GET", "http://localhost:4533/api/song")
+        )
+        with (
+            patch.object(client._client, "post", return_value=self._login()),
+            patch.object(
+                client._client,
+                "get",
+                side_effect=[_stats_page([{"id": "s1", "path": "a"}], 3), failure],
+            ),
+            pytest.raises(httpx.HTTPStatusError),
+        ):
+            client.get_all_stats(page_size=1)
+
+    def test_login_failure_makes_no_song_request(self) -> None:
+        client = self._make_client()
+        denied = httpx.Response(
+            401, request=httpx.Request("POST", "http://localhost:4533/auth/login")
+        )
+        with (
+            patch.object(client._client, "post", return_value=denied),
+            patch.object(client._client, "get") as get,
+            pytest.raises(httpx.HTTPStatusError),
+        ):
+            client.get_all_stats()
+
+        get.assert_not_called()
+
+
 class TestSetRating:
     def test_set_rating(self) -> None:
         client = NavidromeClient(url="http://localhost:4533", user="admin", password="secret")

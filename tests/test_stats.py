@@ -53,6 +53,44 @@ class TestRoundTrip:
             assert key not in data
         assert SongStats.from_dict(data, "songs[0]") == song
 
+    def test_native_omitted_values_export_as_explicit_zero_and_false(self) -> None:
+        song = SongStats.from_native({"id": "s1", "path": "a.flac", "title": "A"})
+
+        data = song.to_dict()
+
+        assert data["rating"] == 0
+        assert data["playCount"] == 0
+        assert data["starred"] is False
+        assert "ratedAt" not in data
+        assert "playDate" not in data
+
+    def test_native_present_values_map_to_snapshot_fields(self) -> None:
+        song = SongStats.from_native(
+            {
+                "id": "s1",
+                "path": "a.flac",
+                "rating": 4,
+                "ratedAt": "2026-06-25T22:10:03.50115421Z",
+                "starred": True,
+                "starredAt": "2026-06-25T22:10:05.077424375Z",
+                "playCount": 18,
+                "playDate": "2014-03-01T18:48:33Z",
+            }
+        )
+
+        assert song.rating == 4
+        assert song.rated_at == "2026-06-25T22:10:03.50115421Z"
+        assert song.starred is True
+        assert song.starred_at == "2026-06-25T22:10:05.077424375Z"
+        assert song.play_count == 18
+        assert song.play_date == "2014-03-01T18:48:33Z"
+
+    def test_native_malformed_value_fails_snapshot_validation(self) -> None:
+        song = SongStats.from_native({"id": "s1", "path": "a.flac", "rating": 9})
+
+        with pytest.raises(SnapshotError, match="rating: 9 is outside"):
+            parse_snapshot(_envelope([song.to_dict()]))
+
     def test_timestamps_round_trip_exactly(self) -> None:
         song = SongStats(
             id="s1",

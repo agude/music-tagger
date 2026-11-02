@@ -10,6 +10,8 @@ from typing import Any
 
 import httpx
 
+from .stats import SongStats
+
 SUBSONIC_API_VERSION = "1.16.1"
 CLIENT_NAME = "music-tagger"
 
@@ -23,6 +25,17 @@ def _get_config() -> tuple[str, str, str]:
             "Set NAVIDROME_URL, NAVIDROME_USER, and NAVIDROME_PASSWORD environment variables."
         )
     return url, user, password
+
+
+def _reported_total(resp: httpx.Response) -> int:
+    """Return the server's song count from x-total-count, or refuse to guess."""
+    try:
+        return int(resp.headers.get("x-total-count", ""))
+    except ValueError:
+        raise RuntimeError(
+            "Navidrome did not report x-total-count, so the export cannot be "
+            "checked for completeness."
+        ) from None
 
 
 def _auth_params(user: str, password: str) -> dict[str, str]:
@@ -104,6 +117,10 @@ class NavidromeClient:
             self._url, self._user, self._password = _get_config()
         self._client = httpx.Client(timeout=30.0)
 
+    @property
+    def user(self) -> str:
+        return self._user
+
     def _request(self, endpoint: str, **params: Any) -> dict[str, Any]:
         all_params: dict[str, str] = _auth_params(self._user, self._password)
         for k, v in params.items():
@@ -134,6 +151,22 @@ class NavidromeClient:
         resp.raise_for_status()
         return {"x-nd-authorization": f"Bearer {resp.json()['token']}"}
 
+    def _native_song_page(
+        self, headers: dict[str, str], offset: int, page_size: int
+    ) -> httpx.Response:
+        resp = self._client.get(
+            f"{self._url}/api/song",
+            headers=headers,
+            params={
+                "_sort": "path",
+                "_order": "ASC",
+                "_start": str(offset),
+                "_end": str(offset + page_size),
+            },
+        )
+        resp.raise_for_status()
+        return resp
+
     def get_all_ratings(self, page_size: int = 500) -> list[SongRating]:
         """Get all rated and/or starred songs with real filesystem paths.
 
@@ -146,18 +179,7 @@ class NavidromeClient:
         offset = 0
 
         while True:
-            resp = self._client.get(
-                f"{self._url}/api/song",
-                headers=headers,
-                params={
-                    "_sort": "path",
-                    "_order": "ASC",
-                    "_start": str(offset),
-                    "_end": str(offset + page_size),
-                },
-            )
-            resp.raise_for_status()
-            songs = resp.json()
+            songs = self._native_song_page(headers, offset, page_size).json()
             if not songs:
                 break
             for s in songs:
@@ -168,6 +190,48 @@ class NavidromeClient:
             offset += len(songs)
 
         return results
+
+    def get_all_stats(self, page_size: int = 500) -> list[SongStats]:
+        """Get every song with its statistics, including unrated and unplayed ones.
+
+        The listing is checked against the server's x-total-count, and each
+        song must appear once. A truncated or changing listing raises, so the
+        caller never receives a partial snapshot.
+        """
+        headers = self._native_headers()
+        songs: list[SongStats] = []
+        seen: set[str] = set()
+        expected: int | None = None
+        offset = 0
+
+        while True:
+            resp = self._native_song_page(headers, offset, page_size)
+            if expected is None:
+                expected = _reported_total(resp)
+            page = resp.json()
+            if not isinstance(page, list):
+                raise RuntimeError("Navidrome /api/song did not return a list of songs.")
+            for raw in page:
+                if not isinstance(raw, dict):
+                    raise RuntimeError(f"Navidrome /api/song returned a non-object song: {raw!r}")
+                song = SongStats.from_native(raw)
+                if song.id in seen:
+                    raise RuntimeError(
+                        f"Song {song.id} appeared twice in the listing. "
+                        "The library changed during export; run it again."
+                    )
+                seen.add(song.id)
+                songs.append(song)
+            if len(page) < page_size:
+                break
+            offset += len(page)
+
+        if len(songs) != expected:
+            raise RuntimeError(
+                f"Exported {len(songs)} song(s) but the server reports {expected}. "
+                "The library changed during export; run it again."
+            )
+        return songs
 
     def set_rating(self, song_id: str, rating: int) -> None:
         self._request("setRating", id=song_id, rating=rating)
