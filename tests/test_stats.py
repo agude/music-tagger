@@ -296,3 +296,84 @@ class TestWriteSnapshotFile:
         assert not dest.exists()
         assert read_snapshot(tmp_path / "stats.json.previous").songs[0].rating == 2
         assert _names(tmp_path) == ["stats.json.previous"]
+
+
+def _library(total: int, rated: int = 0, starred: int = 0) -> StatsSnapshot:
+    """A snapshot of `total` songs. The first `rated` are rated; the first `starred` are starred."""
+    songs = tuple(
+        SongStats(
+            id=f"s{index}",
+            path=f"{index}.flac",
+            rating=3 if index < rated else 0,
+            starred=index < starred,
+        )
+        for index in range(total)
+    )
+    return StatsSnapshot(
+        source_user="alex",
+        exported_at="2026-11-02T12:00:00Z",
+        songs=songs,
+    )
+
+
+class TestDropGuard:
+    @pytest.mark.parametrize(
+        ("label", "current", "new"),
+        [
+            ("song", {"total": 10}, {"total": 8}),
+            ("rated", {"total": 10, "rated": 10}, {"total": 10, "rated": 8}),
+            ("starred", {"total": 10, "starred": 10}, {"total": 10, "starred": 8}),
+        ],
+    )
+    def test_large_drop_is_refused_and_both_files_stay(
+        self, tmp_path: Path, label: str, current: dict[str, int], new: dict[str, int]
+    ) -> None:
+        dest = tmp_path / "stats.json"
+        previous = tmp_path / "stats.json.previous"
+        write_snapshot_file(_library(**current), dest)
+        write_snapshot_file(_library(**current), dest)
+        before_dest, before_previous = dest.read_bytes(), previous.read_bytes()
+
+        with pytest.raises(
+            SnapshotError, match=rf"{label} count would fall from \d+ to \d+.*--force"
+        ):
+            write_snapshot_file(_library(**new), dest)
+
+        assert dest.read_bytes() == before_dest
+        assert previous.read_bytes() == before_previous
+        assert _names(tmp_path) == ["stats.json", "stats.json.previous"]
+
+    def test_drop_of_exactly_ten_percent_is_allowed(self, tmp_path: Path) -> None:
+        dest = tmp_path / "stats.json"
+        write_snapshot_file(_library(10, starred=10), dest)
+
+        write_snapshot_file(_library(10, starred=9), dest)
+
+        assert sum(song.starred is True for song in read_snapshot(dest).songs) == 9
+
+    def test_force_replaces_a_large_drop_and_rotates(self, tmp_path: Path) -> None:
+        dest = tmp_path / "stats.json"
+        write_snapshot_file(_library(10, starred=10), dest)
+        write_snapshot_file(_library(10, starred=10), dest)
+
+        write_snapshot_file(_library(10, starred=2), dest, force=True)
+
+        assert sum(song.starred is True for song in read_snapshot(dest).songs) == 2
+        previous = read_snapshot(tmp_path / "stats.json.previous")
+        assert sum(song.starred is True for song in previous.songs) == 10
+
+    def test_corrupt_current_is_replaced_without_rotating_over_previous(
+        self, tmp_path: Path
+    ) -> None:
+        dest = tmp_path / "stats.json"
+        previous = tmp_path / "stats.json.previous"
+        write_snapshot_file(_snapshot(rating=2), dest)
+        write_snapshot_file(_snapshot(rating=5), dest)
+        before_previous = previous.read_bytes()
+        dest.write_text("{not json", encoding="utf-8")
+
+        write_snapshot_file(_snapshot(rating=4), dest)
+
+        assert read_snapshot(dest).songs[0].rating == 4
+        assert previous.read_bytes() == before_previous
+        assert _names(tmp_path) == ["stats.json", "stats.json.previous"]

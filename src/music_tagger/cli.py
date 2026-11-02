@@ -1575,6 +1575,14 @@ def _nd_stats(argv: list[str] | None = None) -> None:
         default=_DEFAULT_STATS_PATH,
         help=f"Output snapshot file (default: {_DEFAULT_STATS_PATH}).",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Replace the current snapshot even if it loses more than 10%% of its songs, "
+            "rated songs, or starred songs."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not args.out.parent.is_dir():
@@ -1599,9 +1607,9 @@ def _nd_stats(argv: list[str] | None = None) -> None:
         songs=tuple(songs),
     )
     try:
-        write_snapshot_file(snapshot, args.out)
+        write_snapshot_file(snapshot, args.out, force=args.force)
     except SnapshotError as exc:
-        print(f"Error: invalid snapshot; no file written: {exc}", file=sys.stderr)
+        print(f"Error: no file written: {exc}", file=sys.stderr)
         sys.exit(1)
     except OSError as exc:
         print(f"Error: could not write {args.out}: {exc}", file=sys.stderr)

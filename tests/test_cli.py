@@ -1104,15 +1104,43 @@ class TestNdStats:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         out = tmp_path / "stats.json"
-        out.write_text('{"old": true}')
+        old = _snapshot(tmp_path / "old.json", [])
+        out.write_text(old.read_text())
         monkeypatch.setattr(
             "music_tagger.cli.NavidromeClient", lambda: _FakeNavidromeClient(self._songs())
         )
 
         _nd(["stats", "--out", str(out)])
 
-        assert (tmp_path / "stats.json.previous").read_text() == '{"old": true}'
-        assert "songs" in json.loads(out.read_text())
+        assert (tmp_path / "stats.json.previous").read_text() == old.read_text()
+        assert len(json.loads(out.read_text())["songs"]) == 2
+
+    def test_large_drop_is_refused_until_forced(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = tmp_path / "stats.json"
+        old = _snapshot(
+            tmp_path / "old.json",
+            [{"id": f"s{i}", "path": f"{i}.flac", "starred": True} for i in range(2)],
+        )
+        out.write_text(old.read_text())
+        before = out.read_bytes()
+        monkeypatch.setattr(
+            "music_tagger.cli.NavidromeClient", lambda: _FakeNavidromeClient(self._songs())
+        )
+
+        with pytest.raises(SystemExit) as exit_info:
+            _nd(["stats", "--out", str(out)])
+
+        assert exit_info.value.code == 1
+        assert "starred count would fall from 2 to 1" in capsys.readouterr().err
+        assert out.read_bytes() == before
+        assert not (tmp_path / "stats.json.previous").exists()
+
+        _nd(["stats", "--out", str(out), "--force"])
+
+        assert len(json.loads(out.read_text())["songs"]) == 2
+        assert (tmp_path / "stats.json.previous").read_bytes() == before
 
     def test_export_failure_keeps_existing_snapshot(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

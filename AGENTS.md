@@ -198,7 +198,7 @@ src/music_tagger/
   deliberately no bare `RATING`. Favorites are not written to M4A.
 - `stats.py` owns the statistics snapshot: `SongStats`, `StatsSnapshot`,
   `parse_snapshot` (validation, no I/O), and `write_snapshot_file`, which
-  keeps the previous snapshot as `.previous`.
+  keeps the previous snapshot as `.previous` and applies the drop guard.
 - `musicbrainz.py` searches and fetches releases. Rate-limited to 1 req/sec;
   retries 429 and 503 up to 4 attempts with exponential backoff.
 - `tagger.py` builds the target tags from an MB release and computes diffs.
@@ -236,7 +236,10 @@ Commands (all through `just`, which loads `.env`):
   with ratings, play counts, favorites, and timestamps, to
   `/mnt/synology/media/music/stats.json`. The whole listing is fetched and
   checked against the server's `x-total-count` before the destination is
-  touched. The previous snapshot is renamed `stats.json.previous`.
+  touched. A valid current snapshot is renamed `stats.json.previous`; an
+  unreadable one is replaced without rotation. A new export that loses more
+  than 10% of the songs, rated songs, or starred songs is refused with no
+  file written, unless `--force` is passed.
 - `just sync-stats --dry-run` runs `write-stats` as a preview. It lists each
   changed field with old and new values, and the number of files and bytes
   a real run would rewrite. `just sync-stats` writes.
@@ -291,6 +294,16 @@ Recovery limits:
 
 - `stats.json` and `stats.json.previous` are the only copies of favorites and
   timestamps outside Navidrome. Keep both.
+- Drop guard: `nd stats` compares the new export with the current valid
+  `stats.json`. If the song, rated (rating > 0), or starred count falls by more
+  than 10% (`MAX_DROP_FRACTION`), it refuses and names the count, the old
+  value, and the new value. Nothing is rotated or written. Pass `--force` to
+  replace the snapshot after confirming the drop is real. A drop of exactly
+  10% is allowed.
+- Corrupt current file: a `stats.json` that does not read as a snapshot is
+  replaced without rotation, so `stats.json.previous` keeps the last valid
+  snapshot. An unreadable file is treated the same way, even when the
+  cause is a transient NAS read error.
 - `write-stats` cannot restore the snapshot to Navidrome. `nd set-rating`
   reads only the legacy `ratings.json`, and play counts are never written
   back to Navidrome.

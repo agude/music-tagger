@@ -22,6 +22,9 @@ from typing import Any
 SNAPSHOT_VERSION = 1
 MAX_RATING = 5
 PREVIOUS_SUFFIX = ".previous"
+# A new snapshot may not drop a count (songs, rated, starred) by more than this
+# fraction of the current snapshot's count unless the caller forces it.
+MAX_DROP_FRACTION = 0.10
 
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
 
@@ -222,18 +225,57 @@ def read_snapshot(path: Path) -> StatsSnapshot:
         raise SnapshotError(f"{path}: {exc}") from exc
 
 
-def write_snapshot_file(snapshot: StatsSnapshot, dest: Path) -> None:
+def _counts(snapshot: StatsSnapshot) -> dict[str, int]:
+    songs = snapshot.songs
+    return {
+        "song": len(songs),
+        "rated": sum(1 for song in songs if (song.rating or 0) > 0),
+        "starred": sum(1 for song in songs if song.starred is True),
+    }
+
+
+def _check_no_mass_drop(current: StatsSnapshot, new: StatsSnapshot, dest: Path) -> None:
+    """Refuse a new snapshot that loses too many songs, ratings, or stars at once."""
+    new_counts = _counts(new)
+    for label, old_count in _counts(current).items():
+        new_count = new_counts[label]
+        if old_count - new_count > MAX_DROP_FRACTION * old_count:
+            raise SnapshotError(
+                f"{dest}: {label} count would fall from {old_count} to {new_count}, "
+                f"more than {MAX_DROP_FRACTION:.0%}; pass --force to replace it"
+            )
+
+
+def _readable_current(dest: Path) -> StatsSnapshot | None:
+    """The snapshot at dest, or None if dest is absent or does not read as a snapshot."""
+    if not dest.exists():
+        return None
+    try:
+        return read_snapshot(dest)
+    except SnapshotError:
+        return None
+
+
+def write_snapshot_file(snapshot: StatsSnapshot, dest: Path, *, force: bool = False) -> None:
     """Write a snapshot, keeping the prior one as `<name>.previous`.
 
     The snapshot is validated first, so an invalid one never touches `dest`.
-    It is then written to a temporary file in the same directory, the current
-    file is renamed to `.previous`, and the temporary file is renamed to `dest`.
-    A failure before the last rename leaves a complete valid snapshot at `dest`
-    or at `.previous`. Rename atomicity depends on the mount, so that is the
-    full guarantee.
+    If `dest` reads as a valid snapshot, the new one may not drop the song,
+    rated, or starred count by more than MAX_DROP_FRACTION unless `force` is
+    set; the guard runs before any file is touched. A `dest` that does not read
+    is replaced without rotation, so it never overwrites a valid `.previous`.
+    Otherwise the snapshot is written to a temporary file in the same directory,
+    the current file is renamed to `.previous`, and the temporary file is
+    renamed to `dest`. A failure before the last rename leaves a complete valid
+    snapshot at `dest` or at `.previous`. Rename atomicity depends on the mount,
+    so that is the full guarantee.
     """
     data = snapshot.to_dict()
     parse_snapshot(data)
+
+    current = _readable_current(dest)
+    if current is not None and not force:
+        _check_no_mass_drop(current, snapshot, dest)
 
     previous = dest.with_name(dest.name + PREVIOUS_SUFFIX)
     fd, temp_name = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
@@ -246,7 +288,7 @@ def write_snapshot_file(snapshot: StatsSnapshot, dest: Path) -> None:
             os.fsync(handle.fileno())
         # mkstemp creates 0600; match a file opened with the usual umask.
         os.chmod(temp, 0o644)
-        if dest.exists():
+        if current is not None:
             os.replace(dest, previous)
         os.replace(temp, dest)
     finally:
