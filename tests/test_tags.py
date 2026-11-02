@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from mutagen.flac import FLAC, Picture
-from mutagen.id3 import TXXX
+from mutagen.id3 import POPM, TXXX
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4
 
@@ -393,7 +393,7 @@ class TestWriteRatingMp3:
         changes = write_rating_to_file(track_path, rating=5, starred="2024-06-01T00:00:00Z")
 
         fields = {c.field for c in changes}
-        assert fields == {"fmps_rating", "rating", "starred", "starred_at"}
+        assert fields == {"fmps_rating", "rating", "popm", "starred", "starred_at"}
 
         album = read_album(mp3_album)
         tags = album.tracks[0].tags
@@ -653,6 +653,93 @@ def _set_m4a_freeform(path: Path, atoms: dict[str, str]) -> None:
     for name, text in atoms.items():
         audio[f"----:com.apple.iTunes:{name}"] = [text.encode("utf-8")]
     audio.save()
+
+
+class TestMp3PopmFrame:
+    """The writer owns only the empty-owner POPM frame (plan A4)."""
+
+    @staticmethod
+    def _track(album: Path) -> Path:
+        return sorted(album.glob("*.mp3"))[0]
+
+    @staticmethod
+    def _add_popm(path: Path, email: str, rating: int, count: int) -> None:
+        audio = MP3(path)
+        assert audio.tags is not None
+        audio.tags.add(POPM(email=email, rating=rating, count=count))
+        audio.save()
+
+    @staticmethod
+    def _other_frames(path: Path) -> dict[str, str]:
+        audio = MP3(path)
+        assert audio.tags is not None
+        return {
+            key: str(frame)
+            for key, frame in audio.tags.items()
+            if not key.startswith(("TXXX:", "POPM:"))
+        }
+
+    def test_rating_update_keeps_play_count_and_other_owners(self, mp3_album: Path) -> None:
+        path = self._track(mp3_album)
+        self._add_popm(path, "", rating=1, count=42)
+        self._add_popm(path, "other@example.com", rating=200, count=9)
+
+        write_rating_to_file(path, rating=4)
+
+        frames = {frame.email: frame for frame in MP3(path).tags.getall("POPM")}
+        assert (frames[""].rating, frames[""].count) == (RATING_TO_POPM[4], 42)
+        assert (frames["other@example.com"].rating, frames["other@example.com"].count) == (200, 9)
+
+    def test_missing_popm_is_repaired_when_tags_match(self, mp3_album: Path) -> None:
+        path = self._track(mp3_album)
+        write_rating_to_file(path, rating=4)
+        audio = MP3(path)
+        assert audio.tags is not None
+        audio.tags.delall("POPM")
+        audio.save()
+
+        changes = write_rating_to_file(path, rating=4)
+
+        assert [c.field for c in changes] == ["popm"]
+        assert MP3(path).tags.getall("POPM")[0].rating == RATING_TO_POPM[4]
+
+    def test_stale_popm_is_repaired_and_keeps_its_count(self, mp3_album: Path) -> None:
+        path = self._track(mp3_album)
+        write_rating_to_file(path, rating=4)
+        self._add_popm(path, "", rating=1, count=7)
+
+        changes = write_rating_to_file(path, rating=4)
+
+        assert [c.field for c in changes] == ["popm"]
+        frame = MP3(path).tags.getall("POPM")[0]
+        assert (frame.rating, frame.count) == (RATING_TO_POPM[4], 7)
+
+    def test_dry_run_reports_missing_popm_without_writing(self, mp3_album: Path) -> None:
+        path = self._track(mp3_album)
+        write_rating_to_file(path, rating=4)
+        audio = MP3(path)
+        assert audio.tags is not None
+        audio.tags.delall("POPM")
+        audio.save()
+
+        changes = write_rating_to_file(path, rating=4, dry_run=True)
+
+        assert [c.field for c in changes] == ["popm"]
+        assert MP3(path).tags.getall("POPM") == []
+
+    def test_second_run_makes_no_changes(self, mp3_album: Path) -> None:
+        path = self._track(mp3_album)
+        write_rating_to_file(path, rating=4)
+
+        assert write_rating_to_file(path, rating=4) == []
+
+    def test_unrelated_frames_are_preserved(self, mp3_album: Path) -> None:
+        path = self._track(mp3_album)
+        before = self._other_frames(path)
+
+        write_rating_to_file(path, rating=4)
+
+        assert self._other_frames(path) == before
 
 
 class TestReadFmps:

@@ -15,7 +15,7 @@ from typing import Any, BinaryIO
 
 from mutagen import File as MutagenFile
 from mutagen.flac import FLAC, Picture
-from mutagen.id3 import APIC, POPM, TCON, TXXX
+from mutagen.id3 import APIC, ID3, POPM, TCON, TXXX
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4
 
@@ -667,6 +667,11 @@ def write_locks(path: Path, fields: list[str], *, timestamp: str = "") -> None:
 
 
 RATING_TO_POPM = {1: 1, 2: 64, 3: 128, 4: 196, 5: 255}
+# The writer owns only the POPM frame with an empty owner. Frames from other
+# owners belong to other players: this module never changes them, or their counts.
+POPM_OWNER = ""
+# Diff key for the writer's POPM rating. It is not a Navidrome field.
+POPM_FIELD = "popm"
 
 
 def _rating_to_fmps(rating: int) -> str:
@@ -695,19 +700,41 @@ def _diff_targets(targets: Mapping[str, str], current: Mapping[str, str]) -> lis
     return changes
 
 
+def _own_popm(tags: ID3) -> POPM | None:
+    frame = tags.get(f"POPM:{POPM_OWNER}")  # type: ignore[no-untyped-call]
+    return frame if isinstance(frame, POPM) else None
+
+
+def _own_popm_text(audio: MP3) -> str:
+    """The writer's POPM rating as text, or "" when its frame is absent."""
+    if audio.tags is None:
+        return ""
+    frame = _own_popm(audio.tags)
+    return "" if frame is None else str(frame.rating)
+
+
+def _set_own_popm(tags: ID3, rating: int) -> None:
+    """Set the writer's POPM rating. Its play count is kept; a new frame starts at 0."""
+    frame = _own_popm(tags)
+    if frame is None:
+        tags.add(POPM(email=POPM_OWNER, rating=rating, count=0))  # type: ignore[no-untyped-call]
+    else:
+        frame.rating = rating
+
+
 def _write_rating_changes(audio: FLAC | MP3 | MP4, changes: list[TagChange], rating: int) -> None:
     if isinstance(audio, FLAC):
         for change in changes:
             _write_flac_tag(audio, change.field, change.new_value)
     elif isinstance(audio, MP3):
         for change in changes:
-            _write_mp3_tag(audio, change.field, change.new_value)
-        if rating:
-            if audio.tags is None:
-                audio.add_tags()  # type: ignore[no-untyped-call]
-            assert audio.tags is not None
-            audio.tags.delall("POPM")
-            audio.tags.add(POPM(email="", rating=RATING_TO_POPM.get(rating, 0), count=0))
+            if change.field == POPM_FIELD:
+                if audio.tags is None:
+                    audio.add_tags()  # type: ignore[no-untyped-call]
+                assert audio.tags is not None
+                _set_own_popm(audio.tags, int(change.new_value))
+            else:
+                _write_mp3_tag(audio, change.field, change.new_value)
     elif isinstance(audio, MP4):
         for change in changes:
             audio[MP4_MAP[change.field]] = [change.new_value.encode("utf-8")]
@@ -746,6 +773,11 @@ def write_rating_to_file(
         current = _read_flac_tags(audio)
     elif isinstance(audio, MP3):
         current = _read_mp3_tags(audio)
+        if rating:
+            # Diffed on its own, so a missing or stale frame is repaired even when
+            # the TXXX tags already match.
+            targets[POPM_FIELD] = str(RATING_TO_POPM.get(rating, 0))
+            current[POPM_FIELD] = _own_popm_text(audio)
     elif isinstance(audio, MP4):
         current = _read_mp4_tags(audio)
         targets.pop("rating", None)  # see MP4_RATE_ATOM: scales collide
