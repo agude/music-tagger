@@ -1303,6 +1303,12 @@ def _nd_ratings(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
+    if not args.out.parent.is_dir():
+        print(f"Error: output directory does not exist: {args.out.parent}", file=sys.stderr)
+        if args.out == _DEFAULT_RATINGS_PATH:
+            print("Check that the music library is mounted.", file=sys.stderr)
+        sys.exit(1)
+
     client = NavidromeClient()
     try:
         songs = client.get_all_ratings()
