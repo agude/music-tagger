@@ -178,6 +178,7 @@ src/music_tagger/
 ├── placement.py     # Library path computation + verified copy
 ├── coverart.py      # Cover Art Archive client
 ├── navidrome.py     # Navidrome / Subsonic API client
+├── stats.py         # Statistics snapshot: model, validation, atomic write
 ├── replaygain.py    # ReplayGain 2.0 tagging via rsgain
 ├── ripper.py        # CD ripping via whipper (AccurateRip)
 └── cli.py           # Argparse entry point (all subcommands)
@@ -191,10 +192,13 @@ src/music_tagger/
 - **M4A ratings**: MP4 has no standard star field and the conventions
   collide — the freeform `RATING` atom is 0-100 in MusicBee/EZ CD, while
   this tool writes `RATING` as 1-5 for FLAC and MP3. Writing 1-5 into an
-  M4A would read back as unrated. So M4A gets `FMPS_RATING` (0.0-1.0,
-  scale-free), `STARRED`, `STARRED_AT` as `----:com.apple.iTunes:` freeform
+  M4A would read back as unrated. So M4A gets `FMPS_Rating` (0.0-1.0,
+  scale-free) and `FMPS_Playcount` as `----:com.apple.iTunes:` freeform
   atoms, plus the native `rate` atom (0-100) for third-party readers, and
-  deliberately no bare `RATING`.
+  deliberately no bare `RATING`. Favorites are not written to M4A.
+- `stats.py` owns the statistics snapshot: `SongStats`, `StatsSnapshot`,
+  `parse_snapshot` (validation, no I/O), and `write_snapshot_file`, which
+  keeps the previous snapshot as `.previous`.
 - `musicbrainz.py` searches and fetches releases. Rate-limited to 1 req/sec;
   retries 429 and 503 up to 4 attempts with exponential backoff.
 - `tagger.py` builds the target tags from an MB release and computes diffs.
@@ -217,8 +221,82 @@ src/music_tagger/
   current `cover.*`, writing nothing to the album, so the operator can
   look at it before passing it to `apply --cover-file`.
 - `replaygain.py` subprocess wrapper around `rsgain` for ReplayGain 2.0 tagging.
-- `navidrome.py` Subsonic API client for library scans (and future ratings).
+- `navidrome.py` Subsonic API client for library scans, rating writes, and
+  the native `/api/song` listing (`get_all_ratings`, `get_all_stats`).
 - `cli.py` wires the subcommands together.
+
+## Ratings and play counts
+
+Navidrome is the source of truth. Files carry a copy of each song's rating
+and play count, so other players and the NAS see them.
+
+Commands (all through `just`, which loads `.env`):
+
+- `just dump-stats` runs `nd stats`. It exports every song the user can see,
+  with ratings, play counts, favorites, and timestamps, to
+  `/mnt/synology/media/music/stats.json`. The whole listing is fetched and
+  checked against the server's `x-total-count` before the destination is
+  touched. The previous snapshot is renamed `stats.json.previous`.
+- `just sync-stats --dry-run` runs `write-stats` as a preview. It lists each
+  changed field with old and new values, and the number of files and bytes
+  a real run would rewrite. `just sync-stats` writes.
+- `just sync-ratings` runs `write-ratings`, which writes ratings only, from
+  the legacy `ratings.json` written by `nd ratings`.
+
+Snapshot (`stats.json`, version 1): `version`, `sourceUser`, `exportedAt`
+(UTC), and `songs`. Each song has `id`, `path`, `title`, `artist`, `album`,
+`rating`, `ratedAt`, `starred`, `starredAt`, `playCount`, and `playDate`.
+Navidrome's native API omits zero and false, so the exporter writes
+`rating: 0`, `playCount: 0`, and `starred: false` explicitly. In a snapshot,
+an absent key means "no instruction", and the writer leaves that value
+alone. Timestamps stay in the JSON only.
+
+Tag mapping, by container:
+
+| Container | Rating | Play count |
+| --- | --- | --- |
+| FLAC | `FMPS_RATING` (0.0-1.0), `RATING` (1-5) | `FMPS_PLAYCOUNT` |
+| MP3 | `TXXX:FMPS_Rating`, `TXXX:RATING`, POPM rating | `TXXX:FMPS_Playcount`, POPM count |
+| M4A | `----:com.apple.iTunes:FMPS_Rating`, `rate` (0-100) | `----:com.apple.iTunes:FMPS_Playcount` |
+
+- The writer owns only the POPM frame with an empty owner. Frames from other
+  owners, and their counts, are never changed.
+- MP3 TXXX descriptions and M4A freeform names are case-sensitive. The
+  writer emits `FMPS_Rating` and `FMPS_Playcount`. Readers also accept
+  `FMPS_RATING`, `FMPS_PlayCount`, and `FMPS_PLAYCOUNT`. Two accepted
+  spellings with different values are a conflict, and the write is refused.
+  FLAC Vorbis keys are case-insensitive and keep `FMPS_RATING`.
+
+Policy:
+
+- Favorites (`STARRED`, `STARRED_AT`) are never written to files. Existing
+  values stay. Favorites are kept in the snapshot.
+- A snapshot rating of 0 clears the file's rating only with `--clear`.
+  Otherwise the file is left alone and reported as `clear withheld`.
+- A snapshot play count lower than the file's count is written only with
+  `--allow-decrease`. Otherwise it is reported as `decrease withheld`. The
+  file's count is the larger of its FMPS and POPM counts.
+- An explicit zero play count writes zero when the file has no count.
+- A clear keeps the POPM count. A rating-only write keeps counts, and a
+  count-only write keeps ratings.
+- Unchanged files are never saved. A second run changes nothing. A dry run
+  writes nothing and appends nothing to the change log.
+
+Rewrite cost: play counts change with every listen, so each `sync-stats`
+rewrites every file played since the last run, over the NAS mount. Each
+rewrite changes the file's mtime, so Navidrome rescans it and a NAS backup
+copies it again. Run `sync-stats` by hand, and preview first.
+
+Recovery limits:
+
+- `stats.json` and `stats.json.previous` are the only copies of favorites and
+  timestamps outside Navidrome. Keep both.
+- `write-stats` cannot restore the snapshot to Navidrome. `nd set-rating`
+  reads only the legacy `ratings.json`, and play counts are never written
+  back to Navidrome.
+- Ratings and counts that other players wrote are not imported into
+  Navidrome. The writer keeps them unless `--clear` or `--allow-decrease` is
+  passed.
 
 ## Tag mapping details
 
@@ -307,7 +385,8 @@ output. `write_tags` raising `NotImplementedError` for M4A is the pattern.
 - **Every mutating album command logs by default.** For a long time the
   skills had to pass `--log` and did not: `changes.log` had 448 sections and
   zero `## Genre:` entries, so no genre change had an audit trail. `tag`,
-  `write-tags`, `write-ratings`, `genre`, `rename`, `lock`, `unlock`, `art`,
+  `write-tags`, `write-ratings`, `write-stats`, `genre`, `rename`, `lock`,
+  `unlock`, `art`,
   `replaygain`, and `copy` now append to `$MUSIC_TAGGER_LOG`, else
   `~/Projects/music-tagger/changes.log`. `--log PATH` redirects; `--no-log`
   disables. Tests point `MUSIC_TAGGER_LOG` at a temp file (autouse fixture

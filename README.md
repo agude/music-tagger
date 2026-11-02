@@ -73,6 +73,22 @@ uv run music-tagger tag "/path/to/music/Artist/Album (Year)" \
     --release-id <uuid> --log changes.log
 ```
 
+## Ratings and play counts
+
+Navidrome is the source of truth. Export a snapshot, then write it into the
+audio files:
+
+```bash
+just dump-stats               # nd stats: writes stats.json, keeps stats.json.previous
+just sync-stats --dry-run     # preview changed fields and the rewrite cost
+just sync-stats               # write ratings and play counts into the files
+```
+
+Favorites are never written to files. A snapshot rating of 0 clears the file's
+rating only with `--clear`. A play count lower than the file's is written only
+with `--allow-decrease`. Both withheld changes are reported. The tag mapping,
+policy, and recovery limits are in AGENTS.md under "Ratings and play counts".
+
 ## Supported formats
 
 - FLAC (Vorbis Comments)
