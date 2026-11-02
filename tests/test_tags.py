@@ -14,6 +14,8 @@ from music_tagger.tags import (
     AlbumTags,
     FmpsField,
     FmpsStats,
+    MalformedStatsError,
+    StatsWrite,
     TagChange,
     TrackTags,
     UnsupportedFileError,
@@ -29,6 +31,7 @@ from music_tagger.tags import (
     write_genres,
     write_locks,
     write_rating_to_file,
+    write_stats_to_file,
     write_tags,
 )
 
@@ -598,7 +601,7 @@ class TestRatingM4a:
         changes = write_rating_to_file(track_path, rating=4)
 
         fields = {c.field for c in changes}
-        assert fields == {"fmps_rating"}
+        assert fields == {"fmps_rating", "rate"}
 
         a = MP4(track_path)
         assert bytes(a["----:com.apple.iTunes:FMPS_Rating"][0]).decode() == "0.8"
@@ -679,6 +682,218 @@ def _set_m4a_freeform(path: Path, atoms: dict[str, str]) -> None:
     for name, text in atoms.items():
         audio[f"----:com.apple.iTunes:{name}"] = [text.encode("utf-8")]
     audio.save()
+
+
+class TestWriteStats:
+    """Rating and play-count writes in every container, with the clear and decrease policies."""
+
+    @staticmethod
+    def _track(album: Path, ext: str) -> Path:
+        return sorted(album.glob(f"*.{ext}"))[0]
+
+    def test_round_trips_in_every_container(
+        self, flac_album: Path, mp3_album: Path, m4a_album: Path
+    ) -> None:
+        flac = self._track(flac_album, "flac")
+        write_stats_to_file(flac, rating=4, play_count=9)
+        comments = read_flac_comments(flac)
+        assert comments is not None
+        assert comments["RATING"] == ["4"]
+        assert comments["FMPS_RATING"] == ["0.8"]
+        assert comments["FMPS_PLAYCOUNT"] == ["9"]
+
+        mp3 = self._track(mp3_album, "mp3")
+        write_stats_to_file(mp3, rating=4, play_count=9)
+        id3 = MP3(mp3).tags
+        assert id3 is not None
+        assert id3["TXXX:RATING"].text == ["4"]
+        assert id3["TXXX:FMPS_Rating"].text == ["0.8"]
+        assert id3["TXXX:FMPS_Playcount"].text == ["9"]
+        popm = id3.getall("POPM")[0]
+        assert (popm.rating, popm.count) == (RATING_TO_POPM[4], 9)
+
+        m4a = self._track(m4a_album, "m4a")
+        write_stats_to_file(m4a, rating=4, play_count=9)
+        atoms = MP4(m4a)
+        assert bytes(atoms["----:com.apple.iTunes:FMPS_Rating"][0]).decode() == "0.8"
+        assert bytes(atoms["----:com.apple.iTunes:FMPS_Playcount"][0]).decode() == "9"
+        assert atoms["rate"] == ["80"]
+        assert "----:com.apple.iTunes:RATING" not in atoms
+
+    def test_explicit_zero_without_file_count_writes_zero(
+        self, flac_album: Path, mp3_album: Path
+    ) -> None:
+        flac = self._track(flac_album, "flac")
+        write_stats_to_file(flac, play_count=0)
+        comments = read_flac_comments(flac)
+        assert comments is not None
+        assert comments["FMPS_PLAYCOUNT"] == ["0"]
+
+        mp3 = self._track(mp3_album, "mp3")
+        write_stats_to_file(mp3, play_count=0)
+        popm = MP3(mp3).tags.getall("POPM")[0]
+        assert popm.count == 0
+
+    def test_absent_values_give_no_instruction(self, flac_album: Path) -> None:
+        flac = self._track(flac_album, "flac")
+
+        plan = write_stats_to_file(flac)
+
+        assert plan == StatsWrite(changes=[])
+
+    def test_zero_rating_clears_only_with_clear(self, flac_album: Path) -> None:
+        flac = self._track(flac_album, "flac")
+        write_stats_to_file(flac, rating=4, play_count=2)
+
+        withheld = write_stats_to_file(flac, rating=0)
+
+        assert withheld.changes == []
+        assert withheld.clear_withheld
+        assert read_flac_comments(flac)["RATING"] == ["4"]  # type: ignore[index]
+
+        cleared = write_stats_to_file(flac, rating=0, clear=True)
+
+        assert {c.field for c in cleared.changes} == {"fmps_rating", "rating"}
+        comments = read_flac_comments(flac)
+        assert comments is not None
+        assert "RATING" not in comments
+        assert "FMPS_RATING" not in comments
+        assert comments["FMPS_PLAYCOUNT"] == ["2"]
+
+    def test_zero_rating_on_unrated_file_is_not_withheld(self, flac_album: Path) -> None:
+        flac = self._track(flac_album, "flac")
+
+        plan = write_stats_to_file(flac, rating=0)
+
+        assert plan == StatsWrite(changes=[])
+
+    def test_mp3_clear_zeroes_popm_and_keeps_count(self, mp3_album: Path) -> None:
+        mp3 = self._track(mp3_album, "mp3")
+        write_stats_to_file(mp3, rating=4, play_count=7)
+
+        plan = write_stats_to_file(mp3, rating=0, clear=True)
+
+        assert {c.field for c in plan.changes} == {"fmps_rating", "rating", "popm"}
+        id3 = MP3(mp3).tags
+        assert id3 is not None
+        assert "TXXX:FMPS_Rating" not in id3
+        assert "TXXX:RATING" not in id3
+        assert id3["TXXX:FMPS_Playcount"].text == ["7"]
+        popm = id3.getall("POPM")[0]
+        assert (popm.rating, popm.count) == (0, 7)
+
+    def test_m4a_clear_removes_fmps_and_rate(self, m4a_album: Path) -> None:
+        m4a = self._track(m4a_album, "m4a")
+        write_stats_to_file(m4a, rating=4, play_count=2)
+
+        plan = write_stats_to_file(m4a, rating=0, clear=True)
+
+        assert {c.field for c in plan.changes} == {"fmps_rating", "rate"}
+        atoms = MP4(m4a)
+        assert "----:com.apple.iTunes:FMPS_Rating" not in atoms
+        assert "rate" not in atoms
+        assert bytes(atoms["----:com.apple.iTunes:FMPS_Playcount"][0]).decode() == "2"
+
+    def test_lower_play_count_is_withheld_without_allow_decrease(self, flac_album: Path) -> None:
+        flac = self._track(flac_album, "flac")
+        write_stats_to_file(flac, play_count=9)
+
+        withheld = write_stats_to_file(flac, play_count=5)
+
+        assert withheld.changes == []
+        assert withheld.decrease_withheld
+        assert read_flac_comments(flac)["FMPS_PLAYCOUNT"] == ["9"]  # type: ignore[index]
+
+        allowed = write_stats_to_file(flac, play_count=5, allow_decrease=True)
+
+        assert [c.field for c in allowed.changes] == ["fmps_playcount"]
+        assert read_flac_comments(flac)["FMPS_PLAYCOUNT"] == ["5"]  # type: ignore[index]
+
+    def test_rating_only_preserves_play_count(self, mp3_album: Path) -> None:
+        mp3 = self._track(mp3_album, "mp3")
+        write_stats_to_file(mp3, play_count=7)
+
+        write_stats_to_file(mp3, rating=3)
+
+        id3 = MP3(mp3).tags
+        assert id3 is not None
+        popm = id3.getall("POPM")[0]
+        assert (popm.rating, popm.count) == (RATING_TO_POPM[3], 7)
+        assert id3["TXXX:FMPS_Playcount"].text == ["7"]
+
+    def test_count_only_preserves_rating(self, mp3_album: Path) -> None:
+        mp3 = self._track(mp3_album, "mp3")
+        write_stats_to_file(mp3, rating=3)
+
+        write_stats_to_file(mp3, play_count=5)
+
+        id3 = MP3(mp3).tags
+        assert id3 is not None
+        popm = id3.getall("POPM")[0]
+        assert (popm.rating, popm.count) == (RATING_TO_POPM[3], 5)
+        assert id3["TXXX:RATING"].text == ["3"]
+
+    def test_unchanged_flac_is_never_opened_by_mutagen(
+        self, flac_album: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        flac = self._track(flac_album, "flac")
+        write_stats_to_file(flac, rating=4, play_count=9)
+
+        def refuse(path: Path) -> None:
+            raise AssertionError("mutagen opened an unchanged FLAC")
+
+        monkeypatch.setattr("music_tagger.tags.MutagenFile", refuse)
+        plan = write_stats_to_file(flac, rating=4, play_count=9)
+
+        assert plan.changes == []
+
+    def test_second_run_is_idempotent(self, mp3_album: Path) -> None:
+        mp3 = self._track(mp3_album, "mp3")
+        write_stats_to_file(mp3, rating=4, play_count=9)
+
+        assert write_stats_to_file(mp3, rating=4, play_count=9).changes == []
+
+    def test_dry_run_leaves_bytes_unchanged(self, mp3_album: Path) -> None:
+        mp3 = self._track(mp3_album, "mp3")
+        write_stats_to_file(mp3, rating=4, play_count=9)
+        before = mp3.read_bytes()
+
+        plan = write_stats_to_file(mp3, rating=2, play_count=12, dry_run=True)
+
+        assert plan.changes
+        assert mp3.read_bytes() == before
+
+    def test_stale_uppercase_alias_is_replaced_by_canonical(self, mp3_album: Path) -> None:
+        mp3 = self._track(mp3_album, "mp3")
+        _set_mp3_txxx(mp3, {"FMPS_RATING": "0.4"})
+
+        plan = write_stats_to_file(mp3, rating=4)
+
+        assert {c.field for c in plan.changes} == {"fmps_rating", "rating", "popm"}
+        id3 = MP3(mp3).tags
+        assert id3 is not None
+        assert "TXXX:FMPS_RATING" not in id3
+        assert id3["TXXX:FMPS_Rating"].text == ["0.8"]
+        assert write_stats_to_file(mp3, rating=4).changes == []
+
+    def test_conflicting_play_count_aliases_refuse_the_write(self, mp3_album: Path) -> None:
+        mp3 = self._track(mp3_album, "mp3")
+        _set_mp3_txxx(mp3, {"FMPS_Playcount": "5", "FMPS_PLAYCOUNT": "6"})
+        before = mp3.read_bytes()
+
+        with pytest.raises(MalformedStatsError, match="play count spellings disagree"):
+            write_stats_to_file(mp3, play_count=7)
+
+        assert mp3.read_bytes() == before
+
+    def test_non_integer_play_count_refuses_the_write(self, flac_album: Path) -> None:
+        flac = self._track(flac_album, "flac")
+        audio = FLAC(flac)
+        audio["FMPS_PLAYCOUNT"] = "many"
+        audio.save()
+
+        with pytest.raises(MalformedStatsError, match="not a whole number"):
+            write_stats_to_file(flac, play_count=3)
 
 
 class TestUnsupportedRatingTarget:

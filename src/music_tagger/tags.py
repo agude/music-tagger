@@ -671,8 +671,28 @@ RATING_TO_POPM = {1: 1, 2: 64, 3: 128, 4: 196, 5: 255}
 # The writer owns only the POPM frame with an empty owner. Frames from other
 # owners belong to other players: this module never changes them, or their counts.
 POPM_OWNER = ""
-# Diff key for the writer's POPM rating. It is not a Navidrome field.
-POPM_FIELD = "popm"
+# Diff keys for the writer's POPM frame. They are not Navidrome fields.
+POPM_RATING_FIELD = "popm"
+POPM_COUNT_FIELD = "popm_count"
+# Diff key for the MP4 rate atom (0-100).
+RATE_FIELD = "rate"
+# Diff keys for each container's rating fields. MP4 has no bare RATING.
+_RATING_FIELDS: dict[str, tuple[str, ...]] = {
+    "flac": ("fmps_rating", "rating"),
+    "mp3": ("fmps_rating", "rating"),
+    "mp4": ("fmps_rating", RATE_FIELD),
+}
+# Vorbis keys are case-insensitive, so FLAC keeps the uppercase names.
+_FLAC_KEYS = {"fmps_rating": "FMPS_RATING", "rating": "RATING", "fmps_playcount": "FMPS_PLAYCOUNT"}
+_MP3_ALIASES: dict[str, tuple[str, ...]] = {
+    "fmps_rating": FMPS_RATING_ALIASES,
+    "fmps_playcount": FMPS_PLAYCOUNT_ALIASES,
+    "rating": ("RATING",),
+}
+_MP4_ALIASES: dict[str, tuple[str, ...]] = {
+    "fmps_rating": FMPS_RATING_ALIASES,
+    "fmps_playcount": FMPS_PLAYCOUNT_ALIASES,
+}
 
 
 def _rating_to_fmps(rating: int) -> str:
@@ -689,14 +709,23 @@ class UnsupportedFileError(ValueError):
     """
 
 
-def _rating_targets(rating: int) -> dict[str, str]:
-    # Favorites are never written here. Navidrome stores stars apart from
-    # ratings, and file export keeps only the five-star rating.
-    targets: dict[str, str] = {}
-    if rating:
-        targets["fmps_rating"] = _rating_to_fmps(rating)
-        targets["rating"] = str(rating)
-    return targets
+class MalformedStatsError(ValueError):
+    """A stored rating or play count cannot be trusted, so nothing is written.
+
+    Raised when two accepted spellings disagree, or a stored count is not a whole number.
+    """
+
+
+@dataclass(frozen=True)
+class StatsWrite:
+    """The changes one statistics write made, or would make on a dry run.
+
+    clear_withheld and decrease_withheld report snapshot values that the policy refused.
+    """
+
+    changes: list[TagChange]
+    clear_withheld: bool = False
+    decrease_withheld: bool = False
 
 
 def _diff_targets(targets: Mapping[str, str], current: Mapping[str, str]) -> list[TagChange]:
@@ -713,68 +742,230 @@ def _own_popm(tags: ID3) -> POPM | None:
     return frame if isinstance(frame, POPM) else None
 
 
-def _own_popm_text(audio: MP3) -> str:
-    """The writer's POPM rating as text, or "" when its frame is absent."""
+def _mp3_tags(audio: MP3) -> ID3:
     if audio.tags is None:
-        return ""
-    frame = _own_popm(audio.tags)
-    return "" if frame is None else str(frame.rating)
+        audio.add_tags()  # type: ignore[no-untyped-call]
+    assert audio.tags is not None
+    return audio.tags
 
 
-def _set_own_popm(tags: ID3, rating: int) -> None:
-    """Set the writer's POPM rating. Its play count is kept; a new frame starts at 0."""
+def _set_own_popm(tags: ID3, rating: int | None = None, count: int | None = None) -> None:
+    """Set the writer's POPM rating or count and leave the other one alone.
+
+    A new frame starts at 0 for the value that was not given.
+    """
     frame = _own_popm(tags)
     if frame is None:
-        tags.add(POPM(email=POPM_OWNER, rating=rating, count=0))  # type: ignore[no-untyped-call]
-    else:
+        tags.add(  # type: ignore[no-untyped-call]
+            POPM(email=POPM_OWNER, rating=rating or 0, count=count or 0)  # type: ignore[no-untyped-call]
+        )
+        return
+    if rating is not None:
         frame.rating = rating
+    if count is not None:
+        frame.count = count
 
 
-def _write_rating_changes(audio: FLAC | MP3 | MP4, changes: list[TagChange], rating: int) -> None:
-    if isinstance(audio, FLAC):
-        for change in changes:
-            _write_flac_tag(audio, change.field, change.new_value)
-    elif isinstance(audio, MP3):
-        for change in changes:
-            if change.field == POPM_FIELD:
-                if audio.tags is None:
-                    audio.add_tags()  # type: ignore[no-untyped-call]
-                assert audio.tags is not None
-                _set_own_popm(audio.tags, int(change.new_value))
+def _set_mp3_field(audio: MP3, aliases: tuple[str, ...], value: str) -> None:
+    """Replace every accepted spelling of a TXXX field. An empty value removes the field."""
+    if audio.tags is None and not value:
+        return
+    tags = _mp3_tags(audio)
+    for name in aliases:
+        tags.delall(f"TXXX:{name}")  # type: ignore[no-untyped-call]
+    if value:
+        tags.add(TXXX(encoding=3, desc=aliases[0], text=[value]))  # type: ignore[no-untyped-call]
+
+
+def _set_mp4_field(audio: MP4, aliases: tuple[str, ...], value: str) -> None:
+    """Replace every accepted spelling of a freeform field. An empty value removes the field."""
+    for name in aliases:
+        key = f"----:com.apple.iTunes:{name}"
+        if key in audio:
+            del audio[key]  # type: ignore[no-untyped-call]
+    if value:
+        audio[f"----:com.apple.iTunes:{aliases[0]}"] = [value.encode("utf-8")]
+
+
+def _set_flac_field(audio: FLAC, key: str, value: str) -> None:
+    if key in audio:
+        del audio[key]  # type: ignore[no-untyped-call]
+    if value:
+        audio[key] = [value]
+
+
+def _apply_stats_changes(audio: FLAC | MP3 | MP4, changes: list[TagChange]) -> None:
+    """Apply planned changes in memory. The caller saves the file."""
+    for change in changes:
+        field, value = change.field, change.new_value
+        if isinstance(audio, FLAC):
+            _set_flac_field(audio, _FLAC_KEYS[field], value)
+        elif isinstance(audio, MP3):
+            if field == POPM_RATING_FIELD:
+                _set_own_popm(_mp3_tags(audio), rating=int(value))
+            elif field == POPM_COUNT_FIELD:
+                _set_own_popm(_mp3_tags(audio), count=int(value))
             else:
-                _write_mp3_tag(audio, change.field, change.new_value)
-    elif isinstance(audio, MP4):
-        for change in changes:
-            audio[MP4_MAP[change.field]] = [change.new_value.encode("utf-8")]
-        if rating:
+                _set_mp3_field(audio, _MP3_ALIASES[field], value)
+        elif field == RATE_FIELD:
             # mutagen renders `rate` as a text atom, so the 0-100 value is a string.
-            audio[MP4_RATE_ATOM] = [str(rating * 20)]
-    audio.save()
+            if value:
+                audio[MP4_RATE_ATOM] = [value]
+            elif MP4_RATE_ATOM in audio:
+                del audio[MP4_RATE_ATOM]  # type: ignore[no-untyped-call]
+        else:
+            _set_mp4_field(audio, _MP4_ALIASES[field], value)
 
 
-def write_rating_to_file(path: Path, rating: int, dry_run: bool = False) -> list[TagChange]:
-    """Write the rating tags to an audio file. Returns changes made.
+def _flac_stats(lookup: Callable[[str], Sequence[str] | None]) -> dict[str, str]:
+    current: dict[str, str] = {}
+    for name, key in _FLAC_KEYS.items():
+        values = lookup(key)
+        if values and values[0]:
+            current[name] = values[0]
+    return current
 
-    Favorites (STARRED, STARRED_AT) are neither written nor cleared; existing
-    values stay as they are. A file that cannot be read, or has no rating
-    support, raises UnsupportedFileError.
 
-    A plain FLAC is checked from its Vorbis comments, so mutagen opens it only
-    to write a change. A FLAC that changes is therefore read twice: once by the
-    header reader, then by mutagen.
+def _conflicts(fmps: FmpsStats) -> frozenset[str]:
+    names = (("fmps_rating", fmps.rating), ("fmps_playcount", fmps.play_count))
+    return frozenset(name for name, field in names if field.conflict)
+
+
+def _mp3_stats(audio: MP3) -> tuple[dict[str, str], frozenset[str]]:
+    fmps = read_fmps(audio)
+    current = {
+        "rating": _read_mp3_tags(audio).get("rating", ""),
+        "fmps_rating": fmps.rating.value,
+        "fmps_playcount": fmps.play_count.value,
+    }
+    if audio.tags is not None:
+        own = _own_popm(audio.tags)
+        if own is not None:
+            current[POPM_RATING_FIELD] = str(own.rating)
+            current[POPM_COUNT_FIELD] = str(own.count)
+    return current, _conflicts(fmps)
+
+
+def _mp4_stats(audio: MP4) -> tuple[dict[str, str], frozenset[str]]:
+    fmps = read_fmps(audio)
+    current = {"fmps_rating": fmps.rating.value, "fmps_playcount": fmps.play_count.value}
+    if audio.tags is not None:
+        rate = audio.tags.get(MP4_RATE_ATOM)
+        if rate:
+            current[RATE_FIELD] = str(rate[0])
+    return current, _conflicts(fmps)
+
+
+def _file_count(current: Mapping[str, str]) -> int | None:
+    """The file's play count: the larger of its FMPS and POPM counts, or None if neither is set."""
+    counts: list[int] = []
+    for name in ("fmps_playcount", POPM_COUNT_FIELD):
+        text = current.get(name, "")
+        if not text:
+            continue
+        if not (text.isascii() and text.isdigit()):
+            raise MalformedStatsError(f"{name} holds {text!r}, which is not a whole number")
+        counts.append(int(text))
+    return max(counts) if counts else None
+
+
+def _plan_stats(
+    kind: str,
+    current: Mapping[str, str],
+    conflicts: frozenset[str],
+    *,
+    rating: int | None,
+    play_count: int | None,
+    clear: bool,
+    allow_decrease: bool,
+) -> StatsWrite:
+    """Diff the snapshot's values against a file's current values. Writes nothing."""
+    if rating is not None and "fmps_rating" in conflicts:
+        raise MalformedStatsError("FMPS rating spellings disagree; nothing written")
+    if play_count is not None and "fmps_playcount" in conflicts:
+        raise MalformedStatsError("FMPS play count spellings disagree; nothing written")
+
+    targets: dict[str, str] = {}
+    clear_withheld = False
+    decrease_withheld = False
+    rating_fields = _RATING_FIELDS[kind]
+
+    if rating:
+        targets["fmps_rating"] = _rating_to_fmps(rating)
+        if kind == "mp4":
+            targets[RATE_FIELD] = str(rating * 20)
+        else:
+            targets["rating"] = str(rating)
+        if kind == "mp3":
+            # Diffed on its own, so a missing or stale frame is repaired even when
+            # the TXXX tags already match.
+            targets[POPM_RATING_FIELD] = str(RATING_TO_POPM.get(rating, 0))
+    elif rating == 0:
+        # "0" in the POPM frame is an unrated frame, not a rating to clear.
+        popm_is_rated = current.get(POPM_RATING_FIELD, "0") not in ("", "0")
+        has_rating = popm_is_rated or any(current.get(name) for name in rating_fields)
+        if has_rating and clear:
+            for name in rating_fields:
+                targets[name] = ""
+            if kind == "mp3" and POPM_RATING_FIELD in current:
+                # The count stays; only the rating goes to zero.
+                targets[POPM_RATING_FIELD] = "0"
+        elif has_rating:
+            clear_withheld = True
+
+    if play_count is not None:
+        file_count = _file_count(current)
+        if file_count is None or play_count >= file_count or allow_decrease:
+            targets["fmps_playcount"] = str(play_count)
+            if kind == "mp3":
+                targets[POPM_COUNT_FIELD] = str(play_count)
+        else:
+            decrease_withheld = True
+
+    return StatsWrite(_diff_targets(targets, current), clear_withheld, decrease_withheld)
+
+
+def write_stats_to_file(
+    path: Path,
+    *,
+    rating: int | None = None,
+    play_count: int | None = None,
+    clear: bool = False,
+    allow_decrease: bool = False,
+    dry_run: bool = False,
+) -> StatsWrite:
+    """Write a snapshot's rating and play count to one audio file.
+
+    None gives no instruction for that value. A rating of 0 means unrated, and
+    it clears the rating only with clear; otherwise the file is left alone and
+    clear_withheld is set. A play count below the file's count is written only
+    with allow_decrease; otherwise decrease_withheld is set. Favorites are never
+    written. Nothing is written on a dry run.
+
+    A plain FLAC is diffed from its Vorbis comments, so mutagen opens it only to
+    write a change. Raises UnsupportedFileError for a file that cannot be read or
+    has no rating support, and MalformedStatsError for conflicting or malformed
+    stored values.
     """
-    targets = _rating_targets(rating)
-
     comments = read_flac_comments(path)
     if comments is not None:
-        changes = _diff_targets(targets, _flac_tags_from_lookup(comments.get))
-        if not changes or dry_run:
-            return changes
-        audio = MutagenFile(path)
-        if not isinstance(audio, FLAC):
-            raise ValueError(f"{path}: FLAC header, but mutagen reads {type(audio).__name__}")
-        _write_rating_changes(audio, changes, rating)
-        return changes
+        plan = _plan_stats(
+            "flac",
+            _flac_stats(comments.get),
+            frozenset(),
+            rating=rating,
+            play_count=play_count,
+            clear=clear,
+            allow_decrease=allow_decrease,
+        )
+        if not plan.changes or dry_run:
+            return plan
+        flac = MutagenFile(path)
+        if not isinstance(flac, FLAC):
+            raise ValueError(f"{path}: FLAC header, but mutagen reads {type(flac).__name__}")
+        _apply_stats_changes(flac, plan.changes)
+        flac.save()
+        return plan
 
     try:
         audio = MutagenFile(path)
@@ -783,25 +974,38 @@ def write_rating_to_file(path: Path, rating: int, dry_run: bool = False) -> list
     if audio is None:
         raise UnsupportedFileError("mutagen does not recognize the format")
     if isinstance(audio, FLAC):
-        current = _read_flac_tags(audio)
+        kind, current, conflicts = "flac", _flac_stats(audio.get), frozenset[str]()
     elif isinstance(audio, MP3):
-        current = _read_mp3_tags(audio)
-        if rating:
-            # Diffed on its own, so a missing or stale frame is repaired even when
-            # the TXXX tags already match.
-            targets[POPM_FIELD] = str(RATING_TO_POPM.get(rating, 0))
-            current[POPM_FIELD] = _own_popm_text(audio)
+        kind = "mp3"
+        current, conflicts = _mp3_stats(audio)
     elif isinstance(audio, MP4):
-        current = _read_mp4_tags(audio)
-        targets.pop("rating", None)  # see MP4_RATE_ATOM: scales collide
+        kind = "mp4"
+        current, conflicts = _mp4_stats(audio)
     else:
         raise UnsupportedFileError(f"{type(audio).__name__} has no rating support")
 
-    changes = _diff_targets(targets, current)
-    if not changes or dry_run:
-        return changes
-    _write_rating_changes(audio, changes, rating)
-    return changes
+    plan = _plan_stats(
+        kind,
+        current,
+        conflicts,
+        rating=rating,
+        play_count=play_count,
+        clear=clear,
+        allow_decrease=allow_decrease,
+    )
+    if plan.changes and not dry_run:
+        _apply_stats_changes(audio, plan.changes)
+        audio.save()
+    return plan
+
+
+def write_rating_to_file(path: Path, rating: int, dry_run: bool = False) -> list[TagChange]:
+    """Write the rating tags only; play counts are left alone. Returns changes made.
+
+    Favorites (STARRED, STARRED_AT) are neither written nor cleared. See
+    write_stats_to_file for the errors raised.
+    """
+    return write_stats_to_file(path, rating=rating, dry_run=dry_run).changes
 
 
 def embed_cover_art(album_dir: Path, image_data: bytes, mime: str) -> int:
