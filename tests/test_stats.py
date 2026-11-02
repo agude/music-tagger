@@ -87,11 +87,16 @@ class TestRoundTrip:
         assert song.play_count == 18
         assert song.play_date == "2014-03-01T18:48:33Z"
 
-    def test_native_malformed_value_fails_snapshot_validation(self) -> None:
-        song = SongStats.from_native({"id": "s1", "path": "a.flac", "rating": 9})
+    @pytest.mark.parametrize("field", ["rating", "playCount"])
+    @pytest.mark.parametrize("value", [False, 0.0, "", [], None, -1])
+    def test_native_malformed_value_is_rejected(self, field: str, value: object) -> None:
+        with pytest.raises(SnapshotError, match=field):
+            SongStats.from_native({"id": "s1", "path": "a.flac", field: value})
 
-        with pytest.raises(SnapshotError, match="rating: 9 is outside"):
-            parse_snapshot(_envelope([song.to_dict()]))
+    @pytest.mark.parametrize("field", ["title", "artist", "album", "ratedAt", "playDate"])
+    def test_native_falsy_metadata_is_not_coerced(self, field: str) -> None:
+        with pytest.raises(SnapshotError, match=field):
+            SongStats.from_native({"id": "s1", "path": "a.flac", field: False})
 
     def test_timestamps_round_trip_exactly(self) -> None:
         song = SongStats(

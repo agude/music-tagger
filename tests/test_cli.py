@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 import pytest
 from mutagen.flac import FLAC
+from mutagen.id3 import TXXX
+from mutagen.mp3 import MP3
 
 from music_tagger.cli import (
     EXIT_BLOCKED,
@@ -1051,6 +1053,28 @@ class _FakeNavidromeClient:
 
 
 class TestNdStats:
+    def test_malformed_native_statistics_preserve_both_snapshots(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        out = tmp_path / "stats.json"
+        previous = tmp_path / "stats.json.previous"
+        out.write_text("current snapshot")
+        previous.write_text("previous snapshot")
+
+        def malformed_stats(self: _FakeNavidromeClient, page_size: int = 500) -> list[SongStats]:
+            return [SongStats.from_native({"id": "s1", "path": "a.flac", "playCount": False})]
+
+        monkeypatch.setattr(_FakeNavidromeClient, "get_all_stats", malformed_stats)
+        monkeypatch.setattr("music_tagger.cli.NavidromeClient", _FakeNavidromeClient)
+
+        with pytest.raises(SystemExit) as exit_info:
+            _nd(["stats", "--out", str(out)])
+
+        assert exit_info.value.code == 1
+        assert "export failed; no snapshot written" in capsys.readouterr().err
+        assert out.read_text() == "current snapshot"
+        assert previous.read_text() == "previous snapshot"
+
     def _songs(self) -> list[SongStats]:
         return [
             SongStats(id="s1", path="a.flac", rating=5, play_count=3, starred=True),
@@ -1120,6 +1144,52 @@ class TestNdStats:
 
 
 class TestWriteRatings:
+    @pytest.mark.parametrize("dry_run", [False, True])
+    def test_alias_conflict_continues_and_preserves_audit_log(
+        self,
+        mp3_album: Path,
+        tmp_path: Path,
+        default_log: Path,
+        capsys: pytest.CaptureFixture[str],
+        dry_run: bool,
+    ) -> None:
+        tracks = sorted(mp3_album.glob("*.mp3"))
+        audio = MP3(tracks[1])
+        assert audio.tags is not None
+        audio.tags.add(TXXX(desc="FMPS_Rating", text=["0.4"]))
+        audio.tags.add(TXXX(desc="FMPS_RATING", text=["0.6"]))
+        audio.save()
+        before = [track.read_bytes() for track in tracks]
+        ratings = tmp_path / "ratings.json"
+        ratings.write_text(
+            json.dumps(
+                [
+                    {"id": str(index), "path": str(track), "rating": 4}
+                    for index, track in enumerate(tracks)
+                ]
+            )
+        )
+        args = ["--from", str(ratings), "--root", str(tmp_path)]
+        if dry_run:
+            args.append("--dry-run")
+
+        with pytest.raises(SystemExit) as exit_info:
+            _write_ratings(args)
+
+        captured = capsys.readouterr()
+        assert exit_info.value.code == 1
+        assert "1 failed" in captured.out
+        assert "FMPS rating spellings disagree" in captured.err
+        assert tracks[1].read_bytes() == before[1]
+        if dry_run:
+            assert [track.read_bytes() for track in tracks] == before
+            assert not default_log.exists()
+        else:
+            for track in (tracks[0], tracks[2]):
+                assert MP3(track).tags["TXXX:RATING"].text == ["4"]
+                assert str(track) in default_log.read_text()
+            assert str(tracks[1]) not in default_log.read_text()
+
     def test_writes_to_flac(self, flac_album: Path, capsys: object) -> None:
         ratings = [
             {
@@ -1228,6 +1298,47 @@ def _flac_keys(path: Path) -> dict[str, list[str]]:
 
 
 class TestWriteStatsCommand:
+    @pytest.mark.parametrize("error", [PermissionError, FileNotFoundError])
+    def test_stat_failure_continues_and_logs_completed_writes(
+        self,
+        flac_album: Path,
+        tmp_path: Path,
+        default_log: Path,
+        capsys: pytest.CaptureFixture[str],
+        error: type[OSError],
+    ) -> None:
+        tracks = sorted(flac_album.glob("*.flac"))
+        before = tracks[1].read_bytes()
+        snap = _snapshot(
+            tmp_path / "stats.json",
+            [
+                {"id": str(index), "path": str(track), "rating": 4}
+                for index, track in enumerate(tracks)
+            ],
+        )
+        original_stat = Path.stat
+
+        def failing_stat(path: Path, *, follow_symlinks: bool = True) -> object:
+            if path == tracks[1]:
+                raise error("simulated NAS failure")
+            return original_stat(path, follow_symlinks=follow_symlinks)
+
+        with patch.object(Path, "stat", failing_stat), pytest.raises(SystemExit) as exit_info:
+            _write_stats(["--from", str(snap), "--root", str(tmp_path)])
+
+        captured = capsys.readouterr()
+        assert exit_info.value.code == 1
+        if error is FileNotFoundError:
+            assert "1 missing, 0 unsupported, 0 failed" in captured.out
+        else:
+            assert "0 missing, 0 unsupported, 1 failed" in captured.out
+            assert "simulated NAS failure" in captured.err
+        assert tracks[1].read_bytes() == before
+        for track in (tracks[0], tracks[2]):
+            assert _flac_keys(track)["RATING"] == ["4"]
+            assert str(track) in default_log.read_text()
+        assert str(tracks[1]) not in default_log.read_text()
+
     def test_mixed_outcomes_summarize_and_exit_nonzero(
         self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

@@ -580,19 +580,23 @@ def _write_ratings(argv: list[str] | None = None) -> None:
     total_files = 0
     skipped = 0
     unchanged = 0
+    failed = 0
     unsupported: list[str] = []
     log_lines: list[str] = []
 
     for song, path in targets:
-        if not path.exists():
-            skipped += 1
-            continue
-
         try:
+            if not path.exists():
+                skipped += 1
+                continue
             changes = write_rating_to_file(path, song.rating, dry_run=args.dry_run)
         except UnsupportedFileError as exc:
             unsupported.append(song.path)
             print(f"  unsupported: {song.path}: {exc}", file=sys.stderr)
+            continue
+        except (MalformedStatsError, MutagenError, OSError, ValueError) as exc:
+            failed += 1
+            print(f"  failed: {song.path}: {exc}", file=sys.stderr)
             continue
         if not changes:
             unchanged += 1
@@ -612,12 +616,12 @@ def _write_ratings(argv: list[str] | None = None) -> None:
     if args.dry_run:
         print(
             f"\n(dry run — {len(songs)} songs, {total_files} would change, "
-            f"{unchanged} unchanged, {len(unsupported)} unsupported)"
+            f"{unchanged} unchanged, {len(unsupported)} unsupported, {failed} failed)"
         )
     else:
         print(
             f"Wrote rating tags to {total_files} file(s); {unchanged} unchanged, "
-            f"{skipped} missing, {len(unsupported)} unsupported."
+            f"{skipped} missing, {len(unsupported)} unsupported, {failed} failed."
         )
         if total_files == 0 and skipped > 0:
             sys.exit(1)
@@ -628,7 +632,7 @@ def _write_ratings(argv: list[str] | None = None) -> None:
         with open(log_path, "a") as f:
             f.write("\n".join(header + log_lines + ["", "---", ""]))
 
-    if unsupported:
+    if unsupported or failed:
         sys.exit(1)
 
 
@@ -703,12 +707,8 @@ def _write_stats(argv: list[str] | None = None) -> None:
     log_lines: list[str] = []
 
     for song, path in targets:
-        if not path.exists():
-            missing += 1
-            print(f"  missing: {song.path}", file=sys.stderr)
-            continue
-        size = path.stat().st_size
         try:
+            size = path.stat().st_size
             plan = write_stats_to_file(
                 path,
                 rating=song.rating,
@@ -717,6 +717,10 @@ def _write_stats(argv: list[str] | None = None) -> None:
                 allow_decrease=args.allow_decrease,
                 dry_run=args.dry_run,
             )
+        except FileNotFoundError:
+            missing += 1
+            print(f"  missing: {song.path}", file=sys.stderr)
+            continue
         except UnsupportedFileError as exc:
             unsupported += 1
             print(f"  unsupported: {song.path}: {exc}", file=sys.stderr)
@@ -1549,7 +1553,7 @@ def _nd_stats(argv: list[str] | None = None) -> None:
     try:
         songs = client.get_all_stats()
         user = client.user
-    except (RuntimeError, httpx.HTTPError) as exc:
+    except (RuntimeError, httpx.HTTPError, SnapshotError) as exc:
         print(f"Error: export failed; no snapshot written: {exc}", file=sys.stderr)
         sys.exit(1)
     finally:

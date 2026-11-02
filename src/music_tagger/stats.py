@@ -133,21 +133,17 @@ class SongStats:
         """Map one native /api/song record.
 
         The native API omits zero and false, so an absent rating, play count,
-        or star becomes an explicit 0 or false here. Values are not coerced:
-        parse_snapshot rejects malformed ones before any file is written.
+        or star becomes an explicit 0 or false here. Supplied values are
+        validated without coercion before they enter the snapshot.
         """
-        return cls(
-            id=data.get("id", ""),
-            path=data.get("path", ""),
-            title=data.get("title") or "",
-            artist=data.get("artist") or "",
-            album=data.get("album") or "",
-            rating=data.get("rating") or 0,
-            rated_at=data.get("ratedAt") or None,
-            starred=data.get("starred", False),
-            starred_at=data.get("starredAt") or None,
-            play_count=data.get("playCount") or 0,
-            play_date=data.get("playDate") or None,
+        return cls.from_dict(
+            {
+                **data,
+                "rating": data.get("rating", 0),
+                "starred": data.get("starred", False),
+                "playCount": data.get("playCount", 0),
+            },
+            "native song",
         )
 
 
