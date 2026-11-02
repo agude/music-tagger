@@ -846,13 +846,19 @@ def _apply_stats_changes(audio: FLAC | MP3 | MP4, changes: list[TagChange]) -> N
             _set_mp4_field(audio, _MP4_ALIASES[field], value)
 
 
-def _flac_stats(lookup: Callable[[str], Sequence[str] | None]) -> dict[str, str]:
+def _flac_stats(
+    lookup: Callable[[str], Sequence[str] | None],
+) -> tuple[dict[str, str], frozenset[str]]:
+    """Each stats field's single value, and the fields whose stored values disagree."""
     current: dict[str, str] = {}
+    conflicts: set[str] = set()
     for name, key in _FLAC_KEYS.items():
-        values = lookup(key)
-        if values and values[0]:
-            current[name] = values[0]
-    return current
+        values = {value for value in lookup(key) or () if value}
+        if len(values) > 1:
+            conflicts.add(name)
+        elif values:
+            current[name] = values.pop()
+    return current, frozenset(conflicts)
 
 
 def _conflicts(fmps: FmpsStats) -> frozenset[str]:
@@ -982,10 +988,11 @@ def write_stats_to_file(
     """
     comments = read_flac_comments(path)
     if comments is not None:
+        current, conflicts = _flac_stats(comments.get)
         plan = _plan_stats(
             "flac",
-            _flac_stats(comments.get),
-            frozenset(),
+            current,
+            conflicts,
             rating=rating,
             play_count=play_count,
             clear=clear,
@@ -1007,7 +1014,8 @@ def write_stats_to_file(
     if audio is None:
         raise UnsupportedFileError("mutagen does not recognize the format")
     if isinstance(audio, FLAC):
-        kind, current, conflicts = "flac", _flac_stats(audio.get), frozenset[str]()
+        kind = "flac"
+        current, conflicts = _flac_stats(audio.get)
     elif isinstance(audio, MP3):
         kind = "mp3"
         current, conflicts = _mp3_stats(audio)

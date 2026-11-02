@@ -938,6 +938,48 @@ class TestWriteStats:
             write_stats_to_file(flac, play_count=3)
 
 
+class TestFlacMultiValueStats:
+    """A FLAC stats field with several stored values is never silently collapsed."""
+
+    @staticmethod
+    def _set_comments(path: Path, values: dict[str, list[str]]) -> None:
+        audio = FLAC(path)
+        for key, items in values.items():
+            audio[key] = items
+        audio.save()
+
+    def test_conflicting_play_counts_refuse_the_write(self, flac_album: Path) -> None:
+        flac = sorted(flac_album.glob("*.flac"))[0]
+        self._set_comments(flac, {"FMPS_PLAYCOUNT": ["5", "9"]})
+        before = flac.read_bytes()
+
+        with pytest.raises(MalformedStatsError, match="play count spellings disagree"):
+            write_stats_to_file(flac, play_count=7)
+
+        assert flac.read_bytes() == before
+
+    def test_identical_duplicate_play_counts_count_as_one(self, flac_album: Path) -> None:
+        flac = sorted(flac_album.glob("*.flac"))[0]
+        self._set_comments(flac, {"FMPS_PLAYCOUNT": ["5", "5"]})
+
+        plan = write_stats_to_file(flac, play_count=7)
+
+        assert [c.field for c in plan.changes] == ["fmps_playcount"]
+        comments = read_flac_comments(flac)
+        assert comments is not None
+        assert comments["FMPS_PLAYCOUNT"] == ["7"]
+
+    def test_conflicting_rating_blocks_a_rating_write(self, flac_album: Path) -> None:
+        flac = sorted(flac_album.glob("*.flac"))[0]
+        self._set_comments(flac, {"RATING": ["3", "4"]})
+        before = flac.read_bytes()
+
+        with pytest.raises(MalformedStatsError, match="RATING spellings disagree"):
+            write_stats_to_file(flac, rating=5)
+
+        assert flac.read_bytes() == before
+
+
 class TestUnsupportedRatingTarget:
     def test_unrecognized_file_raises(self, tmp_path: Path) -> None:
         path = tmp_path / "notes.flac"
