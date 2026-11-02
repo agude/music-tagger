@@ -1440,6 +1440,80 @@ class TestWriteStatsCommand:
         assert "cannot read snapshot" in capsys.readouterr().err
 
 
+class TestStatsEndToEnd:
+    """Export, write, and repeat over fixture files, with a fake Navidrome."""
+
+    @staticmethod
+    def _export(monkeypatch: pytest.MonkeyPatch, out: Path, songs: list[SongStats]) -> Path:
+        monkeypatch.setattr("music_tagger.cli.NavidromeClient", lambda: _FakeNavidromeClient(songs))
+        _nd(["stats", "--out", str(out)])
+        return out
+
+    def test_export_write_repeat_keeps_favorites_and_withheld_values(
+        self,
+        flac_album: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        track_1 = flac_album / "01 - Track 1.flac"
+        track_2 = flac_album / "02 - Track 2.flac"
+        track_3 = flac_album / "03 - Track 3.flac"
+        # A favorite another player wrote must survive the write.
+        audio = FLAC(track_1)
+        audio["STARRED"] = "2020-01-01T00:00:00Z"
+        audio.save()
+        songs = [
+            SongStats(
+                id="s1",
+                path=TRACK_1,
+                rating=4,
+                starred=True,
+                starred_at="2026-01-01T00:00:00Z",
+                play_count=9,
+            ),
+            SongStats(id="s2", path=TRACK_2, rating=0, starred=False, play_count=0),
+            SongStats(id="s3", path=TRACK_3, rating=0, starred=False, play_count=3),
+        ]
+
+        stats = self._export(monkeypatch, tmp_path / "stats.json", songs)
+        exported = json.loads(stats.read_text())
+        assert exported["songs"][0]["starred"] is True
+        assert exported["songs"][1]["rating"] == 0
+        assert exported["songs"][1]["playCount"] == 0
+
+        _write_stats(["--from", str(stats), "--root", str(tmp_path), "--no-log"])
+
+        first = _flac_keys(track_1)
+        assert first["RATING"] == ["4"]
+        assert first["FMPS_RATING"] == ["0.8"]
+        assert first["FMPS_PLAYCOUNT"] == ["9"]
+        assert first["STARRED"] == ["2020-01-01T00:00:00Z"]
+        assert _flac_keys(track_2)["FMPS_PLAYCOUNT"] == ["0"]
+        assert "RATING" not in _flac_keys(track_2)
+        assert _flac_keys(track_3)["FMPS_PLAYCOUNT"] == ["3"]
+        before = {path: path.read_bytes() for path in (track_1, track_2, track_3)}
+
+        _write_stats(["--from", str(stats), "--root", str(tmp_path), "--no-log"])
+
+        assert "0 changed, 3 unchanged" in capsys.readouterr().out
+        assert {path: path.read_bytes() for path in (track_1, track_2, track_3)} == before
+
+        # A later export with a zero rating and a lower count changes nothing.
+        lower = [
+            SongStats(id="s1", path=TRACK_1, rating=0, starred=False, play_count=2),
+        ]
+        stats = self._export(monkeypatch, tmp_path / "lower.json", lower)
+        _write_stats(["--from", str(stats), "--root", str(tmp_path), "--no-log"])
+
+        out = capsys.readouterr().out
+        assert "clear withheld" in out
+        assert "decrease withheld" in out
+        kept = _flac_keys(track_1)
+        assert kept["RATING"] == ["4"]
+        assert kept["FMPS_PLAYCOUNT"] == ["9"]
+
+
 class TestWriteRatingsLogging:
     @staticmethod
     def _ratings_file(tmp_path: Path) -> Path:
