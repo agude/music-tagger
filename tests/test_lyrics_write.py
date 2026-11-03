@@ -100,7 +100,18 @@ class TestPlanning:
         assert plan.status is WriteStatus.WRITE
         assert plan.content == b"New\n"
         assert plan.remove == ()
+        assert plan.replaces is True
         assert "replace existing lyrics" in plan.reason
+
+    def test_new_file_does_not_replace(self, flac_album: Path) -> None:
+        plan = _plan(flac_album, LyricsKind.PLAIN, "New")
+        assert plan.status is WriteStatus.WRITE
+        assert plan.replaces is False
+
+    def test_empty_sidecar_overwrite_does_not_count_as_replacing(self, flac_album: Path) -> None:
+        (flac_album / "01 - Track 1.txt").write_bytes(b"")
+        plan = _plan(flac_album, LyricsKind.PLAIN, "New")
+        assert plan.replaces is False
 
     def test_replace_removes_stale_other_type_sidecar(self, flac_album: Path) -> None:
         (flac_album / "01 - Track 1.txt").write_text("Plain\n", encoding="utf-8")

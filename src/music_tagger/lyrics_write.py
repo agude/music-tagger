@@ -39,6 +39,7 @@ class SidecarPlan:
     target: Path | None = None
     content: bytes | None = None  # None when the target is not written
     remove: tuple[Path, ...] = ()  # stale other-type sidecars; only under replace
+    replaces: bool = False  # True when the write overwrites existing lyric content
 
 
 def _encode(text: str, kind: LyricsKind) -> bytes:
@@ -117,6 +118,7 @@ def plan_sidecar_write(
         target=target,
         content=content,
         remove=stale,
+        replaces=has_content,
     )
 
 
