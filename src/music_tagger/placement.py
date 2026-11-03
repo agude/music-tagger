@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .lyrics import lyric_sidecars
 from .tags import AlbumTags, TrackTags
 
 DEFAULT_LIBRARY_ROOT = Path("/mnt/synology/media/music")
@@ -59,6 +60,7 @@ class PlacementPlan:
 _NON_AUDIO_EXTENSIONS = {
     ".cue",
     ".log",
+    ".lrc",
     ".toc",
     ".txt",
     ".jpg",
@@ -95,13 +97,23 @@ def compute_placement(
     destination = root / artist_name / album_dir_name
 
     multi_disc = is_multi_disc(album)
-    mappings = [
-        FileMapping(source=track.path, dest=destination / track_filename(track, multi_disc))
-        for track in album.tracks
-    ]
+    mappings: list[FileMapping] = []
+    # Lyric sidecars take the placed audio's name, so Navidrome pairs them
+    # with the right track. They are claimed here, so the generic non-audio
+    # pass below does not also copy them under their own names.
+    claimed: set[Path] = set()
+    for track in album.tracks:
+        audio_name = track_filename(track, multi_disc)
+        mappings.append(FileMapping(source=track.path, dest=destination / audio_name))
+        for sidecar in lyric_sidecars(track.path):
+            claimed.add(sidecar)
+            dest_name = Path(audio_name).stem + sidecar.suffix
+            mappings.append(FileMapping(source=sidecar, dest=destination / dest_name))
 
     if include_non_audio and album.directory.is_dir():
         for f in sorted(album.directory.iterdir()):
+            if f in claimed:
+                continue
             if f.is_file() and f.suffix.lower() in _NON_AUDIO_EXTENSIONS:
                 # Whipper names these after the disc title, which can hold
                 # characters (such as ":") that the NAS share mangles.

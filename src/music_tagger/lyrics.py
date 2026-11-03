@@ -164,6 +164,16 @@ def _read_sidecar(path: Path, source: Source) -> LyricsEntry:
     return LyricsEntry(source=source, kind=classify(text, expect_timed=expect_timed), path=path)
 
 
+def lyric_sidecars(audio: Path) -> list[Path]:
+    """Existing `<audio-stem>.lrc` and `<audio-stem>.txt` beside an audio file, LRC first.
+
+    The match is by exact basename. Other `.txt` files in the album are not
+    lyric sidecars and are never returned.
+    """
+    candidates = (audio.with_suffix(LRC_SUFFIX), audio.with_suffix(TXT_SUFFIX))
+    return [sidecar for sidecar in candidates if sidecar.is_file()]
+
+
 def inspect_track(path: Path) -> TrackLyrics:
     """Collect every lyric source for one audio file. Read-only.
 

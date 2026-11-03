@@ -1961,10 +1961,12 @@ def _rename(argv: list[str] | None = None) -> None:
         print(f"Error: no audio files in {target}.", file=sys.stderr)
         sys.exit(1)
 
+    from .lyrics import lyric_sidecars
     from .placement import is_multi_disc, track_filename
 
     multi_disc = is_multi_disc(album)
     renames: list[tuple[str, str]] = []
+    sidecar_renames: list[tuple[str, str]] = []
     for track in album.tracks:
         title = track.tags.get("title")
         tracknumber = track.tags.get("tracknumber")
@@ -1989,22 +1991,39 @@ def _rename(argv: list[str] | None = None) -> None:
             print(f"  {track.path.name}: skipped ('{new_name}' already exists)")
             continue
 
+        # Lyric sidecars move with their audio. Every target is checked before
+        # anything moves, so a conflict never leaves audio renamed and its
+        # sidecar behind.
+        moves = [(s, s.with_name(new_path.stem + s.suffix)) for s in lyric_sidecars(track.path)]
+        blocked = next((dst for _, dst in moves if dst.exists()), None)
+        if blocked is not None:
+            print(f"  {track.path.name}: skipped ('{blocked.name}' already exists)")
+            continue
+
         if args.dry_run:
             print(f"  {track.path.name} -> {new_name}")
+            for src, dst in moves:
+                print(f"  {src.name} -> {dst.name}")
         else:
             track.path.rename(new_path)
             print(f"  {track.path.name} -> {new_name}")
             renames.append((track.path.name, new_name))
+            for src, dst in moves:
+                src.rename(dst)
+                print(f"  {src.name} -> {dst.name}")
+                sidecar_renames.append((src.name, dst.name))
 
     if args.dry_run:
         print(f"\n(dry run — {len(album.tracks)} tracks)")
         return
 
     print(f"Renamed {len(renames)} file(s).")
+    if sidecar_renames:
+        print(f"Renamed {len(sidecar_renames)} lyric sidecar(s).")
     cues = _update_cue_sheets(target, dict(renames))
     log_path = _log_path(args)
     if log_path and renames:
-        _write_rename_log(log_path, album, renames, cues)
+        _write_rename_log(log_path, album, renames, cues, sidecar_renames)
 
 
 def _update_cue_sheets(album_dir: Path, renames: dict[str, str]) -> list[Path]:
@@ -2018,7 +2037,11 @@ def _update_cue_sheets(album_dir: Path, renames: dict[str, str]) -> list[Path]:
 
 
 def _write_rename_log(
-    log_path: Path, album: AlbumTags, renames: list[tuple[str, str]], cues: list[Path]
+    log_path: Path,
+    album: AlbumTags,
+    renames: list[tuple[str, str]],
+    cues: list[Path],
+    sidecars: list[tuple[str, str]],
 ) -> None:
     timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     lines = [
@@ -2031,6 +2054,8 @@ def _write_rename_log(
     ]
     for old, new in renames:
         lines.append(f"- `{old}` → `{new}`")
+    for old, new in sidecars:
+        lines.append(f"- Lyric sidecar `{old}` → `{new}`")
     for cue in cues:
         lines.append(f"- CUE updated: `{cue.name}`")
     lines += ["", "---", ""]
