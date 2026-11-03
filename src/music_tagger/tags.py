@@ -669,6 +669,51 @@ def write_locks(path: Path, fields: list[str], *, timestamp: str = "") -> None:
     audio.save()
 
 
+# Embedded lyric fields: FLAC Vorbis LYRICS, MP3 ID3 USLT frames (one per
+# language/description), and M4A ©lyr. The M4A key is an ordinary atom, not a
+# freeform one, so it stays out of the write_tags path that refuses M4A.
+LYRICS_VORBIS_KEY = "LYRICS"
+LYRICS_MP3_FRAME = "USLT"
+LYRICS_MP4_ATOM = "\xa9lyr"
+
+
+@dataclass(frozen=True)
+class EmbeddedLyrics:
+    """One lyric value stored in an audio file. language and description are MP3 only."""
+
+    text: str
+    language: str = ""
+    description: str = ""
+
+
+def read_embedded_lyrics(path: Path) -> list[EmbeddedLyrics]:
+    """Read every embedded lyric value in a file. Read-only.
+
+    Returns [] when the file holds no lyrics. Raises UnsupportedFileError when
+    mutagen cannot identify the file, and MutagenError or OSError when it cannot
+    read it. Callers decide how to report those.
+    """
+    audio = MutagenFile(path)
+    if isinstance(audio, FLAC):
+        return [
+            EmbeddedLyrics(text=str(v))
+            for v in audio.get(LYRICS_VORBIS_KEY, [])  # type: ignore[no-untyped-call]
+        ]
+    if isinstance(audio, MP3):
+        if audio.tags is None:
+            return []
+        return [
+            EmbeddedLyrics(text=str(frame.text), language=frame.lang, description=frame.desc)
+            for frame in audio.tags.getall(LYRICS_MP3_FRAME)
+        ]
+    if isinstance(audio, MP4):
+        return [
+            EmbeddedLyrics(text=str(v))
+            for v in audio.get(LYRICS_MP4_ATOM, [])  # type: ignore[no-untyped-call]
+        ]
+    raise UnsupportedFileError(f"not a FLAC, MP3, or M4A file: {path}")
+
+
 RATING_TO_POPM = {1: 1, 2: 64, 3: 128, 4: 196, 5: 255}
 # The writer owns only the POPM frame with an empty owner. Frames from other
 # owners belong to other players: this module never changes them, or their counts.
