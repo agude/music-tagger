@@ -333,7 +333,9 @@ Recovery limits:
 ## Lyrics
 
 `lyrics` is independent of tagging. `apply`, `fix-album`, and `rip-album` do
-not call it, and `apply` does not depend on LRCLIB.
+not call it, and `apply` does not depend on LRCLIB. The `lyrics-album` skill
+drives it. An LLM makes the per-track judgment; no person has to choose a
+record.
 
 ```bash
 uv run music-tagger lyrics <album-dir>                        # inspect; no network, no writes
@@ -378,13 +380,20 @@ Flags that conflict are rejected with exit 2 before any work starts:
 ### Selection
 
 - LRCLIB is used for fetching only. Nothing is published back.
-- Candidates come from `/api/search` with artist, title, and album. `/api/get`
-  is used only for an explicit `--lyrics-id`.
+- Candidates come from `/api/search` with artist, title, and album. When that
+  search reaches the 20-record cap, the same artist and title are searched
+  without the album filter, and the two results are merged by record ID. The
+  broader search only adds candidates; if it is not capped, the merged set is
+  complete for that artist and title. `/api/get` is used only for an explicit
+  `--lyrics-id`.
 - A record is chosen automatically only when exactly one candidate matches the
   artist and title, lies within 2 s of the audio's duration, and matches the
   album. Version terms are material: `Song (Live)` does not match `Song`.
 - Otherwise the outcome is `ambiguous`, `no_match`, or `review`, and the
-  evidence for each candidate is printed. A search that returns the 20-record
+  evidence for each candidate is printed. The LLM operator judges these from
+  that evidence and passes its chosen record with `--lyrics-id`. Each candidate
+  line says what the record offers: synchronized text, plain text,
+  instrumental, or no text. A search that returns the 20-record
   cap is `review`, because the match may have been cut off.
 - The chosen record's synchronized text is preferred, then its plain text.
   Texts from different records never mix.
@@ -422,8 +431,9 @@ Flags that conflict are rejected with exit 2 before any work starts:
 - Exit 1: provider failure, rate limit, unreadable input, refused text, or a
   write error.
 - Exit 2: a usage error (see the table above).
-- Exit 3: `--fetch` left a track unresolved (`ambiguous`, `review`, or
-  `missing_metadata`). Other tracks are still written.
+- Exit 3: `--fetch` left a track for judgment (`ambiguous`, `review`, or
+  `missing_metadata`). Other tracks are still written. The LLM operator
+  decides those tracks with `--lyrics-id` or leaves them without lyrics.
 
 ### Logging
 
