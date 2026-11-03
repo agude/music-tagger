@@ -419,7 +419,9 @@ Flags that conflict are rejected with exit 2 before any work starts:
   malformed one is kept.
 - `--replace` overwrites the target. It also removes the other-type sidecar of
   the same basename. The plan shows that removal, and the log records it. No
-  other `.txt` file is ever removed. Embedded lyrics are not changed.
+  other `.txt` file is ever removed. Embedded lyrics are not changed in the
+  file, but Navidrome shows the sidecar in their place, so they are hidden
+  while the sidecar exists.
 - Identical text is `unchanged`, and no file is touched.
 - The first release writes line-timed LRC only. It does not write word timing,
   translate, or synthesize lyrics.
@@ -452,7 +454,8 @@ inspection write no log.
 - Navidrome's built-in web player does not show external `.lrc` sidecars
   (navidrome/navidrome#4148, open; the maintainer says it will not be fixed in
   the current UI). Whether it shows external `.txt` is not confirmed. Users
-  report that it shows only embedded lyrics.
+  report that it shows only embedded lyrics. Accepted for now: sidecar lyrics
+  are checked in other clients (Symfonium), not the web player.
 - The server serves structured lyrics through the OpenSubsonic v2 lyrics
   extensions (release notes for v0.63.0). A test on the live server returned
   synchronized lines for tracks whose lyrics come from another source, but not
