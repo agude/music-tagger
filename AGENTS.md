@@ -404,10 +404,13 @@ Flags that conflict are rejected with exit 2 before any work starts:
   Texts from different records never mix.
 - An instrumental record creates no file (`instrumental`). A matched record
   with no usable text is `no_text`.
-- Requests have explicit timeouts and are spaced 0.25 s apart. HTTP 429 and
+- Requests have explicit timeouts and are spaced 0.35 s apart (about 170/min, under the registered app's ~180/min
+  allowance). HTTP 429 and
   5xx responses are retried, honoring `Retry-After` up to 60 s. A longer wait
   fails at once as `rate_limited`. The User-Agent names the project; the
-  operator's email is not sent.
+  operator's email is not sent. Every request also sends the public LRCLIB
+  Application ID (`Lrclib-App-Id`, `APP_ID` in `lrclib.py`), which the
+  developer portal registers for this app. It is not a credential.
 
 ### Writes (`--fetch`)
 

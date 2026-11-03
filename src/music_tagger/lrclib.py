@@ -23,10 +23,17 @@ BASE_URL = "https://lrclib.net/api"
 # LRCLIB asks clients to name the app, its version, and a homepage. The project
 # URL is used rather than the operator's email, which is not sent to LRCLIB.
 USER_AGENT = "music-tagger/0.1 (https://github.com/agude/music-tagger)"
+# The LRCLIB developer-portal Application ID for this client-side app. LRCLIB
+# documents it as public and self-asserted, not a credential, so it lives in
+# source. It is sent with every request as the Lrclib-App-Id header.
+APP_ID = "W02Uia6AAH-CdVxXklrftY9hwTZ3lHIj42dAgjK2Ghk"
 CONNECT_TIMEOUT_SECS = 5.0
 READ_TIMEOUT_SECS = 10.0
-# LRCLIB suggests 200-500 ms between requests during batch work.
-MIN_INTERVAL_SECS = 0.25
+# The registered client-side allowance is about 180 requests/min per IP, and
+# LRCLIB says the figure is not a contract. 0.35 s between requests is about
+# 170/min, which keeps a margin under it. It is also within the 200-500 ms
+# range LRCLIB suggests for batch work.
+MIN_INTERVAL_SECS = 0.35
 RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 MAX_ATTEMPTS = 4
 BACKOFF_SECS = 1.0
@@ -123,7 +130,11 @@ class LrclibClient:
     ) -> None:
         self._client = httpx.Client(
             base_url=BASE_URL,
-            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "application/json",
+                "Lrclib-App-Id": APP_ID,
+            },
             timeout=httpx.Timeout(READ_TIMEOUT_SECS, connect=CONNECT_TIMEOUT_SECS),
             transport=transport,
         )

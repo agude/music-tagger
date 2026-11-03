@@ -7,6 +7,8 @@ import httpx
 import pytest
 
 from music_tagger.lrclib import (
+    APP_ID,
+    MIN_INTERVAL_SECS,
     SEARCH_RESULT_CAP,
     LrclibClient,
     LyricsRecord,
@@ -94,6 +96,24 @@ class TestClient:
         agent = seen[0].headers["User-Agent"]
         assert agent.startswith("music-tagger/")
         assert "@" not in agent
+
+    def test_every_request_sends_app_id(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            if request.url.path == "/api/search":
+                return httpx.Response(200, json=[])
+            return httpx.Response(200, json=_record())
+
+        client, _ = _client(respond)
+        client.search(title="Song", artist="Band")
+        client.get(1)
+        assert [r.headers["Lrclib-App-Id"] for r in seen] == [APP_ID, APP_ID]
+
+    def test_default_pacing_stays_within_registered_allowance(self) -> None:
+        # Registered client-side apps get about 180 requests/min per IP.
+        assert 60 / MIN_INTERVAL_SECS <= 180
 
     def test_only_get_requests(self) -> None:
         methods: list[str] = []
