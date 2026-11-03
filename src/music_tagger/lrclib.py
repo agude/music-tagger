@@ -263,6 +263,17 @@ class Selection:
     verdicts: tuple[Verdict, ...] = ()
 
 
+def _merge_records(first: list[LyricsRecord], second: list[LyricsRecord]) -> list[LyricsRecord]:
+    """Union of two result lists by record id, keeping the first occurrence."""
+    seen: set[int] = set()
+    merged: list[LyricsRecord] = []
+    for record in [*first, *second]:
+        if record.id not in seen:
+            seen.add(record.id)
+            merged.append(record)
+    return merged
+
+
 def _verdict(record: LyricsRecord, evidence: TrackEvidence) -> Verdict:
     notes: list[str] = []
     artist_ok = bool(_key(evidence.artist)) and _key(record.artist_name) == _key(evidence.artist)
@@ -292,6 +303,20 @@ def _verdict(record: LyricsRecord, evidence: TrackEvidence) -> Verdict:
         notes.append("album matches")
     else:
         notes.append(f"album differs: {record.album_name!r}")
+
+    # What the record offers, so the caller can judge without fetching it.
+    if record.instrumental:
+        notes.append("instrumental")
+    else:
+        offered = [
+            label
+            for label, text in (
+                ("synced text", record.synced_lyrics),
+                ("plain text", record.plain_lyrics),
+            )
+            if text
+        ]
+        notes.append("has " + " and ".join(offered) if offered else "no lyric text")
 
     return Verdict(
         record=record,
@@ -365,6 +390,15 @@ def lookup(client: LrclibClient, evidence: TrackEvidence) -> Selection:
 
     try:
         result = client.search(title=evidence.title, artist=evidence.artist, album=evidence.album)
+        if result.truncated and evidence.album:
+            # Dropping the album filter only broadens the search. If the broader
+            # search is not capped, it is complete for this artist and title, so
+            # its results can settle the choice that the capped search could not.
+            broader = client.search(title=evidence.title, artist=evidence.artist)
+            result = SearchResult(
+                records=_merge_records(broader.records, result.records),
+                truncated=broader.truncated,
+            )
     except ProviderError as exc:
         return _failure(exc)
 
@@ -402,7 +436,7 @@ def lookup(client: LrclibClient, evidence: TrackEvidence) -> Selection:
         )
     return Selection(
         Outcome.AMBIGUOUS,
-        f"{len(plausible)} plausible records; choose one with an explicit record id",
+        f"{len(plausible)} plausible records; judge them from the evidence and pass the chosen id",
         verdicts=verdicts,
     )
 
