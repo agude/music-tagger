@@ -374,8 +374,13 @@ Flags that conflict are rejected with exit 2 before any work starts:
   whose content does not match its extension (untimed text in `.lrc`, timed
   text in `.txt`). A track is `missing` when it has no lyric source, and
   `unreadable` when its audio or a sidecar cannot be read.
-- Navidrome's default `LyricsPriority` reads sidecars before embedded lyrics,
-  per the research in `plan.md`. B6 verifies this on the server.
+- Navidrome 0.63's default `LyricsPriority` is
+  `.ttml,.yaml,.yml,.elrc,.lrc,.srt,.txt,embedded` (release notes for v0.63.0).
+  So a sidecar wins over embedded lyrics, `.lrc` wins over `.txt`, and `.txt`
+  is read. A sidecar is found by its audio path with the extension replaced
+  (`sidecarRelPath := path[:len(ext)] + suffix`, an exact match in
+  `core/lyrics/sources.go`). The server here is 0.64.2, so re-check the default
+  when it changes.
 
 ### Selection
 
@@ -444,11 +449,17 @@ inspection write no log.
 
 ### Limits
 
-- Navidrome's web UI does not show synchronized lyrics in full
-  (navidrome/navidrome#4148). The server is expected to serve sidecar lyrics
-  through the OpenSubsonic lyrics endpoint. B6 verifies this.
-- Client display (Feishin, Symfonium), streaming, and offline behavior are
-  unverified. Do not claim offline lyrics until B6 records a result.
+- Navidrome's built-in web player does not show external `.lrc` sidecars
+  (navidrome/navidrome#4148, open; the maintainer says it will not be fixed in
+  the current UI). Whether it shows external `.txt` is not confirmed. Users
+  report that it shows only embedded lyrics.
+- The server serves structured lyrics through the OpenSubsonic v2 lyrics
+  extensions (release notes for v0.63.0). A test on the live server returned
+  synchronized lines for tracks whose lyrics come from another source, but not
+  yet for a sidecar: the sidecar entry was not reachable through the API.
+- Symfonium displays the sidecar lyrics on the live library (confirmed by the
+  user, 2026-11-03). Feishin is not tested. Offline behavior is not verified.
+  Do not claim offline lyrics until B6 records a result.
 
 ## Tag mapping details
 
