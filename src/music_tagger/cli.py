@@ -31,6 +31,9 @@ from .coverart import (
 )
 from .cue import missing_cue_references, rewrite_cue_references
 from .discid import parse_rip_dir
+from .lrclib import LrclibClient, Outcome, Selection, TrackEvidence, fetch_explicit, lookup
+from .lyrics import LyricsEntry, Source, inspect_track
+from .lyrics_write import SidecarPlan, WriteStatus, apply_plan, plan_sidecar_write
 from .musicbrainz import MBRelease, MusicBrainzClient
 from .navidrome import NavidromeClient, SongRating
 from .placement import FileMapping, PlacementPlan, compute_placement, copy_files
@@ -1941,6 +1944,254 @@ def _write_genre_log(log_path: Path, album: AlbumTags, genre: str, count: int) -
         f.write("\n".join(lines))
 
 
+EXIT_LYRICS_UNRESOLVED = 3  # A requested write waits on a choice only the operator can make.
+_LYRICS_UNRESOLVED = frozenset({Outcome.AMBIGUOUS, Outcome.REVIEW, Outcome.MISSING_METADATA})
+_LYRICS_FAILED = frozenset({Outcome.PROVIDER_FAILURE, Outcome.RATE_LIMITED})
+
+
+def _lyrics_usage_error(args: argparse.Namespace) -> str | None:
+    """Return why the lyrics flags conflict, or None. Checked before any work starts."""
+    modes = [
+        flag
+        for flag, on in (
+            ("--lookup", args.lookup),
+            ("--fetch", args.fetch),
+            ("--embed", args.embed),
+        )
+        if on
+    ]
+    writing = args.fetch or args.embed
+    if len(modes) > 1:
+        return f"{' and '.join(modes)} cannot be combined; choose one mode"
+    if args.dry_run and not writing:
+        return "--dry-run needs --fetch or --embed; inspect and lookup never write"
+    if args.replace and not writing:
+        return "--replace needs --fetch or --embed; there is nothing to replace"
+    if args.lyrics_id is not None and not (args.fetch or args.lookup):
+        return "--lyrics-id needs --fetch or --lookup; it selects an LRCLIB record"
+    if args.lyrics_id is not None and args.embed:
+        return "--embed reads local sidecars only; it cannot take --lyrics-id"
+    if args.lyrics_id is not None and args.track is None:
+        return "--lyrics-id needs --track; a record must not apply to the whole album"
+    if args.disc is not None and args.track is None:
+        return "--disc needs --track"
+    if args.embed:
+        return "--embed is not available yet"
+    return None
+
+
+def _lyrics_tracks(album: AlbumTags, track_no: int | None, disc: int | None) -> list[TrackTags]:
+    if track_no is None:
+        return list(album.tracks)
+    matches = [
+        t
+        for t in album.tracks
+        if _parse_track_number(t) == track_no and (disc is None or _parse_disc_number(t) == disc)
+    ]
+    if len(matches) != 1:
+        where = f" on disc {disc}" if disc is not None else ""
+        raise ValueError(f"track {track_no}{where} matches {len(matches)} tracks; need one")
+    return matches
+
+
+def _describe_lyric_entry(entry: LyricsEntry) -> str:
+    if entry.source is Source.EMBEDDED:
+        detail = " ".join(part for part in (entry.language, entry.description) if part)
+        where = f"embedded ({detail})" if detail else "embedded"
+    else:
+        where = f"{entry.source.value} ({entry.path.name if entry.path else ''})"
+    return f"{where}: {entry.kind.value}"
+
+
+def _print_lyrics_inspection(tracks: list[TrackTags]) -> None:
+    results = [inspect_track(track.path) for track in tracks]
+    counts: dict[str, int] = {}
+    for result in results:
+        print(f"{result.path.name}: {result.status}")
+        for entry in result.entries:
+            print(f"    {_describe_lyric_entry(entry)}")
+        for error in result.errors:
+            print(f"    error: {error}")
+        counts[result.status] = counts.get(result.status, 0) + 1
+    print("\nCoverage: " + ", ".join(f"{s} {n}" for s, n in sorted(counts.items())))
+
+
+def _print_lyrics_selection(track: TrackTags, selection: Selection) -> None:
+    print(f"{track.path.name}: {selection.outcome.value}")
+    print(f"    {selection.reason}")
+    for verdict in selection.verdicts:
+        mark = " (plausible)" if verdict.plausible else ""
+        print(f"    record {verdict.record.id}{mark}: {'; '.join(verdict.notes)}")
+
+
+def _fetch_lyrics_track(
+    track: TrackTags,
+    selection: Selection,
+    *,
+    replace: bool,
+    dry_run: bool,
+    log: _BatchLog,
+) -> tuple[str, bool]:
+    """Plan and, unless dry run, write one track's sidecar. Returns (label, failed).
+
+    Only a SELECTED record reaches the writer. Any other outcome is labelled
+    with that outcome and writes nothing.
+    """
+    if selection.outcome is not Outcome.SELECTED or selection.lyrics is None:
+        return selection.outcome.value, False
+    if selection.record is None:
+        raise AssertionError("a selected lyric always has a record")
+
+    plan: SidecarPlan = plan_sidecar_write(
+        inspect_track(track.path),
+        selection.lyrics.kind,
+        selection.lyrics.text,
+        replace=replace,
+    )
+    print(f"    {plan.status.value}: {plan.reason}")
+    if plan.status is WriteStatus.REFUSED:
+        return plan.status.value, True
+    if plan.status is not WriteStatus.WRITE:
+        return plan.status.value, False
+    if dry_run:
+        return "would write", False
+
+    try:
+        apply_plan(plan)
+    except OSError as exc:
+        print(f"    error: {exc}", file=sys.stderr)
+        return "failed", True
+
+    kind = selection.lyrics.kind.value
+    if plan.content is not None and plan.target is not None:
+        how = "replaced existing lyrics" if plan.replaces else "new file"
+        log.add(
+            f"- `{track.path.name}`: wrote `{plan.target.name}` from LRCLIB record "
+            f"{selection.record.id} ({kind}, {how})"
+        )
+    for path in plan.remove:
+        log.add(f"- `{track.path.name}`: removed stale `{path.name}`")
+    return "wrote", False
+
+
+def _lyrics(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger lyrics",
+        description="Inspect lyrics for an album, look up LRCLIB candidates, or write "
+        "sidecar lyrics. With no mode, only inspects: no network, no writes.",
+    )
+    parser.add_argument("path", type=Path, help="Album directory.")
+    parser.add_argument(
+        "--lookup",
+        action="store_true",
+        help="Search LRCLIB and show each candidate with its evidence. "
+        "Uses the network; writes nothing.",
+    )
+    parser.add_argument(
+        "--fetch",
+        action="store_true",
+        help="Choose LRCLIB lyrics and save them as <audio-stem>.lrc or .txt beside each track.",
+    )
+    parser.add_argument("--embed", action="store_true", help="Not available yet.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="With --fetch, show what would be written."
+    )
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="With --fetch, replace existing lyrics and remove a stale sidecar of the other type.",
+    )
+    parser.add_argument("--track", type=int, metavar="N", help="Only track number N.")
+    parser.add_argument(
+        "--disc", type=int, metavar="D", help="Disc number D, with --track, on multi-disc albums."
+    )
+    parser.add_argument(
+        "--lyrics-id",
+        type=int,
+        metavar="ID",
+        help="Use LRCLIB record ID for the --track track instead of searching. Needs --track.",
+    )
+    _add_log_arguments(parser)
+    args = parser.parse_args(argv)
+
+    if message := _lyrics_usage_error(args):
+        parser.error(message)
+
+    target: Path = args.path.resolve()
+    if not target.is_dir():
+        print(f"Error: {target} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+    album = read_album(target)
+    if not album.tracks:
+        print(f"Error: no audio files in {target}.", file=sys.stderr)
+        sys.exit(1)
+    try:
+        tracks = _lyrics_tracks(album, args.track, args.disc)
+    except ValueError as exc:
+        print(f"Error: {exc}.", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.lookup and not args.fetch:
+        _print_lyrics_inspection(tracks)
+        return
+
+    client = LrclibClient()
+    log_path = None if args.dry_run else _log_path(args)
+    stamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    log = _BatchLog(
+        log_path,
+        [
+            "## Lyrics",
+            "",
+            f"- **Date:** {stamp}",
+            f"- **Album:** {album.artist} — {album.album}",
+            "",
+        ],
+    )
+    labels: dict[str, int] = {}
+    failed = unresolved = False
+    try:
+        for track in tracks:
+            evidence = TrackEvidence(
+                title=track.tags.get("title", ""),
+                artist=track.tags.get("artist", ""),
+                album=track.tags.get("album", ""),
+                duration_secs=track.duration_secs or None,
+            )
+            if args.lyrics_id is not None:
+                selection = fetch_explicit(client, args.lyrics_id, evidence)
+            else:
+                selection = lookup(client, evidence)
+            _print_lyrics_selection(track, selection)
+            if selection.outcome in _LYRICS_FAILED:
+                failed = True
+            if args.fetch and selection.outcome in _LYRICS_UNRESOLVED:
+                unresolved = True
+            if args.fetch:
+                label, track_failed = _fetch_lyrics_track(
+                    track,
+                    selection,
+                    replace=args.replace,
+                    dry_run=args.dry_run,
+                    log=log,
+                )
+                failed = failed or track_failed
+            else:
+                label = selection.outcome.value
+            labels[label] = labels.get(label, 0) + 1
+    finally:
+        log.close()
+
+    summary = ", ".join(f"{count} {label}" for label, count in sorted(labels.items()))
+    print(f"\nSummary: {summary or 'no tracks'}")
+    if args.dry_run:
+        print("(dry run — nothing written)")
+    if failed:
+        sys.exit(1)
+    if unresolved:
+        sys.exit(EXIT_LYRICS_UNRESOLVED)
+
+
 def _rename(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="music-tagger rename",
@@ -2613,6 +2864,7 @@ def _register_commands() -> dict[str, tuple[str, Callable[[list[str] | None], No
         "apply": ("Run tag, art, genre, rename, and replaygain on an album.", _apply),
         "place": ("Copy a finished album into the library.", _place),
         "genre": ("Set or show the genre meta-grouping tag.", _genre),
+        "lyrics": ("Inspect, look up, or write lyric sidecars for an album.", _lyrics),
         "lock": ("Lock fields so `tag` keeps them, or show locks.", _lock),
         "unlock": ("Unlock fields so `tag` can change them.", _unlock),
         "rename": ("Rename files to 'NN. Title.ext' from tags.", _rename),

@@ -107,7 +107,7 @@ def plan_sidecar_write(
             target=target,
         )
 
-    reason = f"write {target.name}"
+    reason = f"new file {target.name}"
     if has_content:
         reason = f"replace existing lyrics with {target.name}"
     if stale:

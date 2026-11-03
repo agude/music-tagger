@@ -91,6 +91,23 @@ with `--allow-decrease`. Both withheld changes are reported. Only the
 includes others such as `Podcasts`. The tag mapping,
 policy, and recovery limits are in AGENTS.md under "Ratings and play counts".
 
+## Lyrics
+
+Look up LRCLIB lyrics for an album and save them as `.lrc` (synchronized) or
+`.txt` (plain) sidecars beside each track. With no mode, `lyrics` only
+inspects: it makes no network calls and writes nothing.
+
+```bash
+uv run music-tagger lyrics "/path/to/Artist/Album (Year)"                  # inspect
+uv run music-tagger lyrics "/path/to/Artist/Album (Year)" --lookup         # candidates
+uv run music-tagger lyrics "/path/to/Artist/Album (Year)" --fetch --dry-run
+uv run music-tagger lyrics "/path/to/Artist/Album (Year)" --fetch
+```
+
+Existing lyrics are kept unless `--replace` is given. The selection rules,
+outcomes, exit codes, and the limits of Navidrome's display are in AGENTS.md
+under "Lyrics".
+
 ## Supported formats
 
 - FLAC (Vorbis Comments)

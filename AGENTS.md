@@ -129,6 +129,12 @@ Key CLI subcommands, driven by Claude Code in conversation:
     `.cue`, and `.toc` after the disc title, and a `:` in it made the NAS
     store them as 8.3 names such as `SFYL6N~T.LOG`.
 
+11. `uv run music-tagger lyrics <album-dir> [--track N [--disc D]] [--lookup | --fetch [--dry-run] [--replace] [--lyrics-id ID]]`
+    — with no mode, inspects embedded lyrics and `.lrc`/`.txt` sidecars: no
+    network, no writes. `--lookup` searches LRCLIB and shows each candidate's
+    evidence. `--fetch` saves the chosen lyrics as sidecars. Details are under
+    "Lyrics" below.
+
 ## Library workflow
 
 **For ripping a new CD**, use the `rip-album` skill: `rip` → `candidates`
@@ -181,6 +187,9 @@ src/music_tagger/
 ├── stats.py         # Statistics snapshot: model, validation, atomic write
 ├── replaygain.py    # ReplayGain 2.0 tagging via rsgain
 ├── ripper.py        # CD ripping via whipper (AccurateRip)
+├── lyrics.py        # Lyric readers, classification, inspection (read-only)
+├── lrclib.py        # LRCLIB client (fetch only) and candidate policy
+├── lyrics_write.py  # Lyric sidecar plans and atomic writes
 └── cli.py           # Argparse entry point (all subcommands)
 ```
 
@@ -321,6 +330,116 @@ Recovery limits:
   Navidrome. The writer keeps them unless `--clear` or `--allow-decrease` is
   passed.
 
+## Lyrics
+
+`lyrics` is independent of tagging. `apply`, `fix-album`, and `rip-album` do
+not call it, and `apply` does not depend on LRCLIB.
+
+```bash
+uv run music-tagger lyrics <album-dir>                        # inspect; no network, no writes
+uv run music-tagger lyrics <album-dir> --lookup               # candidates; read-only
+uv run music-tagger lyrics <album-dir> --fetch --dry-run      # plan the writes
+uv run music-tagger lyrics <album-dir> --fetch                # write sidecars
+uv run music-tagger lyrics <album-dir> --fetch --replace      # replace existing lyrics
+uv run music-tagger lyrics <album-dir> --track 3 --lookup --lyrics-id 12345
+uv run music-tagger lyrics <album-dir> --track 3 --fetch --lyrics-id 12345
+```
+
+Flags that conflict are rejected with exit 2 before any work starts:
+
+| Flags | Rejected because |
+| --- | --- |
+| two of `--lookup`, `--fetch`, `--embed` | one mode per run |
+| `--dry-run` without `--fetch` | inspect and lookup never write |
+| `--replace` without `--fetch` | there is nothing to replace |
+| `--lyrics-id` without `--fetch` or `--lookup` | it selects an LRCLIB record |
+| `--lyrics-id` without `--track` | a record must not apply to the whole album |
+| `--embed` with `--lyrics-id` | embedding reads local sidecars only |
+| `--disc` without `--track` | the disc qualifies a track number |
+
+`--embed` is not available yet. It is built only if client verification (B6 in
+`plan.md`) shows that an installed client needs embedded lyrics.
+
+### Sources and classification
+
+- Embedded: FLAC `LYRICS`, MP3 `USLT` (each language and description is
+  reported separately), M4A `©lyr`.
+- Sidecars: `<audio-stem>.lrc` (synchronized) and `<audio-stem>.txt` (plain),
+  matched by exact basename, including the disc prefix and Unicode. Other
+  `.txt` files in the album are never lyric sidecars.
+- Each source is `synchronized`, `plain`, `empty`, or `malformed`. Malformed
+  means: not UTF-8 (a BOM is accepted), a timestamp out of range, or a sidecar
+  whose content does not match its extension (untimed text in `.lrc`, timed
+  text in `.txt`). A track is `missing` when it has no lyric source, and
+  `unreadable` when its audio or a sidecar cannot be read.
+- Navidrome's default `LyricsPriority` reads sidecars before embedded lyrics,
+  per the research in `plan.md`. B6 verifies this on the server.
+
+### Selection
+
+- LRCLIB is used for fetching only. Nothing is published back.
+- Candidates come from `/api/search` with artist, title, and album. `/api/get`
+  is used only for an explicit `--lyrics-id`.
+- A record is chosen automatically only when exactly one candidate matches the
+  artist and title, lies within 2 s of the audio's duration, and matches the
+  album. Version terms are material: `Song (Live)` does not match `Song`.
+- Otherwise the outcome is `ambiguous`, `no_match`, or `review`, and the
+  evidence for each candidate is printed. A search that returns the 20-record
+  cap is `review`, because the match may have been cut off.
+- The chosen record's synchronized text is preferred, then its plain text.
+  Texts from different records never mix.
+- An instrumental record creates no file (`instrumental`). A matched record
+  with no usable text is `no_text`.
+- Requests have explicit timeouts and are spaced 0.25 s apart. HTTP 429 and
+  5xx responses are retried, honoring `Retry-After` up to 60 s. A longer wait
+  fails at once as `rate_limited`. The User-Agent names the project; the
+  operator's email is not sent.
+
+### Writes (`--fetch`)
+
+- Synchronized text goes to `.lrc`, plain text to `.txt`. Files are UTF-8
+  without a BOM, end with one newline, are validated before writing, and are
+  replaced atomically.
+- Existing lyrics are kept by default. That includes a plain lyric when a
+  synchronized candidate becomes available. An empty sidecar is overwritten; a
+  malformed one is kept.
+- `--replace` overwrites the target. It also removes the other-type sidecar of
+  the same basename. The plan shows that removal, and the log records it. No
+  other `.txt` file is ever removed. Embedded lyrics are not changed.
+- Identical text is `unchanged`, and no file is touched.
+- The first release writes line-timed LRC only. It does not write word timing,
+  translate, or synthesize lyrics.
+- `--dry-run` shows each plan and writes nothing.
+
+### Outcomes and exit codes
+
+- Track labels: `selected`, `instrumental`, `no_text`, `no_match`,
+  `ambiguous`, `review`, `missing_metadata`, `rate_limited`,
+  `provider_failure`. With `--fetch`, each selected track is also labelled
+  `wrote`, `would write`, `preserved`, `unchanged`, `refused`, or `failed`.
+- Exit 0: every requested step completed. No-match and instrumental outcomes
+  are reported and do not fail the run.
+- Exit 1: provider failure, rate limit, unreadable input, refused text, or a
+  write error.
+- Exit 2: a usage error (see the table above).
+- Exit 3: `--fetch` left a track unresolved (`ambiguous`, `review`, or
+  `missing_metadata`). Other tracks are still written.
+
+### Logging
+
+`--fetch` appends to the change log by default, one line per write or
+removal: the LRCLIB record ID, the destination, and whether existing lyrics
+were replaced. It never logs lyric text. `--dry-run`, `--lookup`, and
+inspection write no log.
+
+### Limits
+
+- Navidrome's web UI does not show synchronized lyrics in full
+  (navidrome/navidrome#4148). The server is expected to serve sidecar lyrics
+  through the OpenSubsonic lyrics endpoint. B6 verifies this.
+- Client display (Feishin, Symfonium), streaming, and offline behavior are
+  unverified. Do not claim offline lyrics until B6 records a result.
+
 ## Tag mapping details
 
 - `date` (FLAC `DATE`, MP3 `TDRC`) is the recording date — never overwritten
@@ -410,7 +529,7 @@ output. `write_tags` raising `NotImplementedError` for M4A is the pattern.
   zero `## Genre:` entries, so no genre change had an audit trail. `tag`,
   `write-tags`, `write-ratings`, `write-stats`, `genre`, `rename`, `lock`,
   `unlock`, `art`,
-  `replaygain`, and `copy` now append to `$MUSIC_TAGGER_LOG`, else
+  `replaygain`, `copy`, and `lyrics --fetch` now append to `$MUSIC_TAGGER_LOG`, else
   `~/Projects/music-tagger/changes.log`. `--log PATH` redirects; `--no-log`
   disables. Tests point `MUSIC_TAGGER_LOG` at a temp file (autouse fixture
   in `tests/conftest.py`); never remove that fixture.
