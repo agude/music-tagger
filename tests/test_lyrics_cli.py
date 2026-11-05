@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -13,10 +12,11 @@ from mutagen.flac import FLAC
 
 from music_tagger import cli
 from music_tagger.cli import _lyrics
-from music_tagger.lrclib import LrclibClient
-from music_tagger.tags import read_album
-
-Responder = Callable[[httpx.Request], httpx.Response]
+from tests.lyrics_fakes import catalog as _catalog
+from tests.lyrics_fakes import no_network as _no_network
+from tests.lyrics_fakes import record as _record
+from tests.lyrics_fakes import responder as _responder
+from tests.lyrics_fakes import use_client as _use_client
 
 
 def _digest_tree(root: Path) -> dict[str, str]:
@@ -25,64 +25,6 @@ def _digest_tree(root: Path) -> dict[str, str]:
         for p in sorted(root.rglob("*"))
         if p.is_file()
     }
-
-
-def _use_client(monkeypatch: pytest.MonkeyPatch, responder: Responder) -> None:
-    def factory() -> LrclibClient:
-        return LrclibClient(
-            transport=httpx.MockTransport(responder), sleep=lambda _s: None, min_interval=0.0
-        )
-
-    monkeypatch.setattr(cli, "LrclibClient", factory)
-
-
-def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    def factory() -> LrclibClient:
-        raise AssertionError("this mode must not construct an LRCLIB client")
-
-    monkeypatch.setattr(cli, "LrclibClient", factory)
-
-
-def _record(record_id: int, title: str, album: str, **overrides: Any) -> dict[str, Any]:
-    data: dict[str, Any] = {
-        "id": record_id,
-        "name": title,
-        "trackName": title,
-        "artistName": "Eagles",
-        "albumName": album,
-        "duration": 0.5,
-        "instrumental": False,
-        "plainLyrics": "Plain line",
-        "syncedLyrics": "[00:01.00]Timed line",
-        "hasWordSync": False,
-        "lyricsfile": "",
-    }
-    data.update(overrides)
-    return data
-
-
-def _catalog(album: Path, **overrides: Any) -> dict[str, list[dict[str, Any]]]:
-    """One matching record per track, keyed by track title. Record ids are 101, 102, ..."""
-    catalog: dict[str, list[dict[str, Any]]] = {}
-    for number, track in enumerate(read_album(album).tracks, start=1):
-        title = track.tags["title"]
-        catalog[title] = [_record(100 + number, title, track.tags["album"], **overrides)]
-    return catalog
-
-
-def _responder(catalog: dict[str, list[dict[str, Any]]]) -> Responder:
-    by_id = {record["id"]: record for records in catalog.values() for record in records}
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/search":
-            title = request.url.params.get("track_name", "")
-            return httpx.Response(200, json=catalog.get(title, []))
-        record_id = int(request.url.path.rsplit("/", 1)[1])
-        if record_id in by_id:
-            return httpx.Response(200, json=by_id[record_id])
-        return httpx.Response(404, json={"name": "TrackNotFound"})
-
-    return respond
 
 
 USAGE_ERRORS = [
@@ -98,7 +40,7 @@ USAGE_ERRORS = [
     ["--lyrics-id", "5", "--lookup"],
     ["--lyrics-id", "5", "--track", "1", "--embed"],
     ["--disc", "2"],
-    ["--embed"],
+    ["--embed", "--lookup"],
 ]
 
 

@@ -79,7 +79,12 @@ EVIDENCE = TrackEvidence(title="Song", artist="Band", album="Album", duration_se
 
 
 def _lookup_with(records: list[dict[str, Any]], evidence: TrackEvidence = EVIDENCE) -> Any:
-    client, _ = _client(_json_responder(records))
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/get":
+            return httpx.Response(404, json={"name": "TrackNotFound"})
+        return httpx.Response(200, json=records)
+
+    client, _ = _client(respond)
     return lookup(client, evidence)
 
 
@@ -294,6 +299,16 @@ class TestLookupSelection:
         assert selection.lyrics.kind == LyricsKind.SYNCHRONIZED
         assert selection.lyrics.text == "[00:01.00]Timed line"
 
+    def test_unique_match_with_plain_text_only_is_reviewed(self) -> None:
+        selection = _lookup_with([_record(syncedLyrics="")])
+        assert selection.outcome == Outcome.REVIEW
+        assert "plain text only" in selection.reason
+        assert selection.lyrics is None
+
+    def test_unique_instrumental_match_is_still_selected_as_instrumental(self) -> None:
+        selection = _lookup_with([_record(instrumental=True, plainLyrics="", syncedLyrics="")])
+        assert selection.outcome == Outcome.INSTRUMENTAL
+
     def test_duration_boundary_is_inclusive(self) -> None:
         assert _lookup_with([_record(duration=202.0)]).outcome == Outcome.SELECTED
 
@@ -387,6 +402,34 @@ class TestLookupSelection:
         selection = _lookup_with(records)
         assert selection.outcome == Outcome.REVIEW
         assert "cap" in selection.reason
+
+    def test_capped_search_adds_exact_record_as_candidate(self) -> None:
+        capped = [_record(id=i, albumName="Other") for i in range(1, SEARCH_RESULT_CAP + 1)]
+        exact = _record(id=500, albumName="Album")
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/api/get":
+                assert request.url.params["duration"] == "200"
+                return httpx.Response(200, json=exact)
+            return httpx.Response(200, json=capped)
+
+        client, _ = _client(respond)
+        selection = lookup(client, EVIDENCE)
+        assert selection.outcome == Outcome.REVIEW
+        assert 500 in [verdict.record.id for verdict in selection.verdicts]
+
+    def test_capped_search_without_exact_record_stays_review(self) -> None:
+        capped = [_record(id=i, albumName="Other") for i in range(1, SEARCH_RESULT_CAP + 1)]
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/api/get":
+                return httpx.Response(404, json={"name": "TrackNotFound"})
+            return httpx.Response(200, json=capped)
+
+        client, _ = _client(respond)
+        selection = lookup(client, EVIDENCE)
+        assert selection.outcome == Outcome.REVIEW
+        assert all(verdict.record.id != 500 for verdict in selection.verdicts)
 
     def test_rate_limited_search(self) -> None:
         client, _ = _client(lambda request: httpx.Response(429, headers={"Retry-After": "600"}))

@@ -129,11 +129,27 @@ Key CLI subcommands, driven by Claude Code in conversation:
     `.cue`, and `.toc` after the disc title, and a `:` in it made the NAS
     store them as 8.3 names such as `SFYL6N~T.LOG`.
 
-11. `uv run music-tagger lyrics <album-dir> [--track N [--disc D]] [--lookup | --fetch [--dry-run] [--replace] [--lyrics-id ID]]`
+11. `uv run music-tagger lyrics <album-dir> [--track N [--disc D]] [--lookup | --fetch [--dry-run] [--replace] [--lyrics-id ID] | --embed [--dry-run] [--replace]]`
     — with no mode, inspects embedded lyrics and `.lrc`/`.txt` sidecars: no
     network, no writes. `--lookup` searches LRCLIB and shows each candidate's
-    evidence. `--fetch` saves the chosen lyrics as sidecars. Details are under
+    evidence. `--fetch` saves the chosen lyrics as sidecars. `--embed` writes
+    each track's sidecar into its tags, with no network. Details are under
     "Lyrics" below.
+
+12. `uv run music-tagger lyrics-batch <path> [--auto] [--embed] [--dry-run] [--pending FILE] [--decisions FILE]`
+    — backfills lyrics for every album under `<path>` (a library root, an artist
+    directory, or one album). Tracks with lyrics or a recorded decision are never
+    searched. A track gets a sidecar only when its LRCLIB choice is certain. The rest
+    are saved to the pending file with every candidate's record ID. `--embed` also
+    writes sidecars into tags. Details are under "Batch" below.
+
+13. `uv run music-tagger lyrics-decide list [--album DIR]`,
+    `lyrics-decide choose <album> (--track N [--disc D] | --file NAME) --id ID [--dry-run]`,
+    `lyrics-decide skip <album> (--track N [--disc D] | --file NAME) --reason TEXT`
+    — judges pending tracks from their saved options. `list` reads the pending
+    file with no network. `choose` accepts only a saved record ID and writes that
+    record's lyrics as a sidecar. `skip` records that a track has no lyrics and
+    writes no file. Details are under "Decisions" below.
 
 ## Library workflow
 
@@ -190,6 +206,7 @@ src/music_tagger/
 ├── lyrics.py        # Lyric readers, classification, inspection (read-only)
 ├── lrclib.py        # LRCLIB client (fetch only) and candidate policy
 ├── lyrics_write.py  # Lyric sidecar plans and atomic writes
+├── lyrics_batch.py  # pending options and decisions: JSON files and rendering
 └── cli.py           # Argparse entry point (all subcommands)
 ```
 
@@ -345,6 +362,9 @@ uv run music-tagger lyrics <album-dir> --fetch                # write sidecars
 uv run music-tagger lyrics <album-dir> --fetch --replace      # replace existing lyrics
 uv run music-tagger lyrics <album-dir> --track 3 --lookup --lyrics-id 12345
 uv run music-tagger lyrics <album-dir> --track 3 --fetch --lyrics-id 12345
+uv run music-tagger lyrics <album-dir> --embed --dry-run      # preview the tags
+uv run music-tagger lyrics <album-dir> --embed                # write sidecar text into tags
+uv run music-tagger lyrics <album-dir> --embed --replace      # replace a different tag value
 ```
 
 Flags that conflict are rejected with exit 2 before any work starts:
@@ -352,15 +372,31 @@ Flags that conflict are rejected with exit 2 before any work starts:
 | Flags | Rejected because |
 | --- | --- |
 | two of `--lookup`, `--fetch`, `--embed` | one mode per run |
-| `--dry-run` without `--fetch` | inspect and lookup never write |
-| `--replace` without `--fetch` | there is nothing to replace |
+| `--dry-run` without `--fetch` or `--embed` | inspect and lookup never write |
+| `--replace` without `--fetch` or `--embed` | there is nothing to replace |
 | `--lyrics-id` without `--fetch` or `--lookup` | it selects an LRCLIB record |
 | `--lyrics-id` without `--track` | a record must not apply to the whole album |
 | `--embed` with `--lyrics-id` | embedding reads local sidecars only |
 | `--disc` without `--track` | the disc qualifies a track number |
 
-`--embed` is not available yet. It is built only if client verification (B6 in
-`plan.md`) shows that an installed client needs embedded lyrics.
+### Embedding (`--embed`)
+
+A backup of the sidecar text in the audio file, for when sidecars are lost. It
+makes no network calls. Each track has one source: its `.lrc` when that holds
+lyrics, else its `.txt`. Never both.
+
+- FLAC `LYRICS` and M4A `©lyr`: the text as-is. LRC timestamps stay in the text.
+- MP3 from `.lrc`: `SYLT`, language `eng`, empty descriptor, milliseconds.
+- MP3 from `.txt`: `USLT`, language `eng`, empty descriptor.
+
+Within an MP3, the managed `eng` frame is one of `SYLT` or `USLT`. Writing one
+removes the other. Other languages and descriptors, every other tag, and the
+ID3 version are kept. A different value in the managed slot needs `--replace`;
+without it the track is `preserved`. An identical value is `unchanged`. A
+malformed sidecar is `refused` and exits 1. A file the tool cannot read is
+`refused`, and a write error is `failed`. Embedded text is hidden in Navidrome
+while a sidecar exists, and an edited sidecar drifts from its embedded copy
+until `--embed --replace` runs again.
 
 ### Sources and classification
 
@@ -389,11 +425,16 @@ Flags that conflict are rejected with exit 2 before any work starts:
   search reaches the 20-record cap, the same artist and title are searched
   without the album filter, and the two results are merged by record ID. The
   broader search only adds candidates; if it is not capped, the merged set is
-  complete for that artist and title. `/api/get` is used only for an explicit
-  `--lyrics-id`.
+  complete for that artist and title. If the merged search is still capped,
+  `/api/get` is asked once for the record with the track's own title, artist,
+  album, and duration, and that record is added as a candidate. It is never
+  chosen automatically: the outcome stays `review`. `/api/get` is otherwise
+  used only for an explicit `--lyrics-id`.
 - A record is chosen automatically only when exactly one candidate matches the
   artist and title, lies within 2 s of the audio's duration, and matches the
-  album. Version terms are material: `Song (Live)` does not match `Song`.
+  album, and whose record has synchronized text. A matching record with plain text
+  only is `review`: its timing cannot be checked against the audio. Version terms
+  are material: `Song (Live)` does not match `Song`.
 - Otherwise the outcome is `ambiguous`, `no_match`, or `review`, and the
   evidence for each candidate is printed. The LLM operator judges these from
   that evidence and passes its chosen record with `--lyrics-id`. Each candidate
@@ -445,12 +486,86 @@ Flags that conflict are rejected with exit 2 before any work starts:
   `missing_metadata`). Other tracks are still written. The LLM operator
   decides those tracks with `--lyrics-id` or leaves them without lyrics.
 
+### Batch (`lyrics-batch`)
+
+```bash
+uv run music-tagger lyrics-batch "/mnt/synology/media/music/<Artist>" --dry-run
+uv run music-tagger lyrics-batch "/mnt/synology/media/music/<Artist>"           # sidecars + pending
+uv run music-tagger lyrics-batch "/mnt/synology/media/music/<Artist>" --auto --embed  # the usual run
+```
+
+- Per track, using the same selection rules as `lyrics --fetch`:
+  - Status `synchronized` or `plain` (sidecar or embedded): kept, not searched.
+  - A recorded decision: not searched.
+  - Status `missing` or `empty`: searched. `selected` is written as a sidecar.
+    `instrumental` and `no_text` are final. `no_match` is final unless a record
+    matches the album; those records are saved as pending. `ambiguous`, `review`,
+    and `missing_metadata` are saved as pending, with every candidate.
+  - Status `malformed` or `unreadable`: saved as pending with outcome
+    `needs_inspection` and no candidates. Never overwritten.
+- `--auto` records the choices the rules accept, after each album's fetch and before
+  its embed. The rules are `confident_choice` in `lyrics_batch.py`: (1) a plausible
+  album match with synchronized text, closest length first; (2) an album match with
+  synchronized text, length within 5 s, and last synced line inside the audio. Plain
+  text is never auto-chosen. Everything else stays pending for `lyrics-decide`.
+- `--embed` runs after the fetch pass, for each track that has a sidecar. It never
+  replaces a different tag value.
+- Pending file: `~/Projects/music-tagger/lyrics-pending.json`, or
+  `$MUSIC_TAGGER_LYRICS_PENDING`, or `--pending`. Each real run replaces the entries
+  of the albums it processed. Albums it could not read, or did not reach after a
+  rate-limit stop, keep their earlier entries. Only commands write the file.
+- A track with lyrics on disk is never searched again. `no_match` tracks are
+  searched on every rerun.
+- One LRCLIB client serves the run. A rate limit that LRCLIB will not clear within
+  the client's wait stops the run at that track. The run exits 1.
+- Exit: 0 when nothing is pending and nothing failed; 3 when tracks are pending and
+  nothing failed; 1 on any failure (provider outage, refused or failed write,
+  unreadable album, rate-limit stop). A dry run exits the same way and writes no
+  sidecars, tags, log lines, or pending file.
+- Log: a `## Lyrics` section and, with `--embed`, a `## Lyrics embed` section per album.
+
+### Decisions (`lyrics-decide`)
+
+```bash
+uv run music-tagger lyrics-decide list --album "<album-dir>"
+uv run music-tagger lyrics-decide choose "<album-dir>" --track 1 --id 18895421 --dry-run
+uv run music-tagger lyrics-decide choose "<album-dir>" --track 1 --id 18895421
+uv run music-tagger lyrics-decide skip "<album-dir>" --track 1 --reason "no record exists"
+uv run music-tagger lyrics-decide skip "<album-dir>" --file "01. Star Wars_ Main Title.flac" --reason "no record exists"
+```
+
+- `list` prints each undecided pending track with its candidates: ID, title,
+  artist, album, duration difference, flags, and what the record offers. Each
+  header names the audio file.
+- `--file NAME` selects the track by its audio file name, exactly as `list`
+  prints it, and works when two files share a track number or a file has no
+  track tag. `--track` and `--disc`, when also given, must agree with the file.
+  Decisions are keyed by file, so a shared number never hides another file.
+- `choose` writes the record's lyrics through the `lyrics --fetch --lyrics-id`
+  path. It refuses, with exit 2, an ID that was not saved, a track with no
+  pending entry, and a track already decided. `--replace-skip` lets a choice replace
+  an earlier skip for that track; a recorded choice is never replaced. `--plain`
+  writes the record's plain text as a `.txt`, even when the record also has synchronized
+  text, for a track whose audio no longer matches the record's timing. It records the
+  decision only when the sidecar was written or already matched. A failed write exits 1
+  and records nothing.
+- Each candidate shows where its last synced line falls against the audio end. A
+  record whose last line runs past the end does not fit this file. One whose last
+  line falls inside the audio may fit, even when its total length differs.
+- `skip` requires a non-empty reason and writes no file.
+- Decisions: `~/Projects/music-tagger/lyrics-decisions.json`, or
+  `$MUSIC_TAGGER_LYRICS_DECISIONS`, or `--decisions`. A choice cannot be changed
+  through `lyrics-decide`; a skip can be replaced by `choose --replace-skip`.
+  `lyrics --track N --fetch --lyrics-id ID --replace` still replaces a sidecar.
+- Decisions are not written to `changes.log`. A `choose` that writes a sidecar
+  logs that write, as `lyrics --fetch` does.
+
 ### Logging
 
-`--fetch` appends to the change log by default, one line per write or
+`--fetch` and `--embed` append to the change log by default, one line per write or
 removal: the LRCLIB record ID, the destination, and whether existing lyrics
 were replaced. It never logs lyric text. `--dry-run`, `--lookup`, and
-inspection write no log.
+inspection write no log. `lyrics-batch` follows the same rule.
 
 ### Limits
 
@@ -556,7 +671,7 @@ output. `write_tags` raising `NotImplementedError` for M4A is the pattern.
   zero `## Genre:` entries, so no genre change had an audit trail. `tag`,
   `write-tags`, `write-ratings`, `write-stats`, `genre`, `rename`, `lock`,
   `unlock`, `art`,
-  `replaygain`, `copy`, and `lyrics --fetch` now append to `$MUSIC_TAGGER_LOG`, else
+  `replaygain`, `copy`, and `lyrics --fetch` or `--embed` now append to `$MUSIC_TAGGER_LOG`, else
   `~/Projects/music-tagger/changes.log`. `--log PATH` redirects; `--no-log`
   disables. Tests point `MUSIC_TAGGER_LOG` at a temp file (autouse fixture
   in `tests/conftest.py`); never remove that fixture.

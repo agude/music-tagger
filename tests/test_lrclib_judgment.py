@@ -43,6 +43,8 @@ def _search_responder(narrow: list[dict[str, Any]], broad: list[dict[str, Any]])
     """Answer the album-filtered search with `narrow` and the unfiltered one with `broad`."""
 
     def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/get":
+            return httpx.Response(404, json={"name": "TrackNotFound"})
         if "album_name" in request.url.params:
             return httpx.Response(200, json=narrow)
         return httpx.Response(200, json=broad)

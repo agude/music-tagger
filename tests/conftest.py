@@ -46,3 +46,10 @@ def default_checklist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "default-checklist.md"
     monkeypatch.setenv("MUSIC_TAGGER_CHECKLIST", str(path))
     return path
+
+
+@pytest.fixture(autouse=True)
+def default_lyric_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the default lyric pending and decisions files at temp files."""
+    monkeypatch.setenv("MUSIC_TAGGER_LYRICS_PENDING", str(tmp_path / "lyrics-pending.json"))
+    monkeypatch.setenv("MUSIC_TAGGER_LYRICS_DECISIONS", str(tmp_path / "lyrics-decisions.json"))

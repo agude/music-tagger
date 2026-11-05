@@ -207,6 +207,27 @@ class LrclibClient:
             raise ProviderError(f"LRCLIB get {record_id} returned HTTP {resp.status_code}")
         return _parse_record(self._json(resp))
 
+    def get_exact(
+        self, *, title: str, artist: str, album: str, duration_secs: float
+    ) -> LyricsRecord | None:
+        """Fetch the record whose title, artist, album, and duration all match (404: None).
+
+        Used only to recover a record that a capped search hid. The caller adds it as a
+        candidate; it is never chosen on this lookup alone.
+        """
+        params = {
+            "track_name": title,
+            "artist_name": artist,
+            "album_name": album,
+            "duration": str(round(duration_secs)),
+        }
+        resp = self._request("/get", params)
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            raise ProviderError(f"LRCLIB get by metadata returned HTTP {resp.status_code}")
+        return _parse_record(self._json(resp))
+
     @staticmethod
     def _json(resp: httpx.Response) -> Any:
         try:
@@ -337,14 +358,16 @@ def _verdict(record: LyricsRecord, evidence: TrackEvidence) -> Verdict:
     )
 
 
-def pick_lyrics(record: LyricsRecord) -> LyricsChoice | None:
+def pick_lyrics(record: LyricsRecord, *, plain_only: bool = False) -> LyricsChoice | None:
     """Return the record's synchronized text, else its plain text. Never mixes sources.
 
     Each text is validated before use, so malformed synchronized text falls back
-    to plain text from the same record.
+    to plain text from the same record. With plain_only, the synchronized text is
+    never returned, for a track whose audio no longer matches the record's timing.
     """
     if (
-        record.synced_lyrics
+        not plain_only
+        and record.synced_lyrics
         and classify(record.synced_lyrics, expect_timed=True) == LyricsKind.SYNCHRONIZED
     ):
         return LyricsChoice(LyricsKind.SYNCHRONIZED, record.synced_lyrics)
@@ -358,7 +381,13 @@ def _failure(exc: ProviderError) -> Selection:
     return Selection(outcome, str(exc))
 
 
-def _finish(record: LyricsRecord, reason: str, verdicts: tuple[Verdict, ...]) -> Selection:
+def _finish(
+    record: LyricsRecord,
+    reason: str,
+    verdicts: tuple[Verdict, ...],
+    *,
+    plain_only: bool = False,
+) -> Selection:
     if record.instrumental:
         return Selection(
             Outcome.INSTRUMENTAL,
@@ -366,7 +395,7 @@ def _finish(record: LyricsRecord, reason: str, verdicts: tuple[Verdict, ...]) ->
             record=record,
             verdicts=verdicts,
         )
-    choice = pick_lyrics(record)
+    choice = pick_lyrics(record, plain_only=plain_only)
     if choice is None:
         return Selection(
             Outcome.NO_TEXT,
@@ -382,7 +411,9 @@ def lookup(client: LrclibClient, evidence: TrackEvidence) -> Selection:
 
     Selects a record only when exactly one plausible candidate matches artist,
     title, duration within DURATION_TOLERANCE_SECS, and album. Anything less
-    certain is returned for review with the evidence, not chosen.
+    certain is returned for review with the evidence, not chosen. When the search
+    is still capped, the exact record for the track's title, artist, album, and
+    duration is added as a candidate; the outcome stays review.
     """
     missing = [
         name
@@ -410,6 +441,15 @@ def lookup(client: LrclibClient, evidence: TrackEvidence) -> Selection:
                 records=_merge_records(broader.records, result.records),
                 truncated=broader.truncated,
             )
+        if result.truncated and evidence.album and evidence.duration_secs is not None:
+            exact = client.get_exact(
+                title=evidence.title,
+                artist=evidence.artist,
+                album=evidence.album,
+                duration_secs=evidence.duration_secs,
+            )
+            if exact is not None and all(r.id != exact.id for r in result.records):
+                result = SearchResult(records=[*result.records, exact], truncated=True)
     except ProviderError as exc:
         return _failure(exc)
 
@@ -437,6 +477,15 @@ def lookup(client: LrclibClient, evidence: TrackEvidence) -> Selection:
     album_matches = [v for v in plausible if v.album_matches]
     if len(album_matches) == 1:
         chosen = album_matches[0].record
+        choice = pick_lyrics(chosen)
+        if choice is not None and choice.kind is LyricsKind.PLAIN and not chosen.instrumental:
+            # Plain text cannot be checked against the audio's timing, so it is judged.
+            return Selection(
+                Outcome.REVIEW,
+                "unique artist, title, duration, and album match, but the record has plain "
+                "text only; its timing cannot be checked",
+                verdicts=verdicts,
+            )
         return _finish(chosen, "unique artist, title, duration, and album match", verdicts)
     if len(plausible) == 1:
         only = plausible[0].record
@@ -452,11 +501,18 @@ def lookup(client: LrclibClient, evidence: TrackEvidence) -> Selection:
     )
 
 
-def fetch_explicit(client: LrclibClient, record_id: int, evidence: TrackEvidence) -> Selection:
+def fetch_explicit(
+    client: LrclibClient,
+    record_id: int,
+    evidence: TrackEvidence,
+    *,
+    plain_only: bool = False,
+) -> Selection:
     """Fetch the record the operator named, and show how it compares with the track.
 
     The record is not checked against the track before it is returned, so the
     operator sees each mismatch in the verdict and decides whether to write.
+    plain_only takes the plain text even when the record has synchronized text.
     """
     try:
         record = client.get(record_id)
@@ -465,4 +521,4 @@ def fetch_explicit(client: LrclibClient, record_id: int, evidence: TrackEvidence
     if record is None:
         return Selection(Outcome.NO_MATCH, f"LRCLIB has no record with id {record_id}")
     verdict = _verdict(record, evidence)
-    return _finish(record, f"explicit record id {record_id}", (verdict,))
+    return _finish(record, f"explicit record id {record_id}", (verdict,), plain_only=plain_only)

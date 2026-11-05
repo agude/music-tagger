@@ -32,3 +32,7 @@ notes/
 # the change is confirmed good, then deleted.
 *-migration-*.json
 *-cleanup-*.json
+lyrics-pending.json
+lyrics-pending.json.tmp
+lyrics-decisions.json
+lyrics-decisions.json.tmp
