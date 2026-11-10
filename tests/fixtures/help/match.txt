@@ -1,0 +1,11 @@
+usage: music-tagger match [-h] --evidence EVIDENCE --candidates CANDIDATES
+                          [-o OUT]
+
+Score candidates by duration match against local evidence.
+
+options:
+  -h, --help            show this help message and exit
+  --evidence EVIDENCE   Evidence JSON from `read`.
+  --candidates CANDIDATES
+                        Candidates JSON from `mb search`.
+  -o, --out OUT         Output JSON file (prints digest to stdout).

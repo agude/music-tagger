@@ -12,7 +12,7 @@ from mutagen.flac import FLAC
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4
 
-from .tags import AUDIO_EXTENSIONS
+from .tags import audio_files
 
 
 def _check_tool() -> None:
@@ -21,9 +21,7 @@ def _check_tool() -> None:
 
 
 def _audio_files(directory: Path) -> list[Path]:
-    return sorted(
-        f for f in directory.iterdir() if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS
-    )
+    return audio_files(directory)
 
 
 @dataclass

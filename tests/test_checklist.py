@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from music_tagger.checklist import Checklist, ChecklistEntry
-from music_tagger.cli import _checklist, _scan
+from music_tagger.cli.library import _checklist, _scan
 
 SAMPLE = (
     "# music-tagger checklist\n"
@@ -121,6 +121,18 @@ class TestChecklistCommand:
             _checklist(["reopen"])
 
         assert error.value.code == 2
+
+    @pytest.mark.parametrize("pattern", ["", "   "])
+    def test_reopen_rejects_a_blank_pattern_without_changing_anything(
+        self, checklist_file: Path, pattern: str
+    ) -> None:
+        before = checklist_file.read_text()
+
+        with pytest.raises(SystemExit) as error:
+            _checklist(["reopen", "--matching", pattern])
+
+        assert error.value.code == 2
+        assert checklist_file.read_text() == before
 
     def test_explicit_file(self, tmp_path: Path, default_checklist: Path) -> None:
         other = tmp_path / "other.md"

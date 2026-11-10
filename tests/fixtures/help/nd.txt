@@ -1,0 +1,9 @@
+usage: music-tagger nd <command> [options]
+
+Navidrome commands.
+
+commands:
+  rescan      Trigger a library scan.
+  ratings     Export rated/starred songs as JSON.
+  stats       Export a complete statistics snapshot as JSON.
+  set-rating  Push ratings/stars back into Navidrome.

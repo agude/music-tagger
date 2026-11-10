@@ -10,12 +10,11 @@ replace, the other-type sidecar is removed in the same plan.
 from __future__ import annotations
 
 import contextlib
-import os
-import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from .fileio import atomic_write_bytes
 from .lyrics import LRC_SUFFIX, TXT_SUFFIX, LyricsKind, TrackLyrics, classify
 
 SIDECAR_MODE = 0o644
@@ -133,28 +132,7 @@ def apply_plan(plan: SidecarPlan) -> None:
     if plan.content is not None:
         if plan.target is None:
             raise ValueError("write plan has content but no target")
-        _atomic_write(plan.target, plan.content)
+        atomic_write_bytes(plan.target, plan.content, mode=SIDECAR_MODE)
     for path in plan.remove:
         with contextlib.suppress(FileNotFoundError):
             path.unlink()
-
-
-def _atomic_write(path: Path, data: bytes) -> None:
-    """Write through a temporary file in the same directory, then rename it over path.
-
-    The rename is atomic on the same filesystem, so an interrupted write leaves
-    the old file whole. A failed write removes its temporary file.
-    """
-    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    tmp = Path(tmp_name)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(tmp, SIDECAR_MODE)
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(FileNotFoundError):
-            tmp.unlink()
-        raise

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -9,7 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from music_tagger.cli import _lyrics_batch, _lyrics_decide
+from music_tagger.cli.lyrics_cmd import _lyrics_batch, _lyrics_decide
 from music_tagger.lyrics_batch import load_decisions, load_pending
 from music_tagger.tags import read_album
 from tests.conftest import FIXTURES
@@ -252,6 +253,25 @@ class TestSkip:
         assert decision.choice is None
         assert decision.reason == "no lyric exists"
 
+    def test_skip_records_the_release_track_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from music_tagger.tags import TagChange, read_album, write_tags
+
+        _, album, pending, decisions = _ambiguous_setup(tmp_path, monkeypatch)
+        track = next(t for t in read_album(album).tracks if t.path.name.startswith("01"))
+        write_tags(track, [TagChange("musicbrainz_releasetrackid", "", "rt-1")])
+
+        code = _decide(
+            ["skip", str(album), "--track", "1", "--reason", "no lyric exists"],
+            pending,
+            decisions,
+        )
+
+        assert code == 0
+        [decision] = load_decisions(decisions).values()
+        assert decision.release_track_id == "rt-1"
+
     def test_refuses_an_empty_reason(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _, album, pending, decisions = _ambiguous_setup(tmp_path, monkeypatch)
 
@@ -392,3 +412,22 @@ class TestSelectByFile:
 
         assert code == 2
         assert load_decisions(decisions) == {}
+
+
+class TestCorruptState:
+    def test_list_on_a_corrupt_pending_file_exits_1_with_one_error_line(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        pending = tmp_path / "pending.json"
+        pending.write_text(
+            json.dumps({"version": 1, "generated": "x", "entries": [{"album": "A"}]}),
+            encoding="utf-8",
+        )
+        decisions = tmp_path / "decisions.json"
+
+        assert _decide(["list"], pending, decisions) == 1
+
+        err = capsys.readouterr().err
+        assert err.startswith("Error: ")
+        assert str(pending) in err
+        assert "Traceback" not in err

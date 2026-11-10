@@ -1,0 +1,9 @@
+usage: music-tagger nd set-rating [-h] [--from FROM_FILE] [--dry-run]
+
+Push ratings and stars from JSON back into Navidrome.
+
+options:
+  -h, --help        show this help message and exit
+  --from FROM_FILE  Ratings JSON (default:
+                    /mnt/synology/media/music/ratings.json).
+  --dry-run         Show what would be set without making changes.

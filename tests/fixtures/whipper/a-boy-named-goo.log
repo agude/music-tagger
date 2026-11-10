@@ -1,0 +1,375 @@
+Log created by: whipper 0.10.0 (internal logger)
+Log creation date: 2026-08-08T00:37:56Z
+
+Ripping phase information:
+  Drive: HL-DT-STBD-RE  WH16NS40  (revision 1.02)
+  Extraction engine: cdparanoia III 10.2 libcdio 2.1.0 x86_64-pc-linux-gnu
+  Defeat audio cache:
+  Read offset correction: 6
+  Overread into lead-out: false
+  Gap detection: cdrdao 1.2.4
+  CD-R detected: false
+
+CD metadata:
+  Release:
+    Artist: Goo Goo Dolls
+    Title: A Boy Named Goo
+  CDDB Disc ID: a809eb0d
+  MusicBrainz Disc ID: 7tC7YhpmtJHHazk_KJODeabAwPo-
+  MusicBrainz lookup URL: https://musicbrainz.org/cdtoc/attach?toc=1+13+190645+182+15820+26997+43792+64057+76157+96415+111265+122582+137567+149072+166780+180312&tracks=13&id=7tC7YhpmtJHHazk_KJODeabAwPo-
+  MusicBrainz Release URL: https://musicbrainz.org/release/95169342-61a9-4aa3-8f51-b18133575686
+
+TOC:
+  1:
+    Start: 00:00:32
+    Length: 03:28:38
+    Start sector: 32
+    End sector: 15669
+
+  2:
+    Start: 03:28:70
+    Length: 02:29:02
+    Start sector: 15670
+    End sector: 26846
+
+  3:
+    Start: 05:57:72
+    Length: 03:43:70
+    Start sector: 26847
+    End sector: 43641
+
+  4:
+    Start: 09:41:67
+    Length: 04:30:15
+    Start sector: 43642
+    End sector: 63906
+
+  5:
+    Start: 14:12:07
+    Length: 02:41:25
+    Start sector: 63907
+    End sector: 76006
+
+  6:
+    Start: 16:53:32
+    Length: 04:30:08
+    Start sector: 76007
+    End sector: 96264
+
+  7:
+    Start: 21:23:40
+    Length: 03:18:00
+    Start sector: 96265
+    End sector: 111114
+
+  8:
+    Start: 24:41:40
+    Length: 02:30:67
+    Start sector: 111115
+    End sector: 122431
+
+  9:
+    Start: 27:12:32
+    Length: 03:19:60
+    Start sector: 122432
+    End sector: 137416
+
+  10:
+    Start: 30:32:17
+    Length: 02:33:30
+    Start sector: 137417
+    End sector: 148921
+
+  11:
+    Start: 33:05:47
+    Length: 03:56:08
+    Start sector: 148922
+    End sector: 166629
+
+  12:
+    Start: 37:01:55
+    Length: 03:00:32
+    Start sector: 166630
+    End sector: 180161
+
+  13:
+    Start: 40:02:12
+    Length: 02:17:58
+    Start sector: 180162
+    End sector: 190494
+
+Tracks:
+  1:
+    Filename: /tmp/rip-bSmiiL/01. Long Way Down.flac
+    Pre-gap length: 00:00:32
+    Peak level: 0.998444
+    Pre-emphasis:
+    Extraction speed: 7.6 X
+    Extraction quality: 100.00 %
+    Test CRC: BC8A83AA
+    Copy CRC: BC8A83AA
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: A8D603AE
+      Remote CRC: A8D603AE
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 18B0D7FE
+      Remote CRC: 18B0D7FE
+    Status: Copy OK
+
+  2:
+    Filename: "/tmp/rip-bSmiiL/02. Burnin\u2019 Up.flac"
+    Pre-gap length: 00:01:12
+    Peak level: 0.998444
+    Pre-emphasis:
+    Extraction speed: 8.1 X
+    Extraction quality: 100.00 %
+    Test CRC: 669BC1D0
+    Copy CRC: 669BC1D0
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 15ABE0C9
+      Remote CRC: 15ABE0C9
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 0ACC93C6
+      Remote CRC: 0ACC93C6
+    Status: Copy OK
+
+  3:
+    Filename: /tmp/rip-bSmiiL/03. Naked.flac
+    Peak level: 0.998444
+    Pre-emphasis:
+    Extraction speed: 8.8 X
+    Extraction quality: 100.00 %
+    Test CRC: F578A2D9
+    Copy CRC: F578A2D9
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 02C8106F
+      Remote CRC: 02C8106F
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 2D82F11E
+      Remote CRC: 2D82F11E
+    Status: Copy OK
+
+  4:
+    Filename: /tmp/rip-bSmiiL/04. Flat Top.flac
+    Peak level: 0.998444
+    Pre-emphasis:
+    Extraction speed: 9.9 X
+    Extraction quality: 100.00 %
+    Test CRC: 19B8B495
+    Copy CRC: 19B8B495
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 405409D1
+      Remote CRC: 405409D1
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: '75545643'
+      Remote CRC: '75545643'
+    Status: Copy OK
+
+  5:
+    Filename: /tmp/rip-bSmiiL/05. Impersonality.flac
+    Pre-gap length: 00:00:29
+    Peak level: 0.998444
+    Pre-emphasis:
+    Extraction speed: 9.8 X
+    Extraction quality: 100.00 %
+    Test CRC: 05D07666
+    Copy CRC: 05D07666
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: A6D43556
+      Remote CRC: A6D43556
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: A20F70BC
+      Remote CRC: A20F70BC
+    Status: Copy OK
+
+  6:
+    Filename: /tmp/rip-bSmiiL/06. Name.flac
+    Pre-gap length: 00:01:17
+    Peak level: 0.998444
+    Pre-emphasis:
+    Extraction speed: 11.2 X
+    Extraction quality: 100.00 %
+    Test CRC: 3B1AA97B
+    Copy CRC: 3B1AA97B
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 778A21D3
+      Remote CRC: 778A21D3
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: C4BDF899
+      Remote CRC: C4BDF899
+    Status: Copy OK
+
+  7:
+    Filename: /tmp/rip-bSmiiL/07. Only One.flac
+    Peak level: 0.998444
+    Pre-emphasis:
+    Extraction speed: 11.2 X
+    Extraction quality: 100.00 %
+    Test CRC: 51B1EF20
+    Copy CRC: 51B1EF20
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: '15E44624'
+      Remote CRC: '15E44624'
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 7C0CB3EC
+      Remote CRC: 7C0CB3EC
+    Status: Copy OK
+
+  8:
+    Filename: "/tmp/rip-bSmiiL/08. Somethin\u2019 Bad.flac"
+    Peak level: 0.998444
+    Pre-emphasis:
+    Extraction speed: 11.3 X
+    Extraction quality: 100.00 %
+    Test CRC: 6D38C9B6
+    Copy CRC: 6D38C9B6
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 255A1338
+      Remote CRC: 255A1338
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 379145CE
+      Remote CRC: 379145CE
+    Status: Copy OK
+
+  9:
+    Filename: "/tmp/rip-bSmiiL/09. Ain\u2019t That Unusual.flac"
+    Pre-gap length: 00:00:49
+    Peak level: 0.998444
+    Pre-emphasis:
+    Extraction speed: 12.0 X
+    Extraction quality: 100.00 %
+    Test CRC: B8A7FA0F
+    Copy CRC: B8A7FA0F
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 664F7946
+      Remote CRC: 664F7946
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: FABB5713
+      Remote CRC: FABB5713
+    Status: Copy OK
+
+  10:
+    Filename: /tmp/rip-bSmiiL/10. So Long.flac
+    Pre-gap length: 00:01:12
+    Peak level: 0.998444
+    Pre-emphasis:
+    Extraction speed: 12.2 X
+    Extraction quality: 100.00 %
+    Test CRC: 60C5582C
+    Copy CRC: 60C5582C
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: AE2DC0E8
+      Remote CRC: AE2DC0E8
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 6004A9E3
+      Remote CRC: 6004A9E3
+    Status: Copy OK
+
+  11:
+    Filename: /tmp/rip-bSmiiL/11. Eyes Wide Open.flac
+    Pre-gap length: 00:00:59
+    Peak level: 0.998444
+    Pre-emphasis:
+    Extraction speed: 13.1 X
+    Extraction quality: 100.00 %
+    Test CRC: 80E16C99
+    Copy CRC: 80E16C99
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 6D612142
+      Remote CRC: 6D612142
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: FF818F96
+      Remote CRC: FF818F96
+    Status: Copy OK
+
+  12:
+    Filename: /tmp/rip-bSmiiL/12. Disconnected.flac
+    Pre-gap length: 00:00:45
+    Peak level: 0.989685
+    Pre-emphasis:
+    Extraction speed: 12.8 X
+    Extraction quality: 100.00 %
+    Test CRC: 38F8CA8E
+    Copy CRC: 38F8CA8E
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 67EE77A7
+      Remote CRC: 67EE77A7
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: BF20A0B4
+      Remote CRC: BF20A0B4
+    Status: Copy OK
+
+  13:
+    Filename: /tmp/rip-bSmiiL/13. Slave Girl.flac
+    Peak level: 0.998413
+    Pre-emphasis:
+    Extraction speed: 13.3 X
+    Extraction quality: 100.00 %
+    Test CRC: AACD0761
+    Copy CRC: AACD0761
+    AccurateRip v1:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: 6F299133
+      Remote CRC: 6F299133
+    AccurateRip v2:
+      Result: Found, exact match
+      Confidence: 200
+      Local CRC: C112101C
+      Remote CRC: C112101C
+    Status: Copy OK
+
+Conclusive status report:
+  AccurateRip summary: All tracks accurately ripped
+  Health status: No errors occurred
+  EOF: End of status report
+
+SHA-256 hash: 7E9DB78026E3AA8F259DEADA6BCF6C37C7D91B2F1E4E1F4A00517D05797266CA

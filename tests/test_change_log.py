@@ -8,7 +8,9 @@ from unittest.mock import patch
 import pytest
 from mutagen.flac import FLAC
 
-from music_tagger.cli import _art, _default_log_path, _genre, _lock, _rename, _replaygain
+from music_tagger.cli.common import _default_log_path
+from music_tagger.cli.library import _art, _genre, _rename, _replaygain
+from music_tagger.cli.tagging import _lock
 
 
 def _rename_fixture_files(album_dir: Path) -> None:
@@ -74,7 +76,13 @@ class TestArtLog:
         self, flac_album: Path, default_log: Path, tmp_path: Path
     ) -> None:
         cover = tmp_path / "front.jpg"
-        cover.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 100)
+        import io
+
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.new("RGB", (16, 16)).save(buffer, "JPEG")
+        cover.write_bytes(buffer.getvalue())
 
         _art([str(flac_album), "--cover-file", str(cover), "--embed"])
 
@@ -88,7 +96,7 @@ class TestArtLog:
 
         saved = flac_album / "cover.jpg"
         saved.write_bytes(b"\xff\xd8\xff\xe0")
-        with patch("music_tagger.cli.fetch_cover_art") as fetch:
+        with patch("music_tagger.cli.library.fetch_cover_art") as fetch:
             fetch.return_value = ArtResult(saved=True, path=saved, size_bytes=4)
             _art([str(flac_album), "--release-id", "r-1"])
 

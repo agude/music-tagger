@@ -1,0 +1,31 @@
+usage: music-tagger tag [-h] --release-id RELEASE_ID [--dry-run] [--log LOG |
+                        --no-log] [--ignore-locks] [--approve-overwrites]
+                        [--isrc {keep,musicbrainz}]
+                        [--isrc-code [DISC-]TRACK=CODE]
+                        path
+
+Fetch release, compute diff, and apply tags.
+
+positional arguments:
+  path                  Album directory.
+
+options:
+  -h, --help            show this help message and exit
+  --release-id RELEASE_ID
+                        MusicBrainz release UUID.
+  --dry-run             Show diff without writing.
+  --log LOG             Append changes to this log file (default:
+                        $MUSIC_TAGGER_LOG, else ~/Projects/music-
+                        tagger/changes.log).
+  --no-log              Do not write the change log.
+  --ignore-locks        Overwrite locked fields too. The locks themselves stay
+                        in place.
+  --approve-overwrites  Write changes that replace a non-empty title, artist,
+                        album, albumartist, or date.
+  --isrc {keep,musicbrainz}
+                        Resolve ISRC conflicts: keep (and lock) the file
+                        codes, or take MusicBrainz's code where it lists
+                        exactly one.
+  --isrc-code [DISC-]TRACK=CODE
+                        Resolve one track's ISRC conflict to CODE. Overrides
+                        --isrc for that track.

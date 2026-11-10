@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from music_tagger.cli import _rename
+import pytest
+
+from music_tagger.cli.library import _rename
 from music_tagger.lyrics import lyric_sidecars
 from music_tagger.placement import compute_placement, copy_files
 from music_tagger.tags import AlbumTags, TrackTags
@@ -188,13 +190,15 @@ class TestRenameSidecars:
         (flac_album / "track01.lrc").write_text("source")
         (flac_album / "01. Desperado.lrc").write_text("library")
 
-        _rename([str(flac_album)])
+        with pytest.raises(SystemExit) as error:
+            _rename([str(flac_album)])
 
+        assert error.value.code == 1
         assert (flac_album / "track01.flac").exists()
         assert (flac_album / "track01.lrc").read_text() == "source"
         assert (flac_album / "01. Desperado.lrc").read_text() == "library"
-        out = capsys.readouterr().out  # type: ignore[attr-defined]
-        assert "skipped ('01. Desperado.lrc' already exists)" in out
+        err = capsys.readouterr().err  # type: ignore[attr-defined]
+        assert "'01. Desperado.lrc' already exists" in err
 
     def test_unrelated_txt_is_not_renamed(self, flac_album: Path) -> None:
         self._prefix_names(flac_album)

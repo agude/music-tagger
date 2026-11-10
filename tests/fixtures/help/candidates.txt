@@ -1,0 +1,16 @@
+usage: music-tagger candidates [-h] [--artist ARTIST] [--album ALBUM]
+                               [--barcode BARCODE] [-o OUT | --json]
+                               path
+
+Read album, search MusicBrainz, and score candidates.
+
+positional arguments:
+  path               Album directory.
+
+options:
+  -h, --help         show this help message and exit
+  --artist ARTIST    Override artist name (for freshly ripped files).
+  --album ALBUM      Override album title (for freshly ripped files).
+  --barcode BARCODE  Filter results by barcode (UPC/EAN).
+  -o, --out OUT      Also write the full results as JSON to this file.
+  --json             Print JSON to stdout instead of the table.

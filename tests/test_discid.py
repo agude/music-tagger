@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -7,41 +8,66 @@ import pytest
 from music_tagger.discid import (
     TOCInfo,
     _compute_disc_id,
-    _msf_to_frames,
-    parse_cue,
     parse_rip_dir,
+    parse_whipper_log,
 )
 
-SAMPLE_CUE = """\
-REM GENRE Rock
-REM DATE 1973
-PERFORMER "Eagles"
-TITLE "Desperado"
-FILE "Eagles - Desperado.flac" WAVE
-  TRACK 01 AUDIO
-    TITLE "Doolin-Dalton"
-    PERFORMER "Eagles"
-    INDEX 01 00:00:00
-  TRACK 02 AUDIO
-    TITLE "Twenty-One"
-    PERFORMER "Eagles"
-    INDEX 01 03:29:37
-  TRACK 03 AUDIO
-    TITLE "Out of Control"
-    PERFORMER "Eagles"
-    INDEX 01 06:36:50
-"""
+FIXTURE_LOG = Path(__file__).parent / "fixtures" / "whipper" / "a-boy-named-goo.log"
+FIXTURE_DISC_ID = "7tC7YhpmtJHHazk_KJODeabAwPo-"
+FIXTURE_TOC = (
+    "1 13 190645 182 15820 26997 43792 64057 76157 96415 111265 122582 137567 149072 166780 180312"
+)
 
 
-class TestMsfToFrames:
-    def test_zero(self) -> None:
-        assert _msf_to_frames(0, 0, 0) == 0
+def _fixture_text() -> str:
+    return FIXTURE_LOG.read_text()
 
-    def test_one_minute(self) -> None:
-        assert _msf_to_frames(1, 0, 0) == 4500
 
-    def test_mixed(self) -> None:
-        assert _msf_to_frames(3, 29, 37) == 15712
+class TestParseWhipperLog:
+    def test_parses_fixture_disc_id_and_toc(self) -> None:
+        toc = parse_whipper_log(_fixture_text())
+        assert toc.disc_id == FIXTURE_DISC_ID
+        assert toc.to_toc_string() == FIXTURE_TOC
+        assert toc.source == "whipper"
+
+    def test_url_toc_disagreeing_with_logged_id_raises(self) -> None:
+        text = _fixture_text().replace("toc=1+13+190645+182+", "toc=1+13+190645+183+")
+        with pytest.raises(ValueError) as error:
+            parse_whipper_log(text)
+        message = str(error.value)
+        assert FIXTURE_DISC_ID in message
+        assert len(re.findall(r"[A-Za-z0-9._-]{28}", message)) == 2
+
+    def test_altered_toc_section_without_url_raises(self) -> None:
+        text = "\n".join(
+            line for line in _fixture_text().splitlines() if "MusicBrainz lookup URL" not in line
+        )
+        text = text.replace("Start sector: 15670", "Start sector: 15671")
+        with pytest.raises(ValueError) as error:
+            parse_whipper_log(text)
+        message = str(error.value)
+        assert FIXTURE_DISC_ID in message
+        assert len(re.findall(r"[A-Za-z0-9._-]{28}", message)) == 2
+
+    def test_without_url_computes_from_toc_section(self) -> None:
+        text = "\n".join(
+            line for line in _fixture_text().splitlines() if "MusicBrainz lookup URL" not in line
+        )
+        toc = parse_whipper_log(text)
+        assert toc.disc_id == FIXTURE_DISC_ID
+        assert toc.source == "computed"
+
+
+class TestParseRipDir:
+    def test_no_log_raises_naming_the_directory(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError, match=re.escape(str(tmp_path))):
+            parse_rip_dir(tmp_path)
+
+    def test_two_logs_raise_asking_for_one(self, tmp_path: Path) -> None:
+        for name in ["disc 1.log", "disc 2.log"]:
+            (tmp_path / name).write_text(_fixture_text())
+        with pytest.raises(ValueError, match="--log"):
+            parse_rip_dir(tmp_path)
 
 
 class TestComputeDiscId:
@@ -59,36 +85,6 @@ class TestComputeDiscId:
         a = _compute_disc_id(1, 2, 100000, [150, 50000])
         b = _compute_disc_id(1, 2, 100000, [150, 60000])
         assert a != b
-
-
-class TestParseCue:
-    def test_parses_sample(self, tmp_path: Path) -> None:
-        cue = tmp_path / "album.cue"
-        cue.write_text(SAMPLE_CUE)
-        toc = parse_cue(cue)
-        assert toc.first_track == 1
-        assert toc.last_track == 3
-        assert len(toc.track_offsets) == 3
-        assert toc.track_offsets[0] == 150
-        assert toc.track_offsets[1] == _msf_to_frames(3, 29, 37) + 150
-
-    def test_no_index_raises(self, tmp_path: Path) -> None:
-        cue = tmp_path / "bad.cue"
-        cue.write_text("TITLE 'empty'\n")
-        with pytest.raises(ValueError, match="No INDEX"):
-            parse_cue(cue)
-
-
-class TestParseRipDir:
-    def test_parses_cue(self, tmp_path: Path) -> None:
-        cue = tmp_path / "album.cue"
-        cue.write_text(SAMPLE_CUE)
-        toc = parse_rip_dir(tmp_path)
-        assert toc.last_track == 3
-
-    def test_no_cue_raises(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match=r"No \.cue files"):
-            parse_rip_dir(tmp_path)
 
 
 class TestTOCInfo:

@@ -1,0 +1,17 @@
+usage: music-tagger write-ratings [-h] [--from FROM_FILE] [--root ROOT]
+                                  [--dry-run] [--log LOG | --no-log]
+
+Write rating tags to audio files from a ratings JSON. Favorites are not
+written.
+
+options:
+  -h, --help        show this help message and exit
+  --from FROM_FILE  Ratings JSON (default:
+                    /mnt/synology/media/music/ratings.json).
+  --root ROOT       Library root to resolve paths (default:
+                    /mnt/synology/media/music).
+  --dry-run         Show what would change without writing.
+  --log LOG         Append changes to this log file (default:
+                    $MUSIC_TAGGER_LOG, else ~/Projects/music-
+                    tagger/changes.log).
+  --no-log          Do not write the change log.

@@ -14,6 +14,7 @@ from mutagen import MutagenError
 from mutagen.flac import FLAC
 
 from .cue import rewrite_cue_references
+from .tags import parse_position
 
 
 @dataclass
@@ -43,10 +44,14 @@ class AccurateRipSummary:
     mismatched: list[int] = field(default_factory=list)
     absent: list[int] = field(default_factory=list)
     not_ok: list[tuple[int, str]] = field(default_factory=list)
+    # Expected track numbers with no section in the log, and log sections for numbers
+    # outside the expected range. Either one means the log does not verify the rip.
+    missing: list[int] = field(default_factory=list)
+    unexpected: list[int] = field(default_factory=list)
 
     @property
     def needs_review(self) -> bool:
-        return bool(self.mismatched or self.not_ok)
+        return bool(self.mismatched or self.not_ok or self.missing or self.unexpected)
 
     def describe(self) -> list[str]:
         lines = [
@@ -55,6 +60,10 @@ class AccurateRipSummary:
         ]
         if self.mismatched:
             lines.append(f"Mismatched tracks: {', '.join(map(str, self.mismatched))}")
+        if self.missing:
+            lines.append(f"Missing from log: {', '.join(map(str, self.missing))}")
+        if self.unexpected:
+            lines.append(f"Unexpected in log: {', '.join(map(str, self.unexpected))}")
         for track, status in self.not_ok:
             lines.append(f"Track {track} status: {status}")
         return lines
@@ -63,8 +72,13 @@ class AccurateRipSummary:
 _TRACK_HEADER = re.compile(r"^  (\d+):$")
 
 
-def parse_accuraterip(log_text: str) -> AccurateRipSummary:
-    """Summarize the Tracks section of a whipper 0.10 log."""
+def parse_accuraterip(log_text: str, expected_tracks: int) -> AccurateRipSummary:
+    """Summarize the Tracks section of a whipper 0.10 log.
+
+    `expected_tracks` is the number of tracks ripped from this disc; the log's
+    track numbers run 1..expected_tracks. A missing or unexpected section means
+    the log cannot verify the rip.
+    """
     results: dict[int, list[str]] = {}
     statuses: dict[int, str] = {}
     in_tracks = False
@@ -86,6 +100,8 @@ def parse_accuraterip(log_text: str) -> AccurateRipSummary:
             statuses[track] = line.split(":", 1)[1].strip()
 
     summary = AccurateRipSummary()
+    summary.missing = [n for n in range(1, expected_tracks + 1) if n not in results]
+    summary.unexpected = sorted(n for n in results if not 1 <= n <= expected_tracks)
     for number, track_results in results.items():
         if any(result.endswith("exact match") and "NO" not in result for result in track_results):
             summary.exact.append(number)
@@ -181,16 +197,10 @@ def read_disc_position(path: Path) -> tuple[int | None, int | None]:
         return None, None
     number = audio.get("discnumber")  # type: ignore[no-untyped-call]
     total = audio.get("disctotal") or audio.get("totaldiscs")  # type: ignore[no-untyped-call]
-    return _first_int(number), _first_int(total)
-
-
-def _first_int(values: list[str] | None) -> int | None:
-    if not values:
-        return None
-    try:
-        return int(values[0].split("/")[0])
-    except ValueError:
-        return None
+    return (
+        parse_position(number[0]) if number else None,
+        parse_position(total[0]) if total else None,
+    )
 
 
 def _move_disc_files(work_dir: Path, output_dir: Path, prefix: str, replace: bool) -> list[Path]:

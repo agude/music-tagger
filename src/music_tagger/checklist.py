@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .fileio import atomic_write_text
+
 _TITLE = "# music-tagger checklist"
 _COUNT_LINE = re.compile(r"^\d+ albums to process\.$")
 _ENTRY_LINE = re.compile(
@@ -73,7 +75,7 @@ class Checklist:
         return "\n".join(lines) + "\n"
 
     def save(self, path: Path) -> None:
-        path.write_text(self.format())
+        atomic_write_text(path, self.format())
 
     def find(self, album_path: str | Path) -> ChecklistEntry | None:
         wanted = normalize_path(album_path)

@@ -1,4 +1,4 @@
-"""Parse rip artifacts (CUE sheets) and compute MusicBrainz disc IDs."""
+"""Read a whipper log for its TOC and MusicBrainz disc ID."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-FRAMES_PER_SECOND = 75
 PREGAP_FRAMES = 150
 
 
@@ -20,6 +19,7 @@ class TOCInfo:
     leadout_offset: int
     track_offsets: list[int]
     disc_id: str = ""
+    source: str = "computed"  # "whipper": the log's lookup URL; "computed": from the TOC section
 
     def to_toc_string(self) -> str:
         parts = [str(self.first_track), str(self.last_track), str(self.leadout_offset)]
@@ -37,10 +37,6 @@ class TOCInfo:
         if self.disc_id:
             d["disc_id"] = self.disc_id
         return d
-
-
-def _msf_to_frames(m: int, s: int, f: int) -> int:
-    return m * 60 * FRAMES_PER_SECOND + s * FRAMES_PER_SECOND + f
 
 
 def _compute_disc_id(first: int, last: int, leadout: int, offsets: list[int]) -> str:
@@ -65,70 +61,87 @@ def _compute_disc_id(first: int, last: int, leadout: int, offsets: list[int]) ->
     return raw.replace("+", ".").replace("/", "_").replace("=", "-")
 
 
-_INDEX_RE = re.compile(r"INDEX\s+01\s+(\d+):(\d+):(\d+)")
+_TOC_START_RE = re.compile(r"Start sector:\s*(\d+)")
+_TOC_END_RE = re.compile(r"End sector:\s*(\d+)")
+_DISC_ID_RE = re.compile(r"MusicBrainz Disc ID:\s*(\S+)")
+_URL_RE = re.compile(r"MusicBrainz lookup URL:\s*(\S+)")
+_URL_TOC_RE = re.compile(r"[?&]toc=([0-9+]+)")
 
 
-def parse_cue(cue_path: Path) -> TOCInfo:
-    """Parse a CUE sheet and extract TOC info.
+def _toc_from_sections(text: str) -> TOCInfo:
+    """Build the TOC from the log's TOC section: each track starts at its start sector + 150.
 
-    Returns track offsets in LBA sectors (with 150-frame pregap added).
-    The leadout offset must be set from audio file duration separately.
+    The leadout is the last track's end sector + 1 + 150.
     """
-    text = cue_path.read_text(errors="replace")
-    offsets: list[int] = []
-
-    for line in text.splitlines():
-        match = _INDEX_RE.search(line)
-        if match:
-            m, s, f = int(match.group(1)), int(match.group(2)), int(match.group(3))
-            offsets.append(_msf_to_frames(m, s, f) + PREGAP_FRAMES)
-
-    if not offsets:
-        raise ValueError(f"No INDEX 01 entries found in {cue_path}")
-
+    starts = [int(m) for m in _TOC_START_RE.findall(text)]
+    ends = [int(m) for m in _TOC_END_RE.findall(text)]
+    if not starts or len(starts) != len(ends):
+        raise ValueError("whipper log has no complete TOC section")
+    offsets = [start + PREGAP_FRAMES for start in starts]
+    leadout = ends[-1] + 1 + PREGAP_FRAMES
+    disc_id = _compute_disc_id(1, len(offsets), leadout, offsets)
     return TOCInfo(
         first_track=1,
         last_track=len(offsets),
-        leadout_offset=0,
+        leadout_offset=leadout,
         track_offsets=offsets,
+        disc_id=disc_id,
     )
 
 
-def parse_rip_dir(rip_dir: Path) -> TOCInfo:
-    """Parse rip artifacts from a directory.
+def parse_whipper_log(text: str) -> TOCInfo:
+    """Read the TOC and disc ID from a whipper log.
 
-    Looks for CUE sheets; computes leadout from audio file durations
-    when possible.
+    When whipper logged a lookup URL, its `toc=` value and the logged disc ID are
+    authoritative, and they must agree. Without a URL, the TOC is computed from the
+    TOC section and checked against the logged disc ID when one is present.
     """
-    cue_files = sorted(rip_dir.glob("*.cue"))
-    if not cue_files:
-        raise ValueError(f"No .cue files found in {rip_dir}")
+    logged = _DISC_ID_RE.search(text)
+    logged_id = logged.group(1) if logged else ""
 
-    toc = parse_cue(cue_files[0])
+    url = _URL_RE.search(text)
+    if url is None:
+        toc = _toc_from_sections(text)
+        if logged_id and toc.disc_id != logged_id:
+            raise ValueError(
+                f"Whipper log disc ID {logged_id} does not match its TOC section, "
+                f"which gives {toc.disc_id}."
+            )
+        return toc
 
-    audio_files = sorted(
-        f for f in rip_dir.iterdir() if f.suffix.lower() in {".flac", ".wav", ".mp3"}
-    )
-    if audio_files:
-        try:
-            from mutagen import File as MutagenFile
-
-            total_frames = 0
-            for af in audio_files:
-                audio = MutagenFile(af)
-                if audio and audio.info:
-                    total_frames += int(audio.info.length * FRAMES_PER_SECOND)
-            if total_frames > 0:
-                toc.leadout_offset = total_frames + PREGAP_FRAMES
-        except Exception:
-            pass
-
-    if toc.leadout_offset > 0:
-        toc.disc_id = _compute_disc_id(
-            toc.first_track,
-            toc.last_track,
-            toc.leadout_offset,
-            toc.track_offsets,
+    match = _URL_TOC_RE.search(url.group(1))
+    if match is None:
+        raise ValueError("whipper log lookup URL has no toc= value")
+    values = [int(value) for value in match.group(1).split("+")]
+    first, last, leadout, offsets = values[0], values[1], values[2], values[3:]
+    if len(offsets) != last:
+        raise ValueError(f"whipper log toc= lists {len(offsets)} tracks, not {last}")
+    url_id = _compute_disc_id(first, last, leadout, offsets)
+    if logged_id and url_id != logged_id:
+        raise ValueError(
+            f"Whipper log disc ID {logged_id} does not match its lookup URL, which gives {url_id}."
         )
+    return TOCInfo(
+        first_track=first,
+        last_track=last,
+        leadout_offset=leadout,
+        track_offsets=offsets,
+        disc_id=logged_id or url_id,
+        source="whipper",
+    )
 
-    return toc
+
+def parse_rip_dir(rip_dir: Path, log: Path | None = None) -> TOCInfo:
+    """Read the TOC from a rip directory's whipper log, or from `log` when given.
+
+    A directory with several logs is a multi-disc staging directory; the caller
+    must name one log.
+    """
+    if log is None:
+        logs = sorted(rip_dir.glob("*.log"))
+        if not logs:
+            raise FileNotFoundError(f"No whipper .log file found in {rip_dir}")
+        if len(logs) > 1:
+            raise ValueError(f"{rip_dir} has {len(logs)} .log files; pick one with --log FILE")
+        log = logs[0]
+    return parse_whipper_log(log.read_text(errors="replace"))

@@ -1,0 +1,18 @@
+usage: music-tagger unlock [-h] [--track TRACK] [--disc DISC] [--dry-run]
+                           [--log LOG | --no-log]
+                           path fields [fields ...]
+
+Unlock fields so `tag` can change them again.
+
+positional arguments:
+  path           Album directory.
+  fields         Tag fields, e.g. isrc title.
+
+options:
+  -h, --help     show this help message and exit
+  --track TRACK  Only this track number.
+  --disc DISC    Only this disc number.
+  --dry-run      Show what would change without writing.
+  --log LOG      Append changes to this log file (default: $MUSIC_TAGGER_LOG,
+                 else ~/Projects/music-tagger/changes.log).
+  --no-log       Do not write the change log.

@@ -13,8 +13,8 @@ from mutagen.id3 import USLT
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4
 
-from music_tagger import cli
-from music_tagger.cli import _lyrics
+from music_tagger.cli import lyrics_cmd
+from music_tagger.cli.lyrics_cmd import _lyrics
 from music_tagger.lrclib import LrclibClient
 from music_tagger.lyrics import inspect_track
 from music_tagger.lyrics_embed import apply_embed, parse_lrc, plan_embed
@@ -43,6 +43,21 @@ def _digest_tree(root: Path) -> dict[str, str]:
 
 def _without_lyrics(tags: dict[str, Any], key: str) -> dict[str, Any]:
     return {k: v for k, v in tags.items() if k != key}
+
+
+def _syncsafe(value: int) -> bytes:
+    return bytes([(value >> 21) & 0x7F, (value >> 14) & 0x7F, (value >> 7) & 0x7F, value & 0x7F])
+
+
+def _write_id3v22(path: Path) -> None:
+    """Replace the MP3's ID3 tag with a v2.2 one (a TT2 title frame). mutagen cannot write v2.2."""
+    data = path.read_bytes()
+    if data.startswith(b"ID3"):
+        size = (data[6] << 21) | (data[7] << 14) | (data[8] << 7) | data[9]
+        data = data[10 + size :]
+    text = b"\x00Track 1"
+    frame = b"TT2" + len(text).to_bytes(3, "big") + text
+    path.write_bytes(b"ID3\x02\x00\x00" + _syncsafe(len(frame)) + frame + data)
 
 
 class TestParseLrc:
@@ -220,7 +235,7 @@ class TestCli:
         def factory() -> LrclibClient:
             raise AssertionError("embedding must not construct an LRCLIB client")
 
-        monkeypatch.setattr(cli, "LrclibClient", factory)
+        monkeypatch.setattr(lyrics_cmd, "LrclibClient", factory)
 
     def test_embed_writes_logs_and_makes_no_request(
         self, flac_album: Path, no_network: None
@@ -248,6 +263,27 @@ class TestCli:
         with pytest.raises(SystemExit) as exc:
             _lyrics([str(flac_album), "--embed"])
         assert exc.value.code == 1
+
+    def test_id3v22_track_is_failed_and_its_file_is_unchanged(
+        self,
+        mp3_album: Path,
+        no_network: None,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        audio = mp3_album / f"{TRACK}.mp3"
+        _write_id3v22(audio)
+        tags = MP3(audio).tags
+        assert tags is not None
+        assert tags.version[1] == 2
+        (mp3_album / f"{TRACK}.lrc").write_text(LRC, encoding="utf-8")
+        before = audio.read_bytes()
+
+        with pytest.raises(SystemExit) as exc:
+            _lyrics([str(mp3_album), "--embed"])
+
+        assert exc.value.code == 1
+        assert audio.read_bytes() == before
+        assert "ID3v2.2" in capsys.readouterr().err
 
     def test_lyrics_id_is_rejected_with_embed(self, flac_album: Path, no_network: None) -> None:
         with pytest.raises(SystemExit) as exc:

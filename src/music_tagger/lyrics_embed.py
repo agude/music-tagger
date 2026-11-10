@@ -247,6 +247,13 @@ def apply_embed(plan: EmbedPlan) -> None:
         audio[LYRICS_MP4_ATOM] = [plan.source.text]
         audio.save()  # type: ignore[no-untyped-call]
     elif isinstance(audio, MP3):
+        # mutagen saves only ID3v2.3 and v2.4, and converting v2.2 would rewrite
+        # every frame, which the embed rules forbid. The file is left unchanged.
+        if audio.tags is not None and audio.tags.version[1] == 2:
+            raise UnsupportedFileError(
+                f"{plan.path.name} has an ID3v2.2 tag, which cannot be written; "
+                "the file is unchanged"
+            )
         version = _write_mp3(audio, plan.source)
         audio.save(v2_version=version)
     else:

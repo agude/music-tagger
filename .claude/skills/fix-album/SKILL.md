@@ -115,6 +115,9 @@ rerunning with added flags is safe.
 | 3 | `Gate: review` and the overwrites | Show the user the listed overwrites. If they approve, rerun with `--approve-overwrites`. If they reject them, the release is probably wrong: return to step 2. |
 | 4 | `Gate: blocked` and `ISRC conflict` lines | Resolve the ISRC conflicts below, then rerun. |
 | 1 | `cover image cannot be embedded` | The image is not a readable JPEG or PNG. Choose the other cover or ask the user for one. Nothing was written. |
+| 1 | `Warning: N unreadable file(s)` before `apply stopped at tag (exit 1)` | An audio file could not be read. Nothing was written. Report it, and record the skip with the file names as the reason: `checklist skip "<album-dir>" --reason "<reason>"`. |
+| 1 | `disc D track N: "a", "b"` before `apply stopped at tag (exit 1)` | Two files share a disc and track number. Nothing was written. Report the names; this needs the user's judgment. |
+| 1 | `... already exists and is not part of this rename` before `apply stopped at rename (exit 1)` | A file outside the album plan holds a target name. Nothing was renamed. Report the file and the name; this needs the user's judgment. |
 | Other | `apply stopped at <step>` | Report the error and the step. Do not work around it. Rerunning `apply` after the cause is fixed is safe. |
 
 **ISRC conflicts.** The source of an existing library code is unknown: it

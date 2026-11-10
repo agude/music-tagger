@@ -13,7 +13,9 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-from .tags import AUDIO_EXTENSIONS, read_genres
+from mutagen import MutagenError
+
+from .tags import list_audio, read_genres
 
 GENRE_LIST_PATH = (
     Path(__file__).resolve().parents[2]
@@ -61,6 +63,7 @@ def unknown_genres(genres: list[str], path: Path | None = None) -> list[str]:
 class AlbumGenres:
     album_dir: Path
     genres: list[str]
+    unreadable: list[Path]
 
 
 def find_artist_dirs(root: Path, artist: str) -> list[Path]:
@@ -84,14 +87,24 @@ def similar_artist_dirs(root: Path, artist: str, limit: int = 5) -> list[str]:
 
 
 def album_genres(artist_dir: Path) -> list[AlbumGenres]:
-    """Genres on each album directory of an artist, in first-seen order per album."""
+    """Genres on each album directory of an artist, in first-seen order per album.
+
+    Files that cannot be read, and audio-suffixed entries that are not files, are
+    listed in `unreadable` rather than dropped.
+    """
     albums: list[AlbumGenres] = []
     for album_dir in sorted(path for path in artist_dir.iterdir() if path.is_dir()):
+        listing = list_audio(album_dir)
         seen: dict[str, None] = {}
-        for track in sorted(album_dir.iterdir()):
-            if track.suffix.lower() in AUDIO_EXTENSIONS:
-                seen.update(dict.fromkeys(read_genres(track)))
-        albums.append(AlbumGenres(album_dir=album_dir, genres=list(seen)))
+        unreadable = list(listing.other)
+        for track in listing.files:
+            try:
+                genres = read_genres(track)
+            except (MutagenError, OSError):
+                unreadable.append(track)
+                continue
+            seen.update(dict.fromkeys(genres))
+        albums.append(AlbumGenres(album_dir=album_dir, genres=list(seen), unreadable=unreadable))
     return albums
 
 

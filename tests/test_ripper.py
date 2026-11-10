@@ -163,7 +163,7 @@ def _log(*blocks: str) -> str:
 class TestParseAccurateRip:
     def test_all_exact(self) -> None:
         summary = parse_accuraterip(
-            _log(_track_block(1, EXACT, EXACT), _track_block(2, EXACT, EXACT))
+            _log(_track_block(1, EXACT, EXACT), _track_block(2, EXACT, EXACT)), expected_tracks=2
         )
 
         assert summary.exact == [1, 2]
@@ -173,26 +173,29 @@ class TestParseAccurateRip:
         assert summary.needs_review is False
 
     def test_either_version_exact_counts_as_exact(self) -> None:
-        summary = parse_accuraterip(_log(_track_block(1, MISMATCH, EXACT)))
+        summary = parse_accuraterip(_log(_track_block(1, MISMATCH, EXACT)), expected_tracks=1)
 
         assert summary.exact == [1]
 
     def test_absent_tracks_do_not_need_review(self) -> None:
-        summary = parse_accuraterip(_log(_track_block(1, ABSENT, ABSENT)))
+        summary = parse_accuraterip(_log(_track_block(1, ABSENT, ABSENT)), expected_tracks=1)
 
         assert summary.absent == [1]
         assert summary.needs_review is False
 
     def test_mismatch_needs_review(self) -> None:
         summary = parse_accuraterip(
-            _log(_track_block(1, EXACT, EXACT), _track_block(2, MISMATCH, MISMATCH))
+            _log(_track_block(1, EXACT, EXACT), _track_block(2, MISMATCH, MISMATCH)),
+            expected_tracks=2,
         )
 
         assert summary.mismatched == [2]
         assert summary.needs_review is True
 
     def test_bad_copy_status_needs_review(self) -> None:
-        summary = parse_accuraterip(_log(_track_block(1, EXACT, EXACT, status="Copy NOT OK")))
+        summary = parse_accuraterip(
+            _log(_track_block(1, EXACT, EXACT, status="Copy NOT OK")), expected_tracks=1
+        )
 
         assert summary.not_ok == [(1, "Copy NOT OK")]
         assert summary.needs_review is True
@@ -203,7 +206,8 @@ class TestParseAccurateRip:
                 _track_block(1, EXACT, EXACT),
                 _track_block(2, MISMATCH, MISMATCH),
                 _track_block(3, ABSENT, ABSENT),
-            )
+            ),
+            expected_tracks=3,
         )
 
         assert summary.describe() == [
@@ -212,9 +216,69 @@ class TestParseAccurateRip:
         ]
 
 
+class TestAccurateRipEvidence:
+    def test_empty_evidence_needs_review(self) -> None:
+        summary = parse_accuraterip("unexpected log format", expected_tracks=3)
+
+        assert summary.needs_review is True
+        assert summary.missing == [1, 2, 3]
+
+    def test_missing_section_is_listed_and_needs_review(self) -> None:
+        summary = parse_accuraterip(
+            _log(_track_block(1, EXACT, EXACT), _track_block(2, EXACT, EXACT)),
+            expected_tracks=3,
+        )
+
+        assert summary.missing == [3]
+        assert summary.needs_review is True
+        assert "Missing from log: 3" in summary.describe()
+
+    def test_unexpected_track_number_needs_review(self) -> None:
+        summary = parse_accuraterip(
+            _log(_track_block(1, EXACT, EXACT), _track_block(4, EXACT, EXACT)),
+            expected_tracks=3,
+        )
+
+        assert summary.unexpected == [4]
+        assert summary.needs_review is True
+        assert "Unexpected in log: 4" in summary.describe()
+
+    def test_complete_absent_tracks_do_not_need_review(self) -> None:
+        summary = parse_accuraterip(
+            _log(
+                _track_block(1, ABSENT, ABSENT),
+                _track_block(2, ABSENT, ABSENT),
+                _track_block(3, ABSENT, ABSENT),
+            ),
+            expected_tracks=3,
+        )
+
+        assert summary.missing == []
+        assert summary.needs_review is False
+
+
+class TestRipCommandMissingEvidence:
+    def test_log_without_tracks_section_is_not_verified(
+        self, tmp_path: Path, capsys: object
+    ) -> None:
+        from music_tagger.cli.common import EXIT_REVIEW
+        from music_tagger.cli.rip import _rip
+        from music_tagger.ripper import RipResult
+
+        log_file = tmp_path / "rip.log"
+        log_file.write_text("Log created by: whipper 0.10.0 (internal logger)\n")
+        with patch("music_tagger.ripper.rip_cd") as rip:
+            rip.return_value = RipResult(tracks=[], track_count=2, log_file=log_file)
+            with pytest.raises(SystemExit) as error:
+                _rip([str(tmp_path / "out")])
+
+        assert error.value.code == EXIT_REVIEW
+        assert "verified; safe to eject" not in capsys.readouterr().out  # type: ignore[attr-defined]
+
+
 class TestRipCommandAccurateRip:
     def _rip(self, tmp_path: Path, log_text: str) -> None:
-        from music_tagger.cli import _rip
+        from music_tagger.cli.rip import _rip
         from music_tagger.ripper import RipResult
 
         log_file = tmp_path / "rip.log"
@@ -230,7 +294,7 @@ class TestRipCommandAccurateRip:
         assert "AccurateRip: 1 exact, 0 mismatched, 1 not in database" in out
 
     def test_mismatch_exits_review(self, tmp_path: Path) -> None:
-        from music_tagger.cli import EXIT_REVIEW
+        from music_tagger.cli.common import EXIT_REVIEW
 
         with pytest.raises(SystemExit) as error:
             self._rip(tmp_path, _log(_track_block(1, MISMATCH, MISMATCH)))
@@ -334,7 +398,7 @@ class TestRipDiscs:
 
 class TestRipCommandDiscs:
     def _rip(self, tmp_path: Path, disc: tuple[int, int] | None) -> str:
-        from music_tagger.cli import _rip
+        from music_tagger.cli.rip import _rip
 
         log_file = tmp_path / "rip.log"
         log_file.write_text(_log(_track_block(1, EXACT, EXACT)))

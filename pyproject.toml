@@ -65,4 +65,4 @@ testpaths = ["tests"]
 # The standard is 90; this repo sits at ~84 today. The gate is set to the
 # current floor so coverage can only ratchet upward, not to bless 84 as
 # the target.
-addopts = "--cov=music_tagger --cov-fail-under=83"
+addopts = "--cov=music_tagger --cov-fail-under=93"

@@ -19,11 +19,11 @@ file, or the decisions file by hand.
 ## 1. Run the batch for the album
 
 ```bash
-uv run music-tagger lyrics-batch "<album-dir>"
+uv run music-tagger lyrics-batch "<album-dir>" --auto
 ```
 
-With `--auto`, it also records the choices the rules accept. It writes the sidecars
-it can settle and saves the rest to the pending file. Judge only what is left.
+`--auto` records the choices the rules accept. It writes the sidecars it can settle
+and saves the rest to the pending file. Judge only what is left.
 
 ## 2. List the options
 

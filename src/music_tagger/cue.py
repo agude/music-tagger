@@ -10,6 +10,8 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
+from .fileio import atomic_write_text
+
 _FILE_LINE = re.compile(r'^(\s*FILE\s+")([^"]+)(".*)$')
 # CUE sheets are usually UTF-8 but older rippers wrote Latin-1;
 # surrogateescape round-trips any bytes this module does not change.
@@ -34,8 +36,7 @@ def rewrite_cue_references(album_dir: Path, renames: Mapping[str, str]) -> list[
         rewritten = [_rewrite_line(line, renames) for line in lines]
         if rewritten == lines:
             continue
-        with open(cue, "w", encoding=_ENCODING, errors=_ERRORS, newline="") as f:
-            f.write("".join(rewritten))
+        atomic_write_text(cue, "".join(rewritten), encoding=_ENCODING, errors=_ERRORS)
         changed.append(cue)
     return changed
 

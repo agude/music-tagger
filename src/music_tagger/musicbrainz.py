@@ -17,6 +17,18 @@ MAX_ATTEMPTS = 4
 RETRY_BACKOFF_SECS = 2.0
 
 
+def _as_tuple(value: Any) -> tuple[str, ...]:
+    """A list of names from JSON. A legacy "; "-joined string is split on its separator."""
+    if isinstance(value, str):
+        return tuple(part for part in value.split("; ") if part)
+    return tuple(value)
+
+
+def _as_pairs(value: Any) -> tuple[tuple[str, str], ...]:
+    """(name, artist ID) pairs from JSON lists."""
+    return tuple((name, aid) for name, aid in value)
+
+
 @dataclass
 class MBTrack:
     number: int
@@ -24,24 +36,25 @@ class MBTrack:
     duration_ms: int | None = None
     artist: str = ""
     artist_id: str = ""
+    artist_credits: tuple[tuple[str, str], ...] = ()
     recording_id: str = ""
     track_id: str = ""
     isrcs: list[str] = field(default_factory=list)
     work_id: str = ""
-    composer: str = ""
-    composer_id: str = ""
-    lyricist: str = ""
-    lyricist_id: str = ""
-    producer: str = ""
-    producer_id: str = ""
-    engineer: str = ""
-    engineer_id: str = ""
-    mixer: str = ""
-    mixer_id: str = ""
-    conductor: str = ""
-    conductor_id: str = ""
-    remixer: str = ""
-    remixer_id: str = ""
+    composer: tuple[str, ...] = ()
+    composer_id: tuple[str, ...] = ()
+    lyricist: tuple[str, ...] = ()
+    lyricist_id: tuple[str, ...] = ()
+    producer: tuple[str, ...] = ()
+    producer_id: tuple[str, ...] = ()
+    engineer: tuple[str, ...] = ()
+    engineer_id: tuple[str, ...] = ()
+    mixer: tuple[str, ...] = ()
+    mixer_id: tuple[str, ...] = ()
+    conductor: tuple[str, ...] = ()
+    conductor_id: tuple[str, ...] = ()
+    remixer: tuple[str, ...] = ()
+    remixer_id: tuple[str, ...] = ()
     performers: str = ""
     performer_ids: str = ""
 
@@ -80,7 +93,9 @@ class MBTrack:
         ):
             val = getattr(self, attr)
             if val:
-                d[attr] = val
+                d[attr] = list(val) if isinstance(val, tuple) else val
+        if self.artist_credits:
+            d["artist_credits"] = [list(pair) for pair in self.artist_credits]
         return d
 
     @classmethod
@@ -102,22 +117,23 @@ class MBTrack:
             track_id=data.get("track_id", ""),
             isrcs=list(isrcs),
             work_id=data.get("work_id", ""),
-            composer=data.get("composer", ""),
-            composer_id=data.get("composer_id", ""),
-            lyricist=data.get("lyricist", ""),
-            lyricist_id=data.get("lyricist_id", ""),
-            producer=data.get("producer", ""),
-            producer_id=data.get("producer_id", ""),
-            engineer=data.get("engineer", ""),
-            engineer_id=data.get("engineer_id", ""),
-            mixer=data.get("mixer", ""),
-            mixer_id=data.get("mixer_id", ""),
-            conductor=data.get("conductor", ""),
-            conductor_id=data.get("conductor_id", ""),
-            remixer=data.get("remixer", ""),
-            remixer_id=data.get("remixer_id", ""),
+            composer=_as_tuple(data.get("composer", ())),
+            composer_id=_as_tuple(data.get("composer_id", ())),
+            lyricist=_as_tuple(data.get("lyricist", ())),
+            lyricist_id=_as_tuple(data.get("lyricist_id", ())),
+            producer=_as_tuple(data.get("producer", ())),
+            producer_id=_as_tuple(data.get("producer_id", ())),
+            engineer=_as_tuple(data.get("engineer", ())),
+            engineer_id=_as_tuple(data.get("engineer_id", ())),
+            mixer=_as_tuple(data.get("mixer", ())),
+            mixer_id=_as_tuple(data.get("mixer_id", ())),
+            conductor=_as_tuple(data.get("conductor", ())),
+            conductor_id=_as_tuple(data.get("conductor_id", ())),
+            remixer=_as_tuple(data.get("remixer", ())),
+            remixer_id=_as_tuple(data.get("remixer_id", ())),
             performers=data.get("performers", ""),
             performer_ids=data.get("performer_ids", ""),
+            artist_credits=_as_pairs(data.get("artist_credits", [])),
         )
 
 
@@ -126,6 +142,7 @@ class MBRelease:
     id: str
     title: str
     date: str = ""
+    artist_credits: tuple[tuple[str, str], ...] = ()
     country: str = ""
     status: str = ""
     label: str = ""
@@ -172,6 +189,8 @@ class MBRelease:
                 d[attr] = val
         if self.secondary_types:
             d["secondary_types"] = list(self.secondary_types)
+        if self.artist_credits:
+            d["artist_credits"] = [list(pair) for pair in self.artist_credits]
         return d
 
     @classmethod
@@ -199,7 +218,19 @@ class MBRelease:
             first_release_date=data.get("first_release_date", ""),
             asin=data.get("asin", ""),
             script=data.get("script", ""),
+            artist_credits=_as_pairs(data.get("artist_credits", [])),
         )
+
+
+def _artist_credit_pairs(credit_list: list[dict[str, Any]]) -> tuple[tuple[str, str], ...]:
+    """(name, artist ID) for each credited artist, in credit order."""
+    return tuple(
+        (
+            credit.get("name", credit.get("artist", {}).get("name", "")),
+            credit.get("artist", {}).get("id", ""),
+        )
+        for credit in credit_list
+    )
 
 
 def _build_artist_credit(credit_list: list[dict[str, Any]]) -> str:
@@ -220,10 +251,11 @@ _CREDIT_ROLES = {
 }
 
 
-def _parse_recording_credits(recording: dict[str, Any]) -> dict[str, str]:
+def _parse_recording_credits(recording: dict[str, Any]) -> dict[str, Any]:
     """Extract personnel credits from recording relationships.
 
-    Returns a flat dict of field_name -> value (names joined with "; ").
+    Role names and their artist IDs are tuples, one value per person. Performers
+    and the work ID are "; "-joined strings.
     """
     # role -> {artist_id: artist_name}
     role_artists: dict[str, dict[str, str]] = {}
@@ -268,13 +300,11 @@ def _parse_recording_credits(recording: dict[str, Any]) -> dict[str, str]:
                 elif wr_type == "lyricist" and wname:
                     role_artists.setdefault("lyricist", {})[waid] = wname
 
-    result: dict[str, str] = {}
+    result: dict[str, Any] = {}
 
     for role, artists in role_artists.items():
-        names = list(artists.values())
-        ids = list(artists.keys())
-        result[role] = "; ".join(names)
-        result[f"{role}_id"] = "; ".join(ids)
+        result[role] = tuple(artists.values())
+        result[f"{role}_id"] = tuple(artists.keys())
 
     if performer_map:
         perf_names = []
@@ -292,6 +322,34 @@ def _parse_recording_credits(recording: dict[str, Any]) -> dict[str, str]:
         result["work_id"] = work_id
 
     return result
+
+
+def _lucene_phrase(value: str) -> str:
+    """Quote a value as a Lucene phrase, escaping backslashes and double quotes."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+# MusicBrainz medium formats that hold no audio track a CD rip can match. Compared
+# case-insensitively. A DualDisc's CD side has an audio format, so it is kept.
+NON_AUDIO_FORMATS = frozenset(
+    name.casefold()
+    for name in (
+        "DVD",
+        "DVD-Video",
+        "Blu-ray",
+        "HD-DVD",
+        "VCD",
+        "SVCD",
+        "CD-ROM",
+        "Data CD",
+        "DVDplus",
+        "UMD",
+    )
+)
+
+
+def _is_audio_medium(medium: dict[str, Any]) -> bool:
+    return medium.get("format", "").casefold() not in NON_AUDIO_FORMATS
 
 
 class MusicBrainzClient:
@@ -331,7 +389,10 @@ class MusicBrainzClient:
         limit: int = 10,
         barcode: str | None = None,
     ) -> list[MBRelease]:
-        query = f'artist:"{artist}" release:"{album}"'
+        clauses = [f"release:{_lucene_phrase(album)}"]
+        if artist.strip():
+            clauses.insert(0, f"artist:{_lucene_phrase(artist)}")
+        query = " ".join(clauses)
         if format:
             query += f" AND format:{format}"
         if barcode:
@@ -366,6 +427,7 @@ class MusicBrainzClient:
 
         artist_credit = r.get("artist-credit", [])
         artist_name = _build_artist_credit(artist_credit)
+        artist_credits = _artist_credit_pairs(artist_credit)
         artist_id = ""
         if artist_credit:
             artist_obj = artist_credit[0].get("artist", {})
@@ -384,13 +446,16 @@ class MusicBrainzClient:
         total_tracks = 0
         media_formats = []
         for medium in r.get("media", []):
-            disc_num = medium.get("position", 1)
             media_formats.append(medium.get("format", ""))
+            if not _is_audio_medium(medium):
+                continue
+            disc_num = medium.get("position", 1)
             tracks = []
             for t in medium.get("tracks", []):
                 recording = t.get("recording", {})
                 track_artist_credit = t.get("artist-credit") or recording.get("artist-credit") or []
                 track_artist_name = _build_artist_credit(track_artist_credit)
+                track_credits = _artist_credit_pairs(track_artist_credit)
                 track_artist_id = ""
                 if track_artist_credit:
                     track_artist_id = track_artist_credit[0].get("artist", {}).get("id", "")
@@ -410,24 +475,25 @@ class MusicBrainzClient:
                         duration_ms=t.get("length") or recording.get("length"),
                         artist=track_artist_name,
                         artist_id=track_artist_id,
+                        artist_credits=track_credits,
                         recording_id=recording.get("id", ""),
                         track_id=t.get("id", ""),
                         isrcs=list(recording.get("isrcs", [])),
                         work_id=credits.get("work_id", ""),
-                        composer=credits.get("composer", ""),
-                        composer_id=credits.get("composer_id", ""),
-                        lyricist=credits.get("lyricist", ""),
-                        lyricist_id=credits.get("lyricist_id", ""),
-                        producer=credits.get("producer", ""),
-                        producer_id=credits.get("producer_id", ""),
-                        engineer=credits.get("engineer", ""),
-                        engineer_id=credits.get("engineer_id", ""),
-                        mixer=credits.get("mixer", ""),
-                        mixer_id=credits.get("mixer_id", ""),
-                        conductor=credits.get("conductor", ""),
-                        conductor_id=credits.get("conductor_id", ""),
-                        remixer=credits.get("remixer", ""),
-                        remixer_id=credits.get("remixer_id", ""),
+                        composer=credits.get("composer", ()),
+                        composer_id=credits.get("composer_id", ()),
+                        lyricist=credits.get("lyricist", ()),
+                        lyricist_id=credits.get("lyricist_id", ()),
+                        producer=credits.get("producer", ()),
+                        producer_id=credits.get("producer_id", ()),
+                        engineer=credits.get("engineer", ()),
+                        engineer_id=credits.get("engineer_id", ()),
+                        mixer=credits.get("mixer", ()),
+                        mixer_id=credits.get("mixer_id", ()),
+                        conductor=credits.get("conductor", ()),
+                        conductor_id=credits.get("conductor_id", ()),
+                        remixer=credits.get("remixer", ()),
+                        remixer_id=credits.get("remixer_id", ()),
                         performers=credits.get("performers", ""),
                         performer_ids=credits.get("performer_ids", ""),
                     )
@@ -449,6 +515,7 @@ class MusicBrainzClient:
             discs=discs,
             artist=artist_name,
             artist_id=artist_id,
+            artist_credits=artist_credits,
             release_group_id=release_group_id,
             release_group_type=release_group_type,
             secondary_types=secondary_types,
@@ -498,7 +565,9 @@ class MusicBrainzClient:
             if li.get("catalog-number"):
                 catnum = li["catalog-number"]
                 break
-        track_count = sum(m.get("track-count", 0) for m in r.get("media", []))
+        track_count = sum(
+            m.get("track-count", 0) for m in r.get("media", []) if _is_audio_medium(m)
+        )
         artist_credit = r.get("artist-credit", [])
         artist_name = _build_artist_credit(artist_credit)
         return MBRelease(

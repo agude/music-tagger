@@ -1,0 +1,20 @@
+usage: music-tagger replaygain [-h] [--dry-run] [--skip-existing]
+                               [--track-only] [--log LOG | --no-log]
+                               path
+
+Compute and write ReplayGain 2.0 tags via rsgain.
+
+positional arguments:
+  path             Album directory.
+
+options:
+  -h, --help       show this help message and exit
+  --dry-run        Show gains without writing tags.
+  --skip-existing  Skip files that already have ReplayGain tags.
+  --track-only     Write each file's track gain and peak only. Album tags are
+                   not written, so use this when the directory holds files
+                   from more than one album.
+  --log LOG        Append changes to this log file (default:
+                   $MUSIC_TAGGER_LOG, else ~/Projects/music-
+                   tagger/changes.log).
+  --no-log         Do not write the change log.

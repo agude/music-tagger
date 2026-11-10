@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
 import pytest
 from mutagen.flac import FLAC
 
-from music_tagger import cli
-from music_tagger.cli import _lyrics_batch
+from music_tagger.cli import lyrics_cmd
+from music_tagger.cli.lyrics_cmd import _lyrics_batch
 from music_tagger.lrclib import LrclibClient
 from music_tagger.lyrics_batch import (
     AUTO_LENGTH_SECS,
@@ -25,7 +28,7 @@ from music_tagger.lyrics_batch import (
     save_decisions,
     save_pending,
 )
-from music_tagger.tags import read_album
+from music_tagger.tags import TagChange, read_album, write_tags
 from tests.conftest import FIXTURES
 from tests.lyrics_fakes import catalog, record, responder, use_client
 
@@ -60,6 +63,31 @@ def _recording(
 
 def _searched(seen: list[httpx.Request]) -> list[str | None]:
     return [r.url.params.get("track_name") for r in seen if r.url.path == "/api/search"]
+
+
+def _tag_release_track(album: Path, file: str, release_track_id: str) -> None:
+    track = next(t for t in read_album(album).tracks if t.path.name == file)
+    write_tags(track, [TagChange("musicbrainz_releasetrackid", "", release_track_id)])
+
+
+def _write_decisions(path: Path, entries: list[dict[str, object]]) -> None:
+    path.write_text(json.dumps({"version": 1, "entries": entries}), encoding="utf-8")
+
+
+def _decision_json(
+    album: Path, file: str, release_track_id: str | None = None, track: int = 1
+) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "album": str(album),
+        "file": file,
+        "track": track,
+        "choice": None,
+        "reason": "no lyric exists",
+        "decided": STAMP,
+    }
+    if release_track_id is not None:
+        entry["release_track_id"] = release_track_id
+    return entry
 
 
 class TestFetch:
@@ -285,6 +313,163 @@ class TestFetch:
         assert load_pending(pending) == [saved]
 
 
+class TestReleaseTrackIdKeys:
+    def test_renamed_file_with_its_release_track_id_is_not_searched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "library"
+        album = _add_album(root, "One")
+        _tag_release_track(album, "01 - Track 1.flac", "rt-1")
+        decisions = tmp_path / "decisions.json"
+        _write_decisions(decisions, [_decision_json(album, "01 - Track 1.flac", "rt-1")])
+        (album / "01 - Track 1.flac").rename(album / "01 - Track 1 (Remaster).flac")
+        seen: list[httpx.Request] = []
+        use_client(monkeypatch, _recording(responder(catalog(album)), seen))
+
+        code = _run(
+            [
+                str(root),
+                "--pending",
+                str(tmp_path / "p.json"),
+                "--decisions",
+                str(decisions),
+                "--no-log",
+            ]
+        )
+
+        assert code == 0
+        assert "Desperado" not in _searched(seen)
+        stored = json.loads(decisions.read_text(encoding="utf-8"))["entries"]
+        assert [e["file"] for e in stored] == ["01 - Track 1 (Remaster).flac"]
+
+    def test_moved_album_with_release_track_ids_is_not_searched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "library"
+        album = _add_album(root, "One")
+        files = ["01 - Track 1.flac", "02 - Track 2.flac", "03 - Track 3.flac"]
+        for number, file in enumerate(files, start=1):
+            _tag_release_track(album, file, f"rt-{number}")
+        decisions = tmp_path / "decisions.json"
+        _write_decisions(
+            decisions,
+            [_decision_json(album, f, f"rt-{n}", n) for n, f in enumerate(files, start=1)],
+        )
+        moved = root / "Eagles" / "Two"
+        shutil.move(album, moved)
+        seen: list[httpx.Request] = []
+        use_client(monkeypatch, _recording(responder(catalog(moved)), seen))
+
+        code = _run(
+            [
+                str(root),
+                "--pending",
+                str(tmp_path / "p.json"),
+                "--decisions",
+                str(decisions),
+                "--no-log",
+            ]
+        )
+
+        assert code == 0
+        assert seen == []
+        stored = json.loads(decisions.read_text(encoding="utf-8"))["entries"]
+        assert {e["album"] for e in stored} == {str(moved)}
+
+    def test_decision_without_id_still_matches_by_album_and_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "library"
+        album = _add_album(root, "One")
+        decisions = tmp_path / "decisions.json"
+        _write_decisions(decisions, [_decision_json(album, "01 - Track 1.flac")])
+        seen: list[httpx.Request] = []
+        use_client(monkeypatch, _recording(responder(catalog(album)), seen))
+
+        _run(
+            [
+                str(root),
+                "--pending",
+                str(tmp_path / "p.json"),
+                "--decisions",
+                str(decisions),
+                "--no-log",
+            ]
+        )
+
+        assert "Desperado" not in _searched(seen)
+
+    def test_same_file_name_in_two_albums_with_different_ids_do_not_cross(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "library"
+        one = _add_album(root, "One")
+        two = _add_album(root, "Two")
+        _tag_release_track(one, "01 - Track 1.flac", "rt-one")
+        _tag_release_track(two, "01 - Track 1.flac", "rt-two")
+        decisions = tmp_path / "decisions.json"
+        _write_decisions(decisions, [_decision_json(one, "01 - Track 1.flac", "rt-one")])
+        seen: list[httpx.Request] = []
+        use_client(monkeypatch, _recording(responder(catalog(two)), seen))
+
+        _run(
+            [
+                str(root),
+                "--pending",
+                str(tmp_path / "p.json"),
+                "--decisions",
+                str(decisions),
+                "--no-log",
+            ]
+        )
+
+        assert _searched(seen).count("Desperado") == 1
+
+
+class TestReleaseTrackIdRecorded:
+    def test_pending_entry_records_the_release_track_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "library"
+        album = _add_album(root, "One")
+        _tag_release_track(album, "01 - Track 1.flac", "rt-1")
+        (album / "01 - Track 1.txt").write_text("[00:01.00]Timed\n", encoding="utf-8")
+        use_client(monkeypatch, responder(catalog(album)))
+        pending = tmp_path / "pending.json"
+
+        _run([str(root), "--pending", str(pending), "--no-log"])
+
+        [entry] = [e for e in load_pending(pending) if e.file == "01 - Track 1.flac"]
+        assert entry.release_track_id == "rt-1"
+
+    def test_auto_chosen_decision_records_the_release_track_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        root = tmp_path / "library"
+        album = _add_album(root, "One")
+        _tag_release_track(album, "01 - Track 1.flac", "rt-1")
+        records = catalog(album)
+        album_name = read_album(album).tracks[0].tags["album"]
+        records["Desperado"].append(record(900, "Desperado", album_name, duration=0.9))
+        use_client(monkeypatch, responder(records))
+        decisions = tmp_path / "decisions.json"
+
+        _run(
+            [
+                str(root),
+                "--auto",
+                "--pending",
+                str(tmp_path / "p.json"),
+                "--decisions",
+                str(decisions),
+                "--no-log",
+            ]
+        )
+
+        stored = json.loads(decisions.read_text(encoding="utf-8"))["entries"]
+        assert [e["release_track_id"] for e in stored if e["file"].startswith("01")] == ["rt-1"]
+
+
 class TestEmbed:
     def test_embed_writes_tags_from_the_sidecars_it_just_fetched(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -409,7 +594,7 @@ def test_client_constructed_once_per_run(tmp_path: Path, monkeypatch: pytest.Mon
         built.append(client)
         return client
 
-    monkeypatch.setattr(cli, "LrclibClient", factory)
+    monkeypatch.setattr(lyrics_cmd, "LrclibClient", factory)
 
     _run([str(root), "--pending", str(tmp_path / "p.json"), "--no-log"])
 
@@ -424,6 +609,7 @@ def _cand(
     offers: tuple[str, ...] = ("synced", "plain"),
     delta: float | None = 0.0,
     last: float | None = None,
+    identity: bool = True,
 ) -> Candidate:
     return Candidate(
         id=candidate_id,
@@ -436,6 +622,7 @@ def _cand(
         offers=offers,
         notes=(),
         last_line_delta=last,
+        identity_matches=identity,
     )
 
 
@@ -474,6 +661,42 @@ class TestConfidentChoice:
 
     def test_album_differs_is_not_taken(self) -> None:
         assert confident_choice(_pending_of(_cand(6, plausible=True, album=False))) is None
+
+    def test_fallback_is_not_taken_when_the_title_differs(self) -> None:
+        other_title = replace(_cand(7, delta=1.0, last=-5.0, identity=False), title="Other Song")
+        assert confident_choice(_pending_of(other_title)) is None
+
+    def test_fallback_is_not_taken_when_the_artist_differs(self) -> None:
+        other_artist = replace(
+            _cand(8, delta=1.0, last=-5.0, identity=False), artist="Other Artist"
+        )
+        assert confident_choice(_pending_of(other_artist)) is None
+
+    def test_fallback_is_taken_when_artist_and_title_match(self) -> None:
+        matching = _cand(9, delta=1.0, last=-5.0)
+        assert confident_choice(_pending_of(matching)) == matching
+
+
+class TestIdentityField:
+    def test_identity_is_written_to_the_pending_file(self, tmp_path: Path) -> None:
+        pending = tmp_path / "pending.json"
+        candidate = replace(_cand(2, plausible=True), identity_matches=True)
+
+        save_pending(pending, [_pending_of(candidate)], "2026-11-10T00:00:00Z")
+
+        [entry] = load_pending(pending)
+        assert entry.candidates[0].identity_matches is True
+
+    def test_pending_entry_without_identity_key_loads_as_false(self, tmp_path: Path) -> None:
+        pending = tmp_path / "pending.json"
+        save_pending(pending, [_pending_of(_cand(1, plausible=True))], "2026-11-10T00:00:00Z")
+        data = json.loads(pending.read_text(encoding="utf-8"))
+        for candidate in data["entries"][0]["candidates"]:
+            candidate.pop("identity_matches", None)
+        pending.write_text(json.dumps(data), encoding="utf-8")
+
+        [entry] = load_pending(pending)
+        assert entry.candidates[0].identity_matches is False
 
 
 class TestAutoChoice:
@@ -593,3 +816,105 @@ class TestAutoChoice:
 
         assert code == 0
         assert FLAC(album / "01 - Track 1.flac").get("lyrics")
+
+
+STAMP = "2026-11-10T00:00:00Z"
+
+
+class TestStateFileValidation:
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("plausible", "false"),
+            ("album_matches", 1),
+            ("duration_delta", "NaN"),
+            ("duration_delta", float("nan")),
+            ("last_line_delta", "1.5"),
+            ("identity_matches", "yes"),
+            ("id", "12"),
+            ("offers", "synced"),
+        ],
+    )
+    def test_bad_candidate_field_raises_naming_it(
+        self, tmp_path: Path, field: str, value: object
+    ) -> None:
+        pending = tmp_path / "pending.json"
+        save_pending(pending, [_pending_of(_cand(1, plausible=True))], STAMP)
+        data = json.loads(pending.read_text(encoding="utf-8"))
+        data["entries"][0]["candidates"][0][field] = value
+        pending.write_text(json.dumps(data), encoding="utf-8")
+
+        with pytest.raises(ValueError, match=field):
+            load_pending(pending)
+
+    def test_file_without_entries_raises_value_error(self, tmp_path: Path) -> None:
+        pending = tmp_path / "pending.json"
+        pending.write_text(json.dumps({"version": 1, "generated": STAMP}), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="entries"):
+            load_pending(pending)
+
+    def test_decisions_without_entries_raises_value_error(self, tmp_path: Path) -> None:
+        decisions = tmp_path / "decisions.json"
+        decisions.write_text(json.dumps({"version": 1}), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="entries"):
+            load_decisions(decisions)
+
+    def test_release_track_id_must_be_a_string(self, tmp_path: Path) -> None:
+        decisions = tmp_path / "decisions.json"
+        _write_decisions(decisions, [_decision_json(tmp_path, "01.flac", 5)])  # type: ignore[arg-type]
+
+        with pytest.raises(ValueError, match="release_track_id"):
+            load_decisions(decisions)
+
+    def test_decision_with_string_choice_raises_naming_it(self, tmp_path: Path) -> None:
+        decisions = tmp_path / "decisions.json"
+        decisions.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "entries": [
+                        {
+                            "album": "/music/A",
+                            "file": "01.flac",
+                            "track": 1,
+                            "choice": "12",
+                            "reason": "r",
+                            "decided": STAMP,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="choice"):
+            load_decisions(decisions)
+
+    def test_save_ignores_a_stale_fixed_temp_name(self, tmp_path: Path) -> None:
+        pending = tmp_path / "pending.json"
+        stale = tmp_path / "pending.json.tmp"
+        stale.write_text("stale", encoding="utf-8")
+
+        save_pending(pending, [], STAMP)
+
+        assert stale.read_text(encoding="utf-8") == "stale"
+        assert load_pending(pending) == []
+
+    def test_save_fsyncs_once_and_leaves_no_temp_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[int] = []
+        real_fsync = os.fsync
+
+        def recording_fsync(fd: int) -> None:
+            calls.append(fd)
+            real_fsync(fd)
+
+        monkeypatch.setattr(os, "fsync", recording_fsync)
+
+        save_pending(tmp_path / "pending.json", [], STAMP)
+
+        assert len(calls) == 1
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["pending.json"]

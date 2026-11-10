@@ -10,8 +10,8 @@ import httpx
 import pytest
 from mutagen.flac import FLAC
 
-from music_tagger import cli
-from music_tagger.cli import _lyrics
+from music_tagger.cli import lyrics_cmd
+from music_tagger.cli.lyrics_cmd import _lyrics
 from tests.lyrics_fakes import catalog as _catalog
 from tests.lyrics_fakes import no_network as _no_network
 from tests.lyrics_fakes import record as _record
@@ -278,7 +278,7 @@ class TestFetch:
         with pytest.raises(SystemExit) as info:
             _lyrics([str(flac_album), "--fetch"])
 
-        assert info.value.code == cli.EXIT_LYRICS_UNRESOLVED
+        assert info.value.code == lyrics_cmd.EXIT_LYRICS_UNRESOLVED
         assert (flac_album / "01 - Track 1.lrc").exists()
         assert not (flac_album / "02 - Track 2.lrc").exists()
         assert (flac_album / "03 - Track 3.lrc").exists()
@@ -295,7 +295,7 @@ class TestFetch:
         with pytest.raises(SystemExit) as info:
             _lyrics([str(flac_album), "--fetch", "--track", "1"])
 
-        assert info.value.code == cli.EXIT_LYRICS_UNRESOLVED
+        assert info.value.code == lyrics_cmd.EXIT_LYRICS_UNRESOLVED
         assert not (flac_album / "01 - Track 1.lrc").exists()
 
     def test_outage_exits_1_and_writes_nothing(

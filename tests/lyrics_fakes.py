@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 import pytest
 
-from music_tagger import cli
+from music_tagger.cli import lyrics_cmd
 from music_tagger.lrclib import LrclibClient
 from music_tagger.tags import read_album
 
@@ -22,14 +22,14 @@ def use_client(monkeypatch: pytest.MonkeyPatch, responder: Responder) -> None:
             transport=httpx.MockTransport(responder), sleep=lambda _s: None, min_interval=0.0
         )
 
-    monkeypatch.setattr(cli, "LrclibClient", factory)
+    monkeypatch.setattr(lyrics_cmd, "LrclibClient", factory)
 
 
 def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     def factory() -> LrclibClient:
         raise AssertionError("this mode must not construct an LRCLIB client")
 
-    monkeypatch.setattr(cli, "LrclibClient", factory)
+    monkeypatch.setattr(lyrics_cmd, "LrclibClient", factory)
 
 
 def record(record_id: int, title: str, album: str, **overrides: Any) -> dict[str, Any]:

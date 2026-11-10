@@ -264,6 +264,8 @@ class Verdict:
 
     record: LyricsRecord
     plausible: bool
+    # The artist and the title both match the track. Plausibility also needs the duration.
+    identity_matches: bool
     album_matches: bool
     notes: tuple[str, ...]
 
@@ -353,6 +355,7 @@ def _verdict(record: LyricsRecord, evidence: TrackEvidence) -> Verdict:
     return Verdict(
         record=record,
         plausible=artist_ok and title_ok and duration_ok,
+        identity_matches=artist_ok and title_ok,
         album_matches=album_matches,
         notes=tuple(notes),
     )

@@ -16,7 +16,7 @@ from pathlib import Path
 
 from mutagen import MutagenError
 
-from .tags import AUDIO_EXTENSIONS, UnsupportedFileError, read_embedded_lyrics
+from .tags import UnsupportedFileError, audio_files, read_embedded_lyrics
 
 LRC_SUFFIX = ".lrc"
 TXT_SUFFIX = ".txt"
@@ -208,10 +208,7 @@ def inspect_track(path: Path) -> TrackLyrics:
 
 def inspect_album(directory: Path) -> AlbumLyrics:
     """Inspect every audio file in a directory, in name order. Read-only."""
-    audio_files = sorted(
-        p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS
-    )
     return AlbumLyrics(
         directory=directory,
-        tracks=[inspect_track(path) for path in audio_files],
+        tracks=[inspect_track(path) for path in audio_files(directory)],
     )

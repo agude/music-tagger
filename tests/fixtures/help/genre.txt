@@ -1,0 +1,27 @@
+usage: music-tagger genre [-h] [--add GENRE] [--remove GENRE] [--force]
+                          [--list] [--artist ARTIST] [--root ROOT] [--dry-run]
+                          [--log LOG | --no-log]
+                          [path] [genres ...]
+
+Set or show the genre tag on all tracks in an album directory.
+
+positional arguments:
+  path             Album directory.
+  genres           Genres to set, replacing what is there. Omit to show
+                   current genres.
+
+options:
+  -h, --help       show this help message and exit
+  --add GENRE      Add a genre, keeping the rest.
+  --remove GENRE   Remove a genre.
+  --force          Allow genres that are not on the canonical list.
+  --list           List all genres in the library with track counts.
+  --artist ARTIST  Show the genres on each of this artist's albums in the
+                   library.
+  --root ROOT      Library root for --list and --artist (default:
+                   /mnt/synology/media/music).
+  --dry-run        Show what would change without writing.
+  --log LOG        Append changes to this log file (default:
+                   $MUSIC_TAGGER_LOG, else ~/Projects/music-
+                   tagger/changes.log).
+  --no-log         Do not write the change log.

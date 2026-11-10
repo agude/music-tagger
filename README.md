@@ -10,8 +10,9 @@ shows a field-by-field diff, and writes consistent tags across all tracks.
 ## How it works
 
 music-tagger is an interactive tool designed to be driven by
-[Claude Code](https://github.com/anthropics/claude-code). It provides three
-CLI subcommands:
+[Claude Code](https://github.com/anthropics/claude-code). It is a set of CLI
+subcommands with flags, exit codes, and gates. AGENTS.md has the full list. The
+core flow is three of them:
 
 ```
 music-tagger scan <library-root> -o checklist.md
@@ -28,7 +29,9 @@ durations.
 
 **tag** fetches a chosen release from MusicBrainz, computes a field-by-field
 diff against the current tags, and writes changes. Use `--dry-run` to preview
-without writing. Use `--log` to append changes to a file for auditing.
+without writing. Changes are appended to `$MUSIC_TAGGER_LOG`, or
+`~/Projects/music-tagger/changes.log` when that is unset, for auditing. Use
+`--log PATH` to write to another file, or `--no-log` to skip the log.
 
 ## Matching approach
 
@@ -38,7 +41,9 @@ without writing. Use `--log` to append changes to a file for auditing.
   matching criteria.
 - MB disambiguation suffixes like `(single edit)`, `(remix)`, and `(live)` are
   ignored when comparing titles.
-- Per-track artist IDs are preserved on compilation and concert albums.
+- Each track's artist credits and MusicBrainz artist IDs come from the track's
+  own credit when MusicBrainz has one, so compilation and concert albums keep
+  each track's artist.
 - The recording date (`DATE` / `TDRC`) is never overwritten. The MB release
   date goes to `RELEASEDATE` / `TDRL`.
 
@@ -46,6 +51,8 @@ without writing. Use `--log` to append changes to a file for auditing.
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
+- System packages for `rip` and `replaygain`: `whipper`, `libdiscid-dev`, and
+  `rsgain`. AGENTS.md lists them under "Environment setup".
 
 ## Installation
 
@@ -110,8 +117,10 @@ under "Lyrics".
 
 ## Supported formats
 
-- FLAC (Vorbis Comments)
-- MP3 (ID3v2)
+- FLAC (Vorbis Comments): read and written.
+- MP3 (ID3v2): read and written.
+- M4A: read. The writes are limited to genre, ratings and play counts, and
+  embedded lyrics. `tag` does not write M4A tags. See AGENTS.md.
 
 Tag field names follow
 [Navidrome's mapping conventions](https://github.com/navidrome/navidrome/blob/master/resources/mappings.yaml).
@@ -119,5 +128,8 @@ Tag field names follow
 ## Running tests
 
 ```
-uv run pytest tests/ -v
+just check
 ```
+
+`just check` runs lint, the type check, and the test suite with its coverage
+gate. For the tests alone, run `uv run pytest tests/ -v`.

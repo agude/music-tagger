@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from mutagen.flac import FLAC, Picture
@@ -12,6 +13,7 @@ from mutagen.mp4 import MP4
 from music_tagger.tags import (
     RATING_TO_POPM,
     AlbumTags,
+    EmbedResult,
     FmpsField,
     FmpsStats,
     MalformedStatsError,
@@ -21,8 +23,13 @@ from music_tagger.tags import (
     UnsupportedFileError,
     _flac_comments_from_stream,
     _rating_to_fmps,
+    audio_files,
     compute_diff,
+    disc_number,
     embed_cover_art,
+    list_audio,
+    parse_position,
+    parse_total,
     read_album,
     read_flac_comments,
     read_fmps,
@@ -197,6 +204,22 @@ class TestComputeDiff:
         changes = compute_diff(track, {"title": "Desperado (live & acoustic)"})
         assert changes == []
 
+    def test_suffix_containing_a_term_as_substring_is_a_change(self, flac_album: Path) -> None:
+        """ "live" inside "Oliver" is not the disambiguation term "live"."""
+        track = read_album(flac_album).tracks[0]
+        changes = compute_diff(track, {"title": "Desperado (Oliver Version)"})
+        assert any(c.field == "title" for c in changes)
+
+    def test_demo_inside_demolition_is_a_change(self, flac_album: Path) -> None:
+        track = read_album(flac_album).tracks[0]
+        changes = compute_diff(track, {"title": "Desperado (Demolition Mix)"})
+        assert any(c.field == "title" for c in changes)
+
+    def test_whole_word_term_is_still_suppressed(self, flac_album: Path) -> None:
+        track = read_album(flac_album).tracks[0]
+        changes = compute_diff(track, {"title": "Desperado (Live)"})
+        assert changes == []
+
     def test_title_keeps_legit_parenthetical(self, flac_album: Path) -> None:
         album = read_album(flac_album)
         track = album.tracks[0]
@@ -264,9 +287,9 @@ class TestEmbedCoverArt:
     def test_embed_flac(self, flac_album: Path) -> None:
         from mutagen.flac import FLAC
 
-        count = embed_cover_art(flac_album, self.IMAGE, "image/jpeg")
+        result = embed_cover_art(flac_album, self.IMAGE, "image/jpeg")
 
-        assert count == 3
+        assert result.count == 3
         for path in sorted(flac_album.glob("*.flac")):
             pics = FLAC(path).pictures
             assert len(pics) == 1
@@ -277,9 +300,9 @@ class TestEmbedCoverArt:
     def test_embed_mp3(self, mp3_album: Path) -> None:
         from mutagen.mp3 import MP3
 
-        count = embed_cover_art(mp3_album, self.IMAGE, "image/jpeg")
+        result = embed_cover_art(mp3_album, self.IMAGE, "image/jpeg")
 
-        assert count == 3
+        assert result.count == 3
         for path in sorted(mp3_album.glob("*.mp3")):
             audio = MP3(path)
             assert audio.tags is not None
@@ -288,6 +311,46 @@ class TestEmbedCoverArt:
             assert apic_frames[0].type == 3
             assert apic_frames[0].mime == "image/jpeg"
             assert apic_frames[0].data == self.IMAGE
+
+    def test_m4a_files_are_reported_as_skipped(self, m4a_album: Path) -> None:
+        result = embed_cover_art(m4a_album, self.IMAGE, "image/jpeg")
+
+        assert isinstance(result, EmbedResult)
+        assert result.count == 0
+        assert [p.name for p in result.m4a] == [
+            "01 - Track 1.m4a",
+            "02 - Track 2.m4a",
+            "03 - Track 3.m4a",
+        ]
+        assert result.other == []
+
+    def test_file_mutagen_cannot_identify_is_listed_unreadable(
+        self, flac_album: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from music_tagger import tags
+
+        real = tags.MutagenFile
+        target = sorted(flac_album.glob("*.flac"))[1]
+        monkeypatch.setattr(
+            tags,
+            "MutagenFile",
+            lambda path: None if Path(path) == target else real(path),
+        )
+
+        result = embed_cover_art(flac_album, self.IMAGE, "image/jpeg")
+
+        assert result.count == 2
+        assert result.unreadable == [target]
+
+    def test_non_file_entries_are_reported(self, flac_album: Path) -> None:
+        (flac_album / "x.flac").mkdir()
+
+        result = embed_cover_art(flac_album, self.IMAGE, "image/jpeg")
+
+        assert result.count == 3
+        assert [p.name for p in result.other] == ["x.flac"]
+        assert result.m4a == []
+        assert result.unreadable == []
 
     def test_writes_given_mime(self, flac_album: Path) -> None:
         from mutagen.flac import FLAC
@@ -526,6 +589,20 @@ class TestGenresMp3:
 
         assert read_genres(track_path) == []
 
+    def test_numeric_genre_reads_as_its_name(self, mp3_album: Path) -> None:
+        from mutagen.id3 import TCON
+
+        track_path = sorted(mp3_album.glob("*.mp3"))[0]
+        mp3 = MP3(track_path)
+        if mp3.tags is None:
+            mp3.add_tags()  # type: ignore[no-untyped-call]
+        assert mp3.tags is not None
+        mp3.tags.delall("TCON")
+        mp3.tags.add(TCON(encoding=3, text=["(17)"]))
+        mp3.save()  # type: ignore[no-untyped-call]
+
+        assert read_genres(track_path) == ["Rock"]
+
 
 class TestReadGenresEdgeCases:
     def test_non_audio_returns_false(self, tmp_path: Path) -> None:
@@ -590,6 +667,30 @@ class TestWriteTagsUnsupportedFormat:
 
         track = read_album(m4a_album).tracks[0]
         with pytest.raises(NotImplementedError, match="not supported"):
+            write_tags(track, [TagChange(field="title", old_value="a", new_value="b")])
+
+
+class TestWriteTagsRefusesUnknownField:
+    def test_unmapped_field_raises_and_writes_nothing(self, flac_album: Path) -> None:
+        track = read_album(flac_album).tracks[0]
+        before = track.path.read_bytes()
+        changes = [
+            TagChange(field="title", old_value="Desperado", new_value="New Title"),
+            TagChange(field="titel", old_value="", new_value="Typo"),
+        ]
+
+        with pytest.raises(ValueError, match="unknown field 'titel'"):
+            write_tags(track, changes)
+
+        assert track.path.read_bytes() == before
+
+    def test_unreadable_file_raises_instead_of_returning(self, flac_album: Path) -> None:
+        track = read_album(flac_album).tracks[0]
+
+        with (
+            patch("music_tagger.tags.MutagenFile", return_value=None),
+            pytest.raises(UnsupportedFileError, match="not a readable audio file"),
+        ):
             write_tags(track, [TagChange(field="title", old_value="a", new_value="b")])
 
 
@@ -1487,3 +1588,228 @@ class TestWriteRatingFastPath:
         assert {c.field for c in changes} == {"fmps_rating", "rating"}
         assert track_path.read_bytes().startswith(b"ID3")
         assert FLAC(track_path)["rating"] == ["4"]
+
+
+class TestTrackAndDiscM4a:
+    def test_reads_track_numbers_from_trkn(self, m4a_album: Path) -> None:
+        tracks = read_album(m4a_album).tracks
+        assert [t.tags["tracknumber"] for t in tracks] == ["1", "2", "3"]
+        assert tracks[0].tags["totaltracks"] == "3"
+
+    def test_reads_disc_number_and_total_from_disk(self, m4a_album: Path) -> None:
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        audio = MP4(track_path)
+        audio["disk"] = [(2, 2)]
+        audio.save()
+
+        tags = read_album(m4a_album).tracks[0].tags
+
+        assert tags["discnumber"] == "2"
+        assert tags["totaldiscs"] == "2"
+
+    def test_zero_track_and_disc_numbers_are_skipped(self, m4a_album: Path) -> None:
+        track_path = sorted(m4a_album.glob("*.m4a"))[0]
+        audio = MP4(track_path)
+        audio["trkn"] = [(0, 0)]
+        audio["disk"] = [(0, 0)]
+        audio.save()
+
+        tags = read_album(m4a_album).tracks[0].tags
+
+        assert "tracknumber" not in tags
+        assert "discnumber" not in tags
+
+
+class TestClearingFields:
+    def test_flac_clear_removes_the_field(self, flac_album: Path) -> None:
+        track = read_album(flac_album).tracks[0]
+        write_tags(track, [TagChange("barcode", "", "123")])
+        write_tags(track, [TagChange("barcode", "123", "")])
+
+        assert "BARCODE" not in FLAC(track.path)
+
+    def test_mp3_clear_removes_txxx_and_standard_frames(self, mp3_album: Path) -> None:
+        track = read_album(mp3_album).tracks[0]
+        write_tags(track, [TagChange("label", "", "Old Label")])
+        write_tags(track, [TagChange("label", "Old Label", "")])
+        write_tags(track, [TagChange("title", track.tags["title"], "")])
+
+        tags = MP3(track.path).tags
+        assert not any(frame.desc.lower() == "label" for frame in tags.getall("TXXX"))
+        assert "TIT2" not in tags
+
+
+class TestWhipperDiscTotal:
+    def test_disctotal_is_read_as_totaldiscs(self, flac_album: Path) -> None:
+        for path in flac_album.glob("*.flac"):
+            audio = FLAC(path)
+            # whipper writes DISCTOTAL and no TOTALDISCS; the fixture carries one.
+            audio.pop("TOTALDISCS", None)
+            audio["DISCTOTAL"] = ["2"]
+            audio.save()
+
+        tags = read_album(flac_album).tracks[0].tags
+
+        assert tags["totaldiscs"] == "2"
+
+
+class TestUnreadableFiles:
+    def test_unreadable_audio_file_is_listed_not_dropped(self, flac_album: Path) -> None:
+        bad = flac_album / "bad.flac"
+        bad.write_bytes(b"not audio at all" * 10)
+
+        album = read_album(flac_album)
+
+        assert album.unreadable == [bad]
+        assert album.track_count == 3
+
+
+class TestPositionParsing:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("3", 3),
+            ("3/12", 3),
+            ("0", 0),
+            (" 4 ", 4),
+            ("1/2/3", 1),
+            ("", None),
+            (None, None),
+            ("garbage", None),
+            ("x/12", None),
+        ],
+    )
+    def test_parse_position_reads_the_number_before_any_slash(
+        self, raw: str | None, expected: int | None
+    ) -> None:
+        assert parse_position(raw) == expected
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("3/12", 12),
+            ("1/2/3", 2),
+            ("3", None),
+            ("3/", None),
+            ("3/x", None),
+            ("", None),
+            (None, None),
+        ],
+    )
+    def test_parse_total_reads_the_number_after_the_slash(
+        self, raw: str | None, expected: int | None
+    ) -> None:
+        assert parse_total(raw) == expected
+
+    @pytest.mark.parametrize(
+        ("tags", "expected"),
+        [
+            ({"discnumber": "2"}, 2),
+            ({"discnumber": "1/2"}, 1),
+            ({"discnumber": "0"}, 0),
+            ({}, 1),
+            ({"discnumber": "abc"}, 1),
+            ({"discnumber": ""}, 1),
+        ],
+    )
+    def test_disc_number_defaults_to_one(self, tags: dict[str, str], expected: int) -> None:
+        assert disc_number(TrackTags(path=Path("x.flac"), tags=tags, format="flac")) == expected
+
+
+class TestListAudio:
+    def test_splits_regular_files_from_non_file_entries(self, tmp_path: Path) -> None:
+        for name in ["a.flac", "b.MP3", "notes.txt"]:
+            (tmp_path / name).write_bytes(b"x")
+        (tmp_path / "x.flac").mkdir()
+
+        listing = list_audio(tmp_path)
+
+        assert [p.name for p in listing.files] == ["a.flac", "b.MP3"]
+        assert [p.name for p in listing.other] == ["x.flac"]
+
+    def test_broken_symlink_with_audio_suffix_is_other(self, tmp_path: Path) -> None:
+        (tmp_path / "z.flac").symlink_to(tmp_path / "missing.flac")
+
+        listing = list_audio(tmp_path)
+
+        assert listing.files == []
+        assert [p.name for p in listing.other] == ["z.flac"]
+
+
+class TestAudioFiles:
+    def test_lists_regular_audio_files_in_sorted_order_ignoring_case(self, tmp_path: Path) -> None:
+        for name in ["b.mp3", "A.FLAC", "c.M4A", "cover.jpg", "notes.txt"]:
+            (tmp_path / name).write_bytes(b"x")
+
+        assert [p.name for p in audio_files(tmp_path)] == ["A.FLAC", "b.mp3", "c.M4A"]
+
+    def test_a_directory_named_like_audio_is_not_listed(self, tmp_path: Path) -> None:
+        (tmp_path / "x.flac").mkdir()
+        (tmp_path / "y.flac").write_bytes(b"x")
+
+        assert [p.name for p in audio_files(tmp_path)] == ["y.flac"]
+
+    def test_non_audio_files_are_not_listed(self, tmp_path: Path) -> None:
+        (tmp_path / "01. Track.log").write_bytes(b"x")
+        (tmp_path / "album.cue").write_bytes(b"x")
+
+        assert audio_files(tmp_path) == []
+
+
+class TestMultiValuedWrites:
+    def test_flac_writes_one_vorbis_value_per_person_and_reads_them_back(
+        self, flac_album: Path
+    ) -> None:
+        from mutagen.flac import FLAC
+
+        track = read_album(flac_album).tracks[0]
+        write_tags(
+            track,
+            [
+                TagChange(
+                    field="artists",
+                    old_value="",
+                    new_value="Alice; Bob",
+                    new_values=("Alice", "Bob"),
+                    multi=True,
+                ),
+                TagChange(
+                    field="musicbrainz_artistid",
+                    old_value="",
+                    new_value="idA; idB",
+                    new_values=("idA", "idB"),
+                    multi=True,
+                ),
+            ],
+        )
+
+        audio = FLAC(track.path)
+        assert audio["ARTISTS"] == ["Alice", "Bob"]
+        assert audio["MUSICBRAINZ_ARTISTID"] == ["idA", "idB"]
+        reread = read_album(flac_album).tracks[0]
+        assert reread.multi["artists"] == ("Alice", "Bob")
+        assert reread.tags["artists"] == "Alice"
+
+    def test_mp3_writes_one_frame_with_every_value(self, mp3_album: Path) -> None:
+        from mutagen.mp3 import MP3
+
+        track = read_album(mp3_album).tracks[0]
+        write_tags(
+            track,
+            [
+                TagChange(
+                    field="artists",
+                    old_value="",
+                    new_value="Alice; Bob",
+                    new_values=("Alice", "Bob"),
+                    multi=True,
+                )
+            ],
+        )
+
+        audio = MP3(track.path)
+        assert audio.tags is not None
+        frames = [f for f in audio.tags.getall("TXXX") if f.desc == "ARTISTS"]
+        assert len(frames) == 1
+        assert list(frames[0].text) == ["Alice", "Bob"]
+        assert read_album(mp3_album).tracks[0].multi["artists"] == ("Alice", "Bob")

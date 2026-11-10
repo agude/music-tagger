@@ -14,10 +14,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from .fileio import write_temp_file
 
 SNAPSHOT_VERSION = 1
 MAX_RATING = 5
@@ -306,16 +307,9 @@ def write_snapshot_file(snapshot: StatsSnapshot, dest: Path, *, force: bool = Fa
         _check_no_mass_drop(current, snapshot, dest)
 
     previous = dest.with_name(dest.name + PREVIOUS_SUFFIX)
-    fd, temp_name = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
-    temp = Path(temp_name)
+    text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    temp = write_temp_file(dest, text.encode("utf-8"), mode=0o644)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, indent=2, ensure_ascii=False)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        # mkstemp creates 0600; match a file opened with the usual umask.
-        os.chmod(temp, 0o644)
         if current is not None:
             os.replace(dest, previous)
         elif dest.exists():

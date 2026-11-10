@@ -1,0 +1,26 @@
+usage: music-tagger write-stats [-h] [--from FROM_FILE] [--root ROOT]
+                                [--dry-run] [--clear] [--allow-decrease]
+                                [--library LIBRARY] [--log LOG | --no-log]
+
+Write ratings and play counts from a statistics snapshot to audio files.
+Favorites are not written.
+
+options:
+  -h, --help         show this help message and exit
+  --from FROM_FILE   Statistics snapshot (default:
+                     /mnt/synology/media/music/stats.json).
+  --root ROOT        Library root to resolve paths (default:
+                     /mnt/synology/media/music).
+  --dry-run          Show what would change, and the rewrite cost, without
+                     writing.
+  --clear            Clear the rating of files the snapshot marks unrated (0).
+                     Without it they are kept.
+  --allow-decrease   Write play counts lower than the file's count. Without it
+                     they are kept.
+  --library LIBRARY  Navidrome library to write, by name or numeric id; songs
+                     in other libraries are skipped (default: 'Music
+                     Library'). 'all' writes every library.
+  --log LOG          Append changes to this log file (default:
+                     $MUSIC_TAGGER_LOG, else ~/Projects/music-
+                     tagger/changes.log).
+  --no-log           Do not write the change log.

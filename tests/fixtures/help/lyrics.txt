@@ -1,0 +1,31 @@
+usage: music-tagger lyrics [-h] [--lookup] [--fetch] [--embed] [--dry-run]
+                           [--replace] [--track N] [--disc D] [--lyrics-id ID]
+                           [--log LOG | --no-log]
+                           path
+
+Inspect lyrics for an album, look up LRCLIB candidates, or write sidecar
+lyrics. With no mode, only inspects: no network, no writes.
+
+positional arguments:
+  path            Album directory.
+
+options:
+  -h, --help      show this help message and exit
+  --lookup        Search LRCLIB and show each candidate with its evidence.
+                  Uses the network; writes nothing.
+  --fetch         Choose LRCLIB lyrics and save them as <audio-stem>.lrc or
+                  .txt beside each track.
+  --embed         Write each track's sidecar lyrics into its tags: .lrc if
+                  present, else .txt. A backup for when sidecars are lost. No
+                  network.
+  --dry-run       With --fetch or --embed, show what would be written.
+  --replace       With --fetch, replace existing lyrics and remove a stale
+                  sidecar of the other type. With --embed, replace a different
+                  value in the lyric tag.
+  --track N       Only track number N.
+  --disc D        Disc number D, with --track, on multi-disc albums.
+  --lyrics-id ID  Use LRCLIB record ID for the --track track instead of
+                  searching. Needs --track.
+  --log LOG       Append changes to this log file (default: $MUSIC_TAGGER_LOG,
+                  else ~/Projects/music-tagger/changes.log).
+  --no-log        Do not write the change log.

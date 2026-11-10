@@ -122,7 +122,7 @@ class TestAlbumGenres:
 
 class TestGenreArtistCommand:
     def test_prints_albums_and_counts(self, tmp_path: Path, capsys: object) -> None:
-        from music_tagger.cli import _genre
+        from music_tagger.cli.library import _genre
 
         root = _library(
             tmp_path,
@@ -142,7 +142,7 @@ class TestGenreArtistCommand:
         assert "Genres by album count: Y2K Rock (2 of 3), Pop Rock (1 of 3)" in out
 
     def test_no_match_suggests_names(self, tmp_path: Path, capsys: object) -> None:
-        from music_tagger.cli import _genre
+        from music_tagger.cli.library import _genre
 
         root = _library(tmp_path, {"Matchbox Twenty/Mad Season (2000)": [["Y2K Rock"]]})
 
@@ -151,3 +151,84 @@ class TestGenreArtistCommand:
         out = capsys.readouterr().out  # type: ignore[attr-defined]
         assert "No artist directory matches 'Matchbox 20'" in out
         assert "Similar: Matchbox Twenty" in out
+
+    def test_directory_named_like_audio_is_warned_about_without_traceback(
+        self, tmp_path: Path, capsys: object
+    ) -> None:
+        from music_tagger.cli.library import _genre
+
+        root = _library(tmp_path, {"Sugar Ray/Lemonade (1997)": [["Y2K Rock"]]})
+        (root / "Sugar Ray" / "Lemonade (1997)" / "x.flac").mkdir()
+
+        _genre(["--artist", "Sugar Ray", "--root", str(root)])
+
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "  Lemonade (1997): Y2K Rock\n" in captured.out
+        assert "Warning: 1 unreadable file(s): x.flac" in captured.err
+
+
+class TestGenreList:
+    def test_lists_genres_from_flac_mp3_and_m4a(self, tmp_path: Path, capsys: object) -> None:
+        import shutil
+
+        from music_tagger.cli.library import _genre
+        from music_tagger.tags import write_genres
+
+        fixtures = Path(__file__).parent / "fixtures"
+        root = tmp_path / "library"
+        for artist, album_dir, suffix, genre in [
+            ("Flac Artist", "album_flac", ".flac", "Alpha"),
+            ("Mp3 Artist", "album_mp3", ".mp3", "Bravo"),
+            ("M4a Artist", "album_m4a", ".m4a", "Charlie"),
+        ]:
+            track = root / artist / "Album" / f"01 - Track 1{suffix}"
+            track.parent.mkdir(parents=True)
+            shutil.copy(fixtures / album_dir / f"01 - Track 1{suffix}", track)
+            write_genres(track, [genre])
+
+        _genre(["--list", "--root", str(root)])
+
+        out = capsys.readouterr().out  # type: ignore[attr-defined]
+        assert "  1  Alpha\n" in out
+        assert "  1  Bravo\n" in out
+        assert "  1  Charlie\n" in out
+        assert "3 genre(s), 3 track(s)" in out
+
+    def test_unreadable_file_is_reported_and_the_scan_continues(
+        self, tmp_path: Path, capsys: object
+    ) -> None:
+        from music_tagger.cli.library import _genre
+
+        root = _library(tmp_path, {"Sugar Ray/Lemonade (1997)": [["Y2K Rock"]]})
+        broken = root / "Sugar Ray" / "Lemonade (1997)" / "02. Broken.flac"
+        broken.write_bytes(b"not audio at all")
+
+        _genre(["--list", "--root", str(root)])
+
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "  1  Y2K Rock\n" in captured.out
+        assert "1 genre(s), 1 track(s)" in captured.out
+        assert "Warning: 1 unreadable file(s): 02. Broken.flac" in captured.err
+
+    def test_directory_named_like_audio_is_reported_as_unreadable(
+        self, tmp_path: Path, capsys: object
+    ) -> None:
+        from music_tagger.cli.library import _genre
+
+        root = _library(tmp_path, {"Sugar Ray/Lemonade (1997)": [["Y2K Rock"]]})
+        (root / "Sugar Ray" / "Lemonade (1997)" / "x.flac").mkdir()
+
+        _genre(["--list", "--root", str(root)])
+
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "1 genre(s), 1 track(s)" in captured.out
+        assert "Warning: 1 unreadable file(s): x.flac" in captured.err
+
+    def test_hidden_directories_are_skipped(self, tmp_path: Path, capsys: object) -> None:
+        from music_tagger.cli.library import _genre
+
+        root = _library(tmp_path, {".trash/Old": [["Hidden Genre"]]})
+
+        _genre(["--list", "--root", str(root)])
+
+        assert "Hidden Genre" not in capsys.readouterr().out  # type: ignore[attr-defined]

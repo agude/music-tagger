@@ -1,0 +1,34 @@
+usage: music-tagger <command> [options]
+
+Fix album tags using MusicBrainz.
+
+commands:
+  read           Read album tags and durations as JSON.
+  toc            Parse rip artifacts for TOC / disc ID.
+  mb             MusicBrainz query commands.
+  match          Score candidates by duration match.
+  diff           Compute tag diff against a MusicBrainz release.
+  write-tags     Apply tag changes from a diff JSON.
+  write-ratings  Write rating tags to audio files.
+  write-stats    Write ratings and play counts from a snapshot.
+  path-for       Compute library destination paths.
+  copy           Copy files to library per a placement plan.
+  art            Fetch or install cover art for an album.
+  nd             Navidrome commands.
+  scan           Generate a checklist of albums needing attention.
+  checklist      Show the next album, or mark one done, skipped, or reopened.
+  candidates     Show MusicBrainz candidates for an album.
+  tag            Apply tags from a chosen MusicBrainz release.
+  apply          Run tag, art, genre, rename, and replaygain on an album.
+  place          Copy a finished album into the library.
+  genre          Set or show the genre meta-grouping tag.
+  lyrics         Inspect, look up, or write lyric sidecars for an album.
+  lyrics-batch   Backfill lyrics across a library and save tracks that need a decision.
+  lyrics-decide  Show saved lyric options and record a choice or skip for each track.
+  lock           Lock fields so `tag` keeps them, or show locks.
+  unlock         Unlock fields so `tag` can change them.
+  rename         Rename files to 'NN. Title.ext' from tags.
+  replaygain     Compute and write ReplayGain 2.0 tags.
+  rip            Rip a CD to FLAC with bootstrap tags.
+
+Run 'music-tagger <command> --help' for command-specific help.

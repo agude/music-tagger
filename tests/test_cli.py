@@ -10,28 +10,13 @@ from mutagen.flac import FLAC
 from mutagen.id3 import TXXX
 from mutagen.mp3 import MP3
 
-from music_tagger import cli as cli_module
-from music_tagger.cli import (
-    EXIT_BLOCKED,
-    EXIT_REVIEW,
-    _diff,
-    _is_album_dir,
-    _lock,
-    _match,
-    _mb_discid,
-    _mb_release,
-    _mb_search,
-    _nd,
-    _print_diff,
-    _read,
-    _rename,
-    _scan,
-    _toc,
-    _unlock,
-    _write_ratings,
-    _write_stats,
-    _write_tags,
-)
+from music_tagger.cli import ratings as ratings_module
+from music_tagger.cli.common import EXIT_BLOCKED, EXIT_REVIEW, _print_diff
+from music_tagger.cli.library import _is_album_dir, _rename, _scan
+from music_tagger.cli.ratings import _write_ratings, _write_stats
+from music_tagger.cli.rip import _toc
+from music_tagger.cli.services import _mb_discid, _mb_release, _mb_search, _nd
+from music_tagger.cli.tagging import _diff, _lock, _match, _read, _unlock, _write_tags
 from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.stats import SongStats
 from music_tagger.tagger import AlbumResult, TagConflict, TrackDiff
@@ -244,32 +229,51 @@ class TestScanCommand:
         assert data[0]["artist"] == "Eagles"
 
 
-SAMPLE_CUE = """\
-FILE "audio.flac" WAVE
-  TRACK 01 AUDIO
-    INDEX 01 00:00:00
-  TRACK 02 AUDIO
-    INDEX 01 03:29:37
-  TRACK 03 AUDIO
-    INDEX 01 06:36:50
+FIXTURE_LOG = Path(__file__).parent / "fixtures" / "whipper" / "a-boy-named-goo.log"
+FIXTURE_DISC_ID = "7tC7YhpmtJHHazk_KJODeabAwPo-"
+
+TWO_TRACK_LOG = """\
+TOC:
+  1:
+    Start sector: 32
+    End sector: 15669
+  2:
+    Start sector: 15670
+    End sector: 26846
 """
 
 
 class TestTocCommand:
     def test_json_to_stdout(self, capsys: object, tmp_path: Path) -> None:
-        (tmp_path / "album.cue").write_text(SAMPLE_CUE)
+        (tmp_path / "album.log").write_text(FIXTURE_LOG.read_text())
         _toc([str(tmp_path)])
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         data = json.loads(captured.out)
-        assert data["first_track"] == 1
-        assert data["last_track"] == 3
-        assert len(data["track_offsets"]) == 3
+        assert data["disc_id"] == FIXTURE_DISC_ID
+        assert data["last_track"] == 13
+        assert len(data["track_offsets"]) == 13
 
-    def test_no_cue_exits(self, tmp_path: Path) -> None:
-        import pytest
+    def test_prints_fixture_disc_id(self, capsys: object, tmp_path: Path) -> None:
+        (tmp_path / "album.log").write_text(FIXTURE_LOG.read_text())
+        _toc([str(tmp_path), "-o", str(tmp_path / "toc.json")])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert f"Disc ID: {FIXTURE_DISC_ID}" in captured.out
 
-        with pytest.raises((SystemExit, ValueError)):
+    def test_log_option_picks_that_log(self, capsys: object, tmp_path: Path) -> None:
+        (tmp_path / "disc 1.log").write_text(FIXTURE_LOG.read_text())
+        (tmp_path / "disc 2.log").write_text(TWO_TRACK_LOG)
+        _toc([str(tmp_path), "--log", str(tmp_path / "disc 2.log")])
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        data = json.loads(captured.out)
+        assert data["last_track"] == 2
+
+    def test_no_log_exits_1_with_error_line(self, tmp_path: Path, capsys: object) -> None:
+        with pytest.raises(SystemExit) as error:
             _toc([str(tmp_path)])
+        assert error.value.code == 1
+        captured = capsys.readouterr()  # type: ignore[attr-defined]
+        assert "Error:" in captured.err
+        assert "Traceback" not in captured.err
 
 
 class TestMbDiscidCommand:
@@ -283,7 +287,7 @@ class TestMbDiscidCommand:
             track_count=11,
             format="CD",
         )
-        with patch("music_tagger.cli.MusicBrainzClient") as mock_cls:
+        with patch("music_tagger.cli.services.MusicBrainzClient") as mock_cls:
             mock_cls.return_value.lookup_discid.return_value = [release]
             _mb_discid(["abc123"])
         captured = capsys.readouterr()  # type: ignore[attr-defined]
@@ -298,7 +302,7 @@ class TestMbDiscidCommand:
             track_count=5,
             format="CD",
         )
-        with patch("music_tagger.cli.MusicBrainzClient") as mock_cls:
+        with patch("music_tagger.cli.services.MusicBrainzClient") as mock_cls:
             mock_cls.return_value.lookup_toc.return_value = [release]
             _mb_discid(["--toc", "1 3 200000 150 15000 30000"])
         captured = capsys.readouterr()  # type: ignore[attr-defined]
@@ -318,7 +322,7 @@ class TestMbSearchCommand:
             track_count=11,
             format="CD",
         )
-        with patch("music_tagger.cli.MusicBrainzClient") as mock_cls:
+        with patch("music_tagger.cli.services.MusicBrainzClient") as mock_cls:
             mock_cls.return_value.search_releases.return_value = [release]
             _mb_search(["--artist", "Eagles", "--album", "Desperado"])
         captured = capsys.readouterr()  # type: ignore[attr-defined]
@@ -338,7 +342,7 @@ class TestMbSearchCommand:
             format="CD",
         )
         out = tmp_path / "candidates.json"
-        with patch("music_tagger.cli.MusicBrainzClient") as mock_cls:
+        with patch("music_tagger.cli.services.MusicBrainzClient") as mock_cls:
             mock_cls.return_value.search_releases.return_value = [release]
             _mb_search(["--artist", "Eagles", "--album", "Desperado", "-o", str(out)])
         data = json.loads(out.read_text())
@@ -362,7 +366,7 @@ class TestMbReleaseCommand:
             artist_id="art-1",
             release_group_id="rg-1",
         )
-        with patch("music_tagger.cli.MusicBrainzClient") as mock_cls:
+        with patch("music_tagger.cli.services.MusicBrainzClient") as mock_cls:
             mock_cls.return_value.fetch_release.return_value = release
             _mb_release(["r-1"])
         captured = capsys.readouterr()  # type: ignore[attr-defined]
@@ -384,7 +388,7 @@ class TestMbReleaseCommand:
             discs={1: [MBTrack(number=1, title="Track 1", duration_ms=200000)]},
         )
         out = tmp_path / "release.json"
-        with patch("music_tagger.cli.MusicBrainzClient") as mock_cls:
+        with patch("music_tagger.cli.services.MusicBrainzClient") as mock_cls:
             mock_cls.return_value.fetch_release.return_value = release
             _mb_release(["r-1", "-o", str(out)])
         assert out.exists()
@@ -597,11 +601,11 @@ class TestWriteTagsCommand:
         with pytest.raises(SystemExit) as error:
             _write_tags(["--diff", str(diff_path), "--log", str(log_path)])
 
-        assert error.value.code == 1
+        assert error.value.code == 4
         assert track.path.read_bytes() == before
         assert not log_path.exists()
         captured = capsys.readouterr()  # type: ignore[attr-defined]
-        assert "Unresolved tag conflicts" in captured.err
+        assert "resolve the ISRC conflicts first" in captured.err
         assert "No tag changes to apply" not in captured.out
 
     def test_previews_unresolved_conflict_without_writing(
@@ -615,8 +619,10 @@ class TestWriteTagsCommand:
         diff_path.write_text(json.dumps(data))
         before = {path: path.read_bytes() for path in flac_album.glob("*.flac")}
 
-        _write_tags(["--diff", str(diff_path), "--dry-run"])
+        with pytest.raises(SystemExit) as error:
+            _write_tags(["--diff", str(diff_path), "--dry-run"])
 
+        assert error.value.code == 4
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "unresolved" in captured.err
         assert "dry run" in captured.out
@@ -672,7 +678,9 @@ class TestWriteTagsCommand:
     def test_dry_run(self, capsys: object, flac_album: Path, tmp_path: Path) -> None:
         diff_path = tmp_path / "diff.json"
         diff_path.write_text(json.dumps(self._make_diff_json(flac_album)))
-        _write_tags(["--diff", str(diff_path), "--dry-run"])
+        with pytest.raises(SystemExit) as error:
+            _write_tags(["--diff", str(diff_path), "--dry-run"])
+        assert error.value.code == 3
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "dry run" in captured.out
         assert "title" in captured.out
@@ -684,7 +692,7 @@ class TestWriteTagsCommand:
     def test_applies_changes(self, capsys: object, flac_album: Path, tmp_path: Path) -> None:
         diff_path = tmp_path / "diff.json"
         diff_path.write_text(json.dumps(self._make_diff_json(flac_album)))
-        _write_tags(["--diff", str(diff_path)])
+        _write_tags(["--diff", str(diff_path), "--approve-overwrites"])
         captured = capsys.readouterr()  # type: ignore[attr-defined]
         assert "Updated 1 track" in captured.out
         from music_tagger.tags import read_album as _read_album
@@ -713,7 +721,7 @@ class TestWriteTagsCommand:
         diff_path = tmp_path / "diff.json"
         diff_path.write_text(json.dumps(self._make_diff_json(flac_album)))
         log_path = tmp_path / "changes.log"
-        _write_tags(["--diff", str(diff_path), "--log", str(log_path)])
+        _write_tags(["--diff", str(diff_path), "--log", str(log_path), "--approve-overwrites"])
         log_content = log_path.read_text()
         assert "r-1" in log_content
         assert "title" in log_content
@@ -721,7 +729,7 @@ class TestWriteTagsCommand:
 
 class TestCandidatesCommand:
     def test_json_to_stdout(self, capsys: object, flac_album: Path) -> None:
-        from music_tagger.cli import _print_candidates
+        from music_tagger.cli.tagging import _print_candidates
 
         release = MBRelease(
             id="r-1",
@@ -741,8 +749,8 @@ class TestCandidatesCommand:
         )
 
         with (
-            patch("music_tagger.cli.search_candidates") as mock_search,
-            patch("music_tagger.cli.MusicBrainzClient"),
+            patch("music_tagger.cli.tagging.search_candidates") as mock_search,
+            patch("music_tagger.cli.tagging.MusicBrainzClient"),
         ):
             album = read_album(flac_album)
             mock_search.return_value = (album, [release])
@@ -756,7 +764,7 @@ class TestCandidatesCommand:
         assert "tracks_within_2s" in data["matches"][0]["match"]
 
     def test_digest_with_out(self, capsys: object, flac_album: Path, tmp_path: Path) -> None:
-        from music_tagger.cli import _print_candidates
+        from music_tagger.cli.tagging import _print_candidates
 
         release = MBRelease(
             id="r-1",
@@ -777,8 +785,8 @@ class TestCandidatesCommand:
 
         out = tmp_path / "candidates.json"
         with (
-            patch("music_tagger.cli.search_candidates") as mock_search,
-            patch("music_tagger.cli.MusicBrainzClient"),
+            patch("music_tagger.cli.tagging.search_candidates") as mock_search,
+            patch("music_tagger.cli.tagging.MusicBrainzClient"),
         ):
             album = read_album(flac_album)
             mock_search.return_value = (album, [release])
@@ -793,11 +801,11 @@ class TestCandidatesCommand:
 
 
 def _run_candidates(album_dir: Path, releases: list[MBRelease], *args: str) -> None:
-    from music_tagger.cli import _print_candidates
+    from music_tagger.cli.tagging import _print_candidates
 
     with (
-        patch("music_tagger.cli.search_candidates") as search,
-        patch("music_tagger.cli.MusicBrainzClient"),
+        patch("music_tagger.cli.tagging.search_candidates") as search,
+        patch("music_tagger.cli.tagging.MusicBrainzClient"),
     ):
         search.return_value = (read_album(album_dir), releases)
         _print_candidates([str(album_dir), *args])
@@ -870,7 +878,7 @@ class TestTagCommand:
     def test_blocks_conflicts_before_changing_recording_ids(
         self, flac_album: Path, tmp_path: Path, capsys: object
     ) -> None:
-        from music_tagger.cli import _tag
+        from music_tagger.cli.tagging import _tag
 
         album = read_album(flac_album)
         write_tags(album.tracks[0], [TagChange("isrc", "", "USIR19902220")])
@@ -890,7 +898,7 @@ class TestTagCommand:
             },
         )
         log_path = tmp_path / "changes.log"
-        with patch("music_tagger.cli.MusicBrainzClient") as client:
+        with patch("music_tagger.cli.tagging.MusicBrainzClient") as client:
             client.return_value.fetch_release.return_value = release
             with pytest.raises(SystemExit) as error:
                 _tag([str(flac_album), "--release-id", "r-1", "--log", str(log_path)])
@@ -903,7 +911,7 @@ class TestTagCommand:
         assert "USDW10110279" in captured.err
 
     def test_dry_run(self, capsys: object, flac_album: Path) -> None:
-        from music_tagger.cli import _tag
+        from music_tagger.cli.tagging import _tag
         from music_tagger.musicbrainz import MBRelease, MBTrack
 
         release = MBRelease(
@@ -923,7 +931,7 @@ class TestTagCommand:
             },
         )
 
-        with patch("music_tagger.cli.MusicBrainzClient") as mock_cls:
+        with patch("music_tagger.cli.tagging.MusicBrainzClient") as mock_cls:
             mock_cls.return_value.fetch_release.return_value = release
             _tag(["--release-id", "r-1", "--dry-run", str(flac_album)])
 
@@ -1066,7 +1074,7 @@ class TestNdStats:
             return [SongStats.from_native({"id": "s1", "path": "a.flac", "playCount": False})]
 
         monkeypatch.setattr(_FakeNavidromeClient, "get_all_stats", malformed_stats)
-        monkeypatch.setattr("music_tagger.cli.NavidromeClient", _FakeNavidromeClient)
+        monkeypatch.setattr("music_tagger.cli.ratings.NavidromeClient", _FakeNavidromeClient)
 
         with pytest.raises(SystemExit) as exit_info:
             _nd(["stats", "--out", str(out)])
@@ -1087,7 +1095,7 @@ class TestNdStats:
     ) -> None:
         out = tmp_path / "stats.json"
         monkeypatch.setattr(
-            "music_tagger.cli.NavidromeClient", lambda: _FakeNavidromeClient(self._songs())
+            "music_tagger.cli.ratings.NavidromeClient", lambda: _FakeNavidromeClient(self._songs())
         )
 
         _nd(["stats", "--out", str(out)])
@@ -1107,7 +1115,7 @@ class TestNdStats:
         old = _snapshot(tmp_path / "old.json", [])
         out.write_text(old.read_text())
         monkeypatch.setattr(
-            "music_tagger.cli.NavidromeClient", lambda: _FakeNavidromeClient(self._songs())
+            "music_tagger.cli.ratings.NavidromeClient", lambda: _FakeNavidromeClient(self._songs())
         )
 
         _nd(["stats", "--out", str(out)])
@@ -1126,7 +1134,7 @@ class TestNdStats:
         out.write_text(old.read_text())
         before = out.read_bytes()
         monkeypatch.setattr(
-            "music_tagger.cli.NavidromeClient", lambda: _FakeNavidromeClient(self._songs())
+            "music_tagger.cli.ratings.NavidromeClient", lambda: _FakeNavidromeClient(self._songs())
         )
 
         with pytest.raises(SystemExit) as exit_info:
@@ -1148,7 +1156,7 @@ class TestNdStats:
         out = tmp_path / "stats.json"
         out.write_text('{"old": true}')
         failing = _FakeNavidromeClient(error=RuntimeError("count mismatch"))
-        monkeypatch.setattr("music_tagger.cli.NavidromeClient", lambda: failing)
+        monkeypatch.setattr("music_tagger.cli.ratings.NavidromeClient", lambda: failing)
 
         with pytest.raises(SystemExit) as exit_info:
             _nd(["stats", "--out", str(out)])
@@ -1164,7 +1172,7 @@ class TestNdStats:
         def unexpected() -> _FakeNavidromeClient:
             pytest.fail("connected to Navidrome for a missing output directory")
 
-        monkeypatch.setattr("music_tagger.cli.NavidromeClient", unexpected)
+        monkeypatch.setattr("music_tagger.cli.ratings.NavidromeClient", unexpected)
 
         with pytest.raises(SystemExit) as exit_info:
             _nd(["stats", "--out", str(tmp_path / "absent" / "stats.json")])
@@ -1803,7 +1811,9 @@ class TestStatsEndToEnd:
 
     @staticmethod
     def _export(monkeypatch: pytest.MonkeyPatch, out: Path, songs: list[SongStats]) -> Path:
-        monkeypatch.setattr("music_tagger.cli.NavidromeClient", lambda: _FakeNavidromeClient(songs))
+        monkeypatch.setattr(
+            "music_tagger.cli.ratings.NavidromeClient", lambda: _FakeNavidromeClient(songs)
+        )
         _nd(["stats", "--out", str(out)])
         return out
 
@@ -1946,7 +1956,7 @@ class TestAuditLogSurvivesInterrupt:
                 for index, track in enumerate(tracks[:2])
             ],
         )
-        original = cli_module.write_stats_to_file
+        original = ratings_module.write_stats_to_file
         calls = 0
 
         def interrupt_second(path: Path, **kwargs: object) -> object:
@@ -1956,7 +1966,7 @@ class TestAuditLogSurvivesInterrupt:
                 raise KeyboardInterrupt
             return original(path, **kwargs)  # type: ignore[arg-type]
 
-        monkeypatch.setattr(cli_module, "write_stats_to_file", interrupt_second)
+        monkeypatch.setattr(ratings_module, "write_stats_to_file", interrupt_second)
 
         with pytest.raises(KeyboardInterrupt):
             _write_stats(["--from", str(snap), "--root", str(tmp_path)])
@@ -1984,7 +1994,7 @@ class TestAuditLogSurvivesInterrupt:
                 ]
             )
         )
-        original = cli_module.write_rating_to_file
+        original = ratings_module.write_rating_to_file
         calls = 0
 
         def interrupt_second(path: Path, rating: int, dry_run: bool = False) -> object:
@@ -1994,7 +2004,7 @@ class TestAuditLogSurvivesInterrupt:
                 raise KeyboardInterrupt
             return original(path, rating, dry_run=dry_run)
 
-        monkeypatch.setattr(cli_module, "write_rating_to_file", interrupt_second)
+        monkeypatch.setattr(ratings_module, "write_rating_to_file", interrupt_second)
 
         with pytest.raises(KeyboardInterrupt):
             _write_ratings(["--from", str(ratings_file), "--root", str(tmp_path)])
@@ -2324,12 +2334,12 @@ class TestTagCommandLocks:
     def test_keeps_locked_field_and_reports_it(
         self, flac_album: Path, tmp_path: Path, capsys: object
     ) -> None:
-        from music_tagger.cli import _tag
+        from music_tagger.cli.tagging import _tag
 
         write_locks(sorted(flac_album.glob("*.flac"))[0], ["title"])
         log_path = tmp_path / "changes.log"
 
-        with patch("music_tagger.cli.MusicBrainzClient") as client:
+        with patch("music_tagger.cli.tagging.MusicBrainzClient") as client:
             client.return_value.fetch_release.return_value = _desperado_release()
             _tag([str(flac_album), "--release-id", "r-1", "--log", str(log_path)])
 
@@ -2343,7 +2353,7 @@ class TestTagCommandLocks:
     def test_only_locked_changes_are_not_reported_as_correct(
         self, flac_album: Path, capsys: object
     ) -> None:
-        from music_tagger.cli import _tag
+        from music_tagger.cli.tagging import _tag
 
         release = _desperado_release()
         release.id = "test-album-id-1"
@@ -2352,7 +2362,7 @@ class TestTagCommandLocks:
         write_tags(first_track, [TagChange("title", "Doolin-Dalton", "Desperado")])
         write_locks(first_track.path, ["title"])
 
-        with patch("music_tagger.cli.MusicBrainzClient") as client:
+        with patch("music_tagger.cli.tagging.MusicBrainzClient") as client:
             client.return_value.fetch_release.return_value = release
             _tag([str(flac_album), "--release-id", release.id])
 
@@ -2361,11 +2371,11 @@ class TestTagCommandLocks:
         assert "1 locked field(s) kept" in out
 
     def test_ignore_locks_overwrites_locked_field(self, flac_album: Path) -> None:
-        from music_tagger.cli import _tag
+        from music_tagger.cli.tagging import _tag
 
         write_locks(sorted(flac_album.glob("*.flac"))[0], ["title"])
 
-        with patch("music_tagger.cli.MusicBrainzClient") as client:
+        with patch("music_tagger.cli.tagging.MusicBrainzClient") as client:
             client.return_value.fetch_release.return_value = _desperado_release()
             _tag([str(flac_album), "--release-id", "r-1", "--ignore-locks", "--approve-overwrites"])
 
@@ -2391,7 +2401,7 @@ class TestWriteTagsCommandLocks:
         before = track.path.read_bytes()
 
         with pytest.raises(SystemExit) as error:
-            _write_tags(["--diff", str(diff_path)])
+            _write_tags(["--diff", str(diff_path), "--approve-overwrites"])
 
         assert error.value.code == 1
         assert track.path.read_bytes() == before
@@ -2422,11 +2432,71 @@ def _gate_release(first_title: str) -> MBRelease:
 
 
 def _run_tag(album_dir: Path, release: MBRelease, *extra: str) -> None:
-    from music_tagger.cli import _tag
+    from music_tagger.cli.tagging import _tag
 
-    with patch("music_tagger.cli.MusicBrainzClient") as client:
+    with patch("music_tagger.cli.tagging.MusicBrainzClient") as client:
         client.return_value.fetch_release.return_value = release
         _tag([str(album_dir), "--release-id", release.id, *extra])
+
+
+def _strip_tracknumbers(album_dir: Path) -> None:
+    from mutagen.flac import FLAC
+
+    for path in album_dir.glob("*.flac"):
+        audio = FLAC(path)
+        if "tracknumber" in audio:
+            del audio["tracknumber"]
+        audio.save()
+
+
+class TestPositionalWarningPrinted:
+    def test_tag_prints_the_positional_warning(
+        self, flac_album: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _strip_tracknumbers(flac_album)
+
+        _run_tag(flac_album, _gate_release("Desperado"), "--dry-run")
+
+        assert "Warning: no tracknumber tags found; matching 3 files by position" in (
+            capsys.readouterr().err
+        )
+
+    def test_diff_prints_the_positional_warning(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _strip_tracknumbers(flac_album)
+        evidence = tmp_path / "evidence.json"
+        evidence.write_text(json.dumps(read_album(flac_album).to_dict()))
+        release_file = tmp_path / "release.json"
+        release_file.write_text(json.dumps(_gate_release("Desperado").to_dict()))
+
+        _diff(
+            [
+                "--evidence",
+                str(evidence),
+                "--release",
+                str(release_file),
+                "-o",
+                str(tmp_path / "diff.json"),
+            ]
+        )
+
+        assert "Warning: no tracknumber tags found; matching 3 files by position" in (
+            capsys.readouterr().err
+        )
+
+
+class TestTagDvdOnly:
+    def test_release_with_only_non_audio_media_exits_1(
+        self, flac_album: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        release = MBRelease(id="r-dvd", title="Desperado", format="DVD-Video", discs={})
+
+        with pytest.raises(SystemExit) as error:
+            _run_tag(flac_album, release, "--dry-run")
+
+        assert error.value.code == 1
+        assert "Error: release has no audio media" in capsys.readouterr().err
 
 
 class TestTagCommandGate:
@@ -2486,6 +2556,16 @@ class TestTagCommandGate:
         _run_tag(flac_album, _gate_release("Desperado"))
 
         assert read_album(flac_album).tracks[0].tags["musicbrainz_albumid"] == "r-1"
+
+    def test_run_with_no_changes_still_prints_the_gate(
+        self, flac_album: Path, capsys: object
+    ) -> None:
+        _run_tag(flac_album, _gate_release("Desperado"))
+        capsys.readouterr()  # type: ignore[attr-defined]
+
+        _run_tag(flac_album, _gate_release("Desperado"), "--dry-run")
+
+        assert "Gate: auto" in capsys.readouterr().out  # type: ignore[attr-defined]
 
 
 def _isrc_conflict_album(album_dir: Path, *candidate_lists: list[str]) -> MBRelease:
@@ -2582,3 +2662,368 @@ class TestTagCommandIsrc:
             _run_tag(flac_album, _gate_release("Desperado"), "--isrc-code", spec)
 
         assert error.value.code == 2
+
+
+class TestTagCommandDuplicateKeys:
+    def test_dry_run_with_duplicate_keys_exits_1_and_names_files(
+        self, flac_album: Path, capsys: object
+    ) -> None:
+        from music_tagger.cli.tagging import _tag
+
+        album = read_album(flac_album)
+        write_tags(album.tracks[1], [TagChange("tracknumber", "2", "1")])
+        first, second = album.tracks[0].path.name, album.tracks[1].path.name
+        release = _desperado_release()
+
+        with patch("music_tagger.cli.tagging.MusicBrainzClient") as client:
+            client.return_value.fetch_release.return_value = release
+            with pytest.raises(SystemExit) as error:
+                _tag([str(flac_album), "--release-id", release.id, "--dry-run"])
+
+        assert error.value.code == 1
+        err = capsys.readouterr().err  # type: ignore[attr-defined]
+        assert first in err
+        assert second in err
+
+
+class TestCandidatesDuplicateKeys:
+    def test_warns_and_flags_duplicate_keys(self, flac_album: Path, capsys: object) -> None:
+        album = read_album(flac_album)
+        write_tags(album.tracks[1], [TagChange("tracknumber", "2", "1")])
+
+        _run_candidates(flac_album, [_desperado_release()])
+
+        out = capsys.readouterr().out  # type: ignore[attr-defined]
+        assert "Warning: duplicate track keys" in out
+        assert album.tracks[1].path.name in out
+        assert "duplicate-keys" in out
+
+
+class TestRenameConflicts:
+    def test_colliding_names_exit_1_and_rename_nothing(self, flac_album: Path) -> None:
+        from music_tagger.cli.library import _rename
+
+        tracks = read_album(flac_album).tracks
+        write_tags(tracks[0], [TagChange("title", tracks[0].tags["title"], "A:B")])
+        write_tags(tracks[1], [TagChange("tracknumber", "2", "1")])
+        write_tags(tracks[1], [TagChange("title", tracks[1].tags["title"], "A?B")])
+        before = sorted(path.name for path in flac_album.glob("*.flac"))
+
+        with pytest.raises(SystemExit) as error:
+            _rename([str(flac_album)])
+
+        assert error.value.code == 1
+        assert sorted(path.name for path in flac_album.glob("*.flac")) == before
+
+
+class TestClearedChangeRendering:
+    def test_empty_new_value_reads_as_cleared(self, flac_album: Path) -> None:
+        from music_tagger.cli.common import _format_change_lines
+
+        album = read_album(flac_album)
+        diff = TrackDiff(album.tracks[0], [TagChange("barcode", "123", "")])
+
+        assert "    barcode: 123 → (cleared)" in _format_change_lines(diff)
+
+    def test_multi_change_renders_every_value_on_each_side(self, flac_album: Path) -> None:
+        from music_tagger.cli.common import _format_change_lines
+
+        album = read_album(flac_album)
+        change = TagChange(
+            "musicbrainz_artistid",
+            "idA",
+            "idA; idB",
+            old_values=("idA",),
+            new_values=("idA", "idB"),
+            multi=True,
+        )
+        diff = TrackDiff(album.tracks[0], [change])
+
+        assert "    musicbrainz_artistid: idA → idA; idB" in _format_change_lines(diff)
+
+    def test_cleared_multi_field_reads_as_cleared(self, flac_album: Path) -> None:
+        from music_tagger.cli.common import _format_change_lines
+
+        album = read_album(flac_album)
+        change = TagChange(
+            "musicbrainz_artistid",
+            "idA; idB",
+            "",
+            old_values=("idA", "idB"),
+            new_values=(),
+            multi=True,
+        )
+        diff = TrackDiff(album.tracks[0], [change])
+
+        assert "    musicbrainz_artistid: idA; idB → (cleared)" in _format_change_lines(diff)
+
+
+def _swap_album(flac_album: Path) -> None:
+    """Two files whose targets are each other's current names: "01. Alpha" is track 2 Beta."""
+    from music_tagger.tags import TagChange as _TagChange
+
+    (flac_album / "03 - Track 3.flac").unlink()
+    first, second = sorted(flac_album.glob("*.flac"))
+    alpha = flac_album / "01. Alpha.flac"
+    beta = flac_album / "02. Beta.flac"
+    first.rename(alpha)
+    second.rename(beta)
+    write_tags(
+        read_album(flac_album).tracks[0],
+        [_TagChange("tracknumber", "", "2"), _TagChange("title", "", "Beta")],
+    )
+    write_tags(
+        read_album(flac_album).tracks[1],
+        [_TagChange("tracknumber", "", "1"), _TagChange("title", "", "Alpha")],
+    )
+
+
+class TestRenameSwapsAndBlocks:
+    def test_swapped_names_both_rename(self, flac_album: Path) -> None:
+        from music_tagger.cli.library import _rename
+
+        _swap_album(flac_album)
+
+        _rename([str(flac_album)])
+
+        titles = {track.path.name: track.tags["title"] for track in read_album(flac_album).tracks}
+        assert titles == {"01. Alpha.flac": "Alpha", "02. Beta.flac": "Beta"}
+
+    def test_case_only_rename_is_not_blocked(
+        self, flac_album: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from music_tagger.cli.library import _rename
+
+        (flac_album / "03 - Track 3.flac").unlink()
+        (flac_album / "02 - Track 2.flac").unlink()
+        only = flac_album / "01 - Track 1.flac"
+        only.rename(flac_album / "01. song.flac")
+        write_tags(
+            read_album(flac_album).tracks[0],
+            [TagChange("tracknumber", "", "1"), TagChange("title", "", "Song")],
+        )
+        real_exists = Path.exists
+
+        def exists_as_case_insensitive(self: Path) -> bool:
+            if self.name == "01. Song.flac":
+                return True
+            return real_exists(self)
+
+        monkeypatch.setattr(Path, "exists", exists_as_case_insensitive)
+
+        _rename([str(flac_album)])
+
+        monkeypatch.undo()
+        assert sorted(p.name for p in flac_album.glob("*.flac")) == ["01. Song.flac"]
+
+    def test_target_outside_the_plan_exits_1_and_renames_nothing(self, flac_album: Path) -> None:
+        from music_tagger.cli.library import _rename
+
+        tracks = read_album(flac_album).tracks
+        write_tags(tracks[0], [TagChange("title", tracks[0].tags["title"], "Foo")])
+        # A real FLAC with no title or tracknumber: it is on disk but not in the plan.
+        foreign = flac_album / "01. Foo.flac"
+        shutil.copy(flac_album / "02 - Track 2.flac", foreign)
+        audio = FLAC(foreign)
+        del audio["title"]
+        del audio["tracknumber"]
+        audio.save()
+        before = sorted(p.name for p in flac_album.glob("*.flac"))
+
+        with pytest.raises(SystemExit) as error:
+            _rename([str(flac_album)])
+
+        assert error.value.code == 1
+        assert sorted(p.name for p in flac_album.glob("*.flac")) == before
+
+    def test_failed_second_rename_reverts_the_first(
+        self, flac_album: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from music_tagger.cli.library import _rename
+
+        before = sorted(p.name for p in flac_album.glob("*.flac"))
+        real_rename = Path.rename
+
+        def fail_onto_second_track(self: Path, target: str | Path) -> Path:
+            if Path(target).name == "02. Twenty-One.flac":
+                raise OSError("disk full")
+            return real_rename(self, target)
+
+        monkeypatch.setattr(Path, "rename", fail_onto_second_track)
+
+        with pytest.raises(SystemExit) as error:
+            _rename([str(flac_album)])
+
+        assert error.value.code == 1
+        assert sorted(p.name for p in flac_album.glob("*.flac")) == before
+
+
+class TestWriteTagsGateAndStaleCheck:
+    def _diff(self, tmp_path: Path, diffs: list[TrackDiff]) -> Path:
+        album = read_album(diffs[0].track.path.parent)
+        result = AlbumResult(album, MBRelease("r-1", "Desperado"), diffs)
+        path = tmp_path / "diff.json"
+        path.write_text(json.dumps(result.to_dict()))
+        return path
+
+    def test_review_overwrite_without_approval_exits_3_and_writes_nothing(
+        self, flac_album: Path, tmp_path: Path
+    ) -> None:
+        album = read_album(flac_album)
+        track = album.tracks[0]
+        diff_path = self._diff(
+            tmp_path, [TrackDiff(track, [TagChange("title", "Desperado", "Doolin-Dalton")])]
+        )
+        before = track.path.read_bytes()
+
+        with pytest.raises(SystemExit) as error:
+            _write_tags(["--diff", str(diff_path)])
+
+        assert error.value.code == 3
+        assert track.path.read_bytes() == before
+
+    def test_review_overwrite_with_approval_is_written(
+        self, flac_album: Path, tmp_path: Path
+    ) -> None:
+        album = read_album(flac_album)
+        track = album.tracks[0]
+        diff_path = self._diff(
+            tmp_path, [TrackDiff(track, [TagChange("title", "Desperado", "Doolin-Dalton")])]
+        )
+
+        _write_tags(["--diff", str(diff_path), "--approve-overwrites"])
+
+        assert read_album(flac_album).tracks[0].tags["title"] == "Doolin-Dalton"
+
+    def test_stale_old_value_refuses_the_whole_run(self, flac_album: Path, tmp_path: Path) -> None:
+        album = read_album(flac_album)
+        first, second = album.tracks[0], album.tracks[1]
+        write_tags(second, [TagChange("label", "", "Other Label")])
+        diff_path = self._diff(
+            tmp_path,
+            [
+                TrackDiff(first, [TagChange("label", "", "Asylum")]),
+                TrackDiff(second, [TagChange("label", "", "Asylum")]),
+            ],
+        )
+        before = first.path.read_bytes()
+
+        with pytest.raises(SystemExit) as error:
+            _write_tags(["--diff", str(diff_path)])
+
+        assert error.value.code == 1
+        assert first.path.read_bytes() == before
+
+    def test_multi_value_change_is_not_stale_when_its_full_list_matches(
+        self, flac_album: Path, tmp_path: Path
+    ) -> None:
+        from mutagen.flac import FLAC
+
+        track = read_album(flac_album).tracks[0]
+        write_tags(
+            track,
+            [
+                TagChange(
+                    "musicbrainz_artistid", "", "idA; idB", new_values=("idA", "idB"), multi=True
+                )
+            ],
+        )
+        change = TagChange(
+            "musicbrainz_artistid",
+            "idA; idB",
+            "idA; idB; idC",
+            old_values=("idA", "idB"),
+            new_values=("idA", "idB", "idC"),
+            multi=True,
+        )
+        diff_path = self._diff(tmp_path, [TrackDiff(track, [change])])
+
+        _write_tags(["--diff", str(diff_path)])
+
+        assert FLAC(track.path)["MUSICBRAINZ_ARTISTID"] == ["idA", "idB", "idC"]
+
+    def test_unresolved_isrc_conflict_exits_4(self, flac_album: Path, tmp_path: Path) -> None:
+        album = read_album(flac_album)
+        track = album.tracks[0]
+        conflict = TagConflict("isrc", "USIR19902220", ["USDW10110279"])
+        diff_path = self._diff(tmp_path, [TrackDiff(track, [], [conflict])])
+
+        with pytest.raises(SystemExit) as error:
+            _write_tags(["--diff", str(diff_path)])
+
+        assert error.value.code == 4
+
+
+class TestUnmatchedFileWarningInTag:
+    def test_tag_dry_run_prints_the_unmatched_file_warning(
+        self, flac_album: Path, capsys: object
+    ) -> None:
+        from music_tagger.cli.tagging import _tag
+
+        album = read_album(flac_album)
+        write_tags(album.tracks[2], [TagChange("tracknumber", "3", "13")])
+        release = MBRelease(
+            id="r-1",
+            title="Desperado",
+            artist="Eagles",
+            discs={
+                1: [
+                    MBTrack(number=1, title="Desperado"),
+                    MBTrack(number=2, title="Twenty-One"),
+                    MBTrack(number=3, title="Out of Control"),
+                ]
+            },
+        )
+        name = album.tracks[2].path.name
+
+        with patch("music_tagger.cli.tagging.MusicBrainzClient") as client:
+            client.return_value.fetch_release.return_value = release
+            _tag([str(flac_album), "--release-id", "r-1", "--dry-run"])
+
+        err = capsys.readouterr().err  # type: ignore[attr-defined]
+        assert f"{name}: no release track for disc 1 track 13; only album fields proposed" in err
+
+
+class TestUnreadableFiles:
+    def _bad(self, flac_album: Path) -> Path:
+        bad = flac_album / "bad.flac"
+        bad.write_bytes(b"not audio at all" * 10)
+        return bad
+
+    def test_tag_dry_run_exits_1_and_names_the_file(self, flac_album: Path, capsys: object) -> None:
+        from music_tagger.cli.tagging import _tag
+
+        self._bad(flac_album)
+        release = MBRelease(id="r-1", title="Desperado")
+
+        with (
+            patch("music_tagger.cli.tagging.MusicBrainzClient") as client,
+            pytest.raises(SystemExit) as error,
+        ):
+            client.return_value.fetch_release.return_value = release
+            _tag([str(flac_album), "--release-id", "r-1", "--dry-run"])
+
+        assert error.value.code == 1
+        assert "bad.flac" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+    def test_candidates_warns_and_does_not_exit(self, flac_album: Path, capsys: object) -> None:
+        self._bad(flac_album)
+
+        _run_candidates(flac_album, [_desperado_release()])
+
+        err = capsys.readouterr().err  # type: ignore[attr-defined]
+        assert "Warning: 1 unreadable file(s): bad.flac" in err
+
+    def test_rename_warns_and_still_renames_the_readable_files(
+        self, flac_album: Path, capsys: object
+    ) -> None:
+        from music_tagger.cli.library import _rename
+
+        self._bad(flac_album)
+        write_tags(read_album(flac_album).tracks[0], [TagChange("title", "Desperado", "Renamed")])
+
+        _rename([str(flac_album)])
+
+        err = capsys.readouterr().err  # type: ignore[attr-defined]
+        assert "Warning: 1 unreadable file(s): bad.flac" in err
+        assert (flac_album / "01. Renamed.flac").exists()

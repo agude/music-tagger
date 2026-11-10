@@ -61,6 +61,23 @@ class TestNavidromeClient:
         ):
             client.start_scan()
 
+    def test_trailing_slash_in_env_url_is_not_doubled(self) -> None:
+        env = {
+            "NAVIDROME_URL": "http://localhost:4533/",
+            "NAVIDROME_USER": "admin",
+            "NAVIDROME_PASSWORD": "secret",
+        }
+        with patch.dict("os.environ", env, clear=True):
+            client = NavidromeClient()
+        response_data = {"subsonic-response": {"status": "ok", "scanStatus": {"scanning": False}}}
+        request = httpx.Request("GET", "http://localhost:4533/rest/startScan")
+        mock_resp = httpx.Response(200, json=response_data, request=request)
+
+        with patch.object(client._client, "get", return_value=mock_resp) as get:
+            client.start_scan()
+
+        assert get.call_args.args[0] == "http://localhost:4533/rest/startScan"
+
     def test_missing_env_vars(self) -> None:
         with (
             patch.dict("os.environ", {}, clear=True),
@@ -382,9 +399,9 @@ class TestSetRating:
 
 class TestNdRescanCommand:
     def test_scan_started(self, capsys: object) -> None:
-        from music_tagger.cli import _nd_rescan
+        from music_tagger.cli.services import _nd_rescan
 
-        with patch("music_tagger.cli.NavidromeClient") as mock_cls:
+        with patch("music_tagger.cli.services.NavidromeClient") as mock_cls:
             mock_cls.return_value.start_scan.return_value = {"scanning": True, "count": 0}
             _nd_rescan([])
 
@@ -392,9 +409,9 @@ class TestNdRescanCommand:
         assert "Scan started" in captured.out
 
     def test_scan_complete(self, capsys: object) -> None:
-        from music_tagger.cli import _nd_rescan
+        from music_tagger.cli.services import _nd_rescan
 
-        with patch("music_tagger.cli.NavidromeClient") as mock_cls:
+        with patch("music_tagger.cli.services.NavidromeClient") as mock_cls:
             mock_cls.return_value.start_scan.return_value = {"scanning": False, "count": 5000}
             _nd_rescan([])
 
@@ -429,11 +446,11 @@ class TestNdRatingsCommand:
     def test_out_file(self, tmp_path: object, capsys: object) -> None:
         from pathlib import Path
 
-        from music_tagger.cli import _nd_ratings
+        from music_tagger.cli.ratings import _nd_ratings
 
         out = Path(str(tmp_path)) / "ratings.json"
         songs = self._make_songs()
-        with patch("music_tagger.cli.NavidromeClient") as mock_cls:
+        with patch("music_tagger.cli.ratings.NavidromeClient") as mock_cls:
             mock_cls.return_value.get_all_ratings.return_value = songs
             _nd_ratings(["-o", str(out)])
 
@@ -450,10 +467,10 @@ class TestNdRatingsCommand:
     def test_empty(self, tmp_path: object, capsys: object) -> None:
         from pathlib import Path
 
-        from music_tagger.cli import _nd_ratings
+        from music_tagger.cli.ratings import _nd_ratings
 
         out = Path(str(tmp_path)) / "ratings.json"
-        with patch("music_tagger.cli.NavidromeClient") as mock_cls:
+        with patch("music_tagger.cli.ratings.NavidromeClient") as mock_cls:
             mock_cls.return_value.get_all_ratings.return_value = []
             _nd_ratings(["-o", str(out)])
 
@@ -465,7 +482,7 @@ class TestNdSetRatingCommand:
     def test_dry_run(self, tmp_path: object, capsys: object) -> None:
         from pathlib import Path
 
-        from music_tagger.cli import _nd_set_rating
+        from music_tagger.cli.services import _nd_set_rating
 
         ratings = [
             {"id": "s1", "path": "p", "title": "T1", "artist": "A", "album": "Al", "rating": 4},
@@ -491,7 +508,7 @@ class TestNdSetRatingCommand:
     def test_applies_ratings(self, tmp_path: object, capsys: object) -> None:
         from pathlib import Path
 
-        from music_tagger.cli import _nd_set_rating
+        from music_tagger.cli.services import _nd_set_rating
 
         ratings = [
             {
@@ -507,7 +524,7 @@ class TestNdSetRatingCommand:
         f = Path(str(tmp_path)) / "ratings.json"
         f.write_text(json.dumps(ratings))
 
-        with patch("music_tagger.cli.NavidromeClient") as mock_cls:
+        with patch("music_tagger.cli.services.NavidromeClient") as mock_cls:
             mock_client = mock_cls.return_value
             _nd_set_rating(["--from", str(f)])
 
@@ -521,7 +538,7 @@ class TestNdSetRatingCommand:
     def test_skips_missing_id(self, tmp_path: object, capsys: object) -> None:
         from pathlib import Path
 
-        from music_tagger.cli import _nd_set_rating
+        from music_tagger.cli.services import _nd_set_rating
 
         ratings = [
             {"id": "", "path": "p", "title": "T1", "artist": "A", "album": "Al", "rating": 3},
@@ -529,7 +546,7 @@ class TestNdSetRatingCommand:
         f = Path(str(tmp_path)) / "ratings.json"
         f.write_text(json.dumps(ratings))
 
-        with patch("music_tagger.cli.NavidromeClient") as mock_cls:
+        with patch("music_tagger.cli.services.NavidromeClient") as mock_cls:
             mock_client = mock_cls.return_value
             _nd_set_rating(["--from", str(f)])
 

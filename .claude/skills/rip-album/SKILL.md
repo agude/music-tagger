@@ -47,7 +47,7 @@ them.
 | Exit | Meaning | Action |
 | --- | --- | --- |
 | 0 | Rip verified, or tracks absent from the AccurateRip database | Tell the user the disc is safe to eject. Continue. Absent tracks are normal. |
-| 3 | A track mismatched AccurateRip or did not copy OK | Show the user the summary. Ask whether to clean the disc and rip again, or continue. To rip again, rerun the same command with `--replace`. |
+| 3 | A track mismatched AccurateRip, did not copy OK, has no section in the log (`Missing from log:`), or the log has a section for a number outside the disc (`Unexpected in log:`) | Show the user the summary. For `Missing from log:` or `Unexpected in log:`, rip the disc again with `--replace`. For a mismatch or a status that is not `Copy OK`, ask whether to clean the disc and rip again, or continue. To rip again, rerun the same command with `--replace`. |
 | Other | Rip failed | Report the error and stop. |
 
 **Multi-disc albums.** `rip` names tracks `D-NN. Title` when the release
@@ -137,6 +137,9 @@ safe.
 | 3 | `Gate: review` and the overwrites | Show the user the listed overwrites. If they approve, rerun with `--approve-overwrites`. If they reject them, the release is probably wrong: return to step 2. |
 | 4 | `Gate: blocked` and `ISRC conflict` lines | Rerun with `--isrc keep`. Whipper read those codes from this disc, and absence from MusicBrainz does not prove them wrong. This needs no user confirmation. |
 | 1 | `cover image cannot be embedded` | The image is not a readable JPEG or PNG. Ask the user for another image. Nothing was written. |
+| 1 | `Warning: N unreadable file(s)` before `apply stopped at tag (exit 1)` | An audio file could not be read. Nothing was written. Report the file names. |
+| 1 | `disc D track N: "a", "b"` before `apply stopped at tag (exit 1)` | Two files share a disc and track number. Nothing was written. Report the names; this needs the user's judgment. |
+| 1 | `... already exists and is not part of this rename` before `apply stopped at rename (exit 1)` | A file outside the album plan holds a target name. Nothing was renamed. Report the file and the name; this needs the user's judgment. |
 | Other | `apply stopped at <step>` | Report the error and the step. Do not work around it. Rerunning `apply` after the cause is fixed is safe. |
 
 ## 6. Place
@@ -159,10 +162,21 @@ Then copy with the same flags:
 uv run music-tagger place "$STAGING"
 ```
 
-It prints `[N/total] <file>: copied` as each file is verified by SHA-256,
-logs the copy, and removes `$STAGING`. Copying to the NAS takes minutes;
-wait for it. Exit 1 means a copy failed; `$STAGING` is kept. Report the
-`failed:` lines.
+It prints `[N/total] <file>: copied` as each file is verified by SHA-256 and
+logs the copy. It removes only the files it copied and verified, plus
+top-level `.m3u` files, and removes the directory only when that leaves it
+empty. If it prints `Kept staging directory <path>: N uncopied entries`,
+report those entries to the user and do not delete them. Copying to the NAS
+takes minutes; wait for it.
+
+Exit 1 means a copy failed, or `place` refused before copying. Report the
+error and keep `$STAGING`:
+- `failed:` lines: a copy failed.
+- A destination name collision: two files map to one name, and the error
+  names both. Nothing was copied.
+- `Warning: N unreadable file(s)`: an audio file could not be read. Nothing
+  was copied.
+- `Error: destination ... is inside the source`. Nothing was copied.
 
 ## 7. Report
 

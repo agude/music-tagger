@@ -104,3 +104,22 @@ class TestLyricAvailabilityNotes:
     def test_instrumental(self) -> None:
         notes = self._notes_for(_record(1, instrumental=True, plainLyrics=None, syncedLyrics=None))
         assert "instrumental" in notes
+
+
+class TestIdentityMatches:
+    def _verdict_for(self, track_name: str, artist: str = "Band") -> Any:
+        narrow = [_record(1, trackName=track_name, artistName=artist)]
+        selection = lookup(_client(_search_responder(narrow, [])), EVIDENCE)
+        [verdict] = selection.verdicts
+        return verdict
+
+    def test_same_artist_and_title_is_identity(self) -> None:
+        assert self._verdict_for("Song").identity_matches is True
+
+    def test_version_term_is_not_identity(self) -> None:
+        verdict = self._verdict_for("Song (Live)")
+        assert verdict.identity_matches is False
+        assert verdict.plausible is False
+
+    def test_different_artist_is_not_identity(self) -> None:
+        assert self._verdict_for("Song", artist="Other Band").identity_matches is False

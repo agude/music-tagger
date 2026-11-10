@@ -75,7 +75,13 @@ Key CLI subcommands, driven by Claude Code in conversation:
    files to `NN. Title.ext` (`D-NN. Title.ext` on multi-disc albums) from
    their tracknumber, discnumber, and title tags, the same names `place`
    uses. Sanitizes filesystem-unsafe characters. Skips files missing title
-   or tracknumber tags. Rewrites the `FILE "…"` lines of every `.cue` in the
+   or tracknumber tags. Plans every rename first: if two sources would get the
+   same name (compared case-insensitively, sidecars included), it prints the
+   collision, exits 1, and renames nothing. A target that exists blocks the
+   rename (exit 1, nothing renamed) unless it is another file this rename moves,
+   so two files may swap names, or the same file, so a case-only change works.
+   Renames go through temporary names; a failure reverts the renames already
+   made. `apply` stops at rename on exit 1. Rewrites the `FILE "…"` lines of every `.cue` in the
    album for the renamed files and warns about any FILE line naming a file
    that does not exist.
 
@@ -87,8 +93,10 @@ Key CLI subcommands, driven by Claude Code in conversation:
    to rip CDs not in MusicBrainz. Without an output directory, it creates a
    temp staging directory and prints `Staging: <path>`. It parses whipper's
    log and prints an AccurateRip summary per track; it exits 3 when a track
-   is a mismatch (`Found, NO exact match`) or its status is not `Copy OK`.
-   Tracks absent from the AccurateRip database are normal. A whipper
+   is a mismatch (`Found, NO exact match`), its status is not `Copy OK`, or
+   the log has no section for a ripped track (`Missing from log`) or has one
+   for a number outside 1..N (`Unexpected in log`). It prints `verified` only
+   when none of these hold. Tracks absent from the AccurateRip database are normal. A whipper
    failure exits 1 with `Error: whipper failed (exit N)`, not a traceback.
    Whipper refuses an output directory that holds a `.log`, so `rip` runs
    it in a fresh `.whipper-*` subdirectory and moves the files up. When
@@ -113,7 +121,8 @@ Key CLI subcommands, driven by Claude Code in conversation:
    — runs `tag`, `art`, `genre`, `rename`, and `replaygain` in order and
    stops at the first non-zero exit. Checks that the cover image can be
    embedded (a readable JPEG or PNG) and that the genres are canonical
-   before any step writes. Passes `--approve-overwrites`, `--ignore-locks`,
+   before any step writes. `--force-genre` lets an unlisted genre through, as
+   `genre --force` does. Passes `--approve-overwrites`, `--ignore-locks`,
    `--isrc`, and `--isrc-code` through to `tag`, so a gate stop (exit 3 or
    4) happens before anything is written.
    An exception inside a step also prints `apply stopped at <step>` and
@@ -124,8 +133,14 @@ Key CLI subcommands, driven by Claude Code in conversation:
     — copies a finished album into the library with SHA-256 verification.
     Refuses an existing album directory unless `--merge` (existing files are
     kept). Prints a flushed `[N/total] <file>: copied` line as each file is
-    verified. Removes the source only when it is under the temp directory and
-    every file was copied, so it never deletes a library album. The placed
+    verified. Refuses a destination inside the source, and refuses (exit 1, dry run
+    included, nothing copied) when two sources map to one destination, compared
+    case-insensitively, as `place`, `path-for`, and `copy` all do. When the source is under
+    the temp directory (not the temp root itself), it deletes only the files it
+    copied and verified, plus top-level `.m3u` files (whipper's playlists, never
+    copied). Anything else stays in the source: uncopied files, subdirectories,
+    and skipped files. It removes the directory only when that leaves it empty,
+    and prints the kept entries. The placed
     `.cue` files are rewritten for the placed track names. Non-audio
     file names are sanitized like track names: whipper names its `.log`,
     `.cue`, and `.toc` after the disc title, and a `:` in it made the NAS
@@ -189,8 +204,21 @@ Processing the library is staged album by album across sessions:
   track's duration (within 2 s) or title agrees with the file. Otherwise the
   file matches the one release track on its disc that fits by duration, with a
   title breaking a tie. A file that fits nothing is warned about, and its
-  title and track number are left unchanged.
+  title and track number are left unchanged. A release track goes to at most
+  one file: when two files claim the same one, both are warned about and
+  neither is matched.
 - Track durations are ground truth. A good match has most tracks within 2s.
+- Mixed media: DVD, Blu-ray, and other non-audio media (`NON_AUDIO_FORMATS` in
+  `musicbrainz.py`) are left out of a release's `discs` and `track_count`. The
+  `format` summary keeps them. `totaldiscs` is the highest audio disc position. A
+  release with no audio media is an error for `tag`.
+- Two files with the same (disc, track) key are an error: `tag`, `diff`, and
+  `apply` exit 1 before writing, naming the files. `candidates` warns and flags
+  the release `duplicate-keys`. Positional matching (no track numbers) uses each
+  file's index within its own disc.
+- A full-album file that matches no release track is warned about, and gets
+  album fields only: its artist is not proposed. Its track-owned IDs are not
+  cleared either, since only matched files lose another release's track data.
 - Existing metadata tags may be wrong — use them as search seeds and
   tiebreakers, not as matching criteria.
 - For multi-disc releases, the tool reads disc numbers from existing tags.
@@ -199,11 +227,12 @@ Processing the library is staged album by album across sessions:
 
 ```
 src/music_tagger/
-├── tags.py          # Read/write FLAC + MP3 tags via mutagen
+├── tags.py          # Read FLAC, MP3, and M4A tags; write FLAC and MP3 via mutagen
+├── fileio.py        # Atomic file replacement: temp file, fsync, rename
 ├── musicbrainz.py   # MB API client with 1 req/sec rate limiting
 ├── tagger.py        # Orchestration: search → diff → write
 ├── cue.py           # Keep CUE FILE lines in step with renamed audio
-├── discid.py        # CUE sheet parser, disc ID computation
+├── discid.py        # Whipper log TOC and MusicBrainz disc ID
 ├── placement.py     # Library path computation + verified copy
 ├── coverart.py      # Cover Art Archive client
 ├── navidrome.py     # Navidrome / Subsonic API client
@@ -214,14 +243,28 @@ src/music_tagger/
 ├── lrclib.py        # LRCLIB client (fetch only) and candidate policy
 ├── lyrics_write.py  # Lyric sidecar plans and atomic writes
 ├── lyrics_batch.py  # pending options and decisions: JSON files and rendering
-└── cli.py           # Argparse entry point (all subcommands)
+├── lyrics_embed.py  # Embed sidecar lyrics into tags (backup; no network)
+├── checklist.py     # Album checklist file: parse, update, and render entries
+├── genres.py        # Canonical genre list and per-album genre reads
+└── cli/             # Argparse commands, one package per command group
+    ├── __init__.py   # main() and the command dispatch table only
+    ├── common.py     # Logs, exit codes, gate and warning printers shared by modules
+    ├── tagging.py    # read, match, diff, write-tags, tag, apply, lock, unlock, candidates
+    ├── library.py    # scan, checklist, path-for, copy, place, rename, art, genre, replaygain
+    ├── rip.py        # rip, toc
+    ├── ratings.py    # write-ratings, write-stats, nd ratings, nd stats
+    ├── services.py   # mb and nd subcommands (except ratings and stats)
+    └── lyrics_cmd.py # lyrics, lyrics-batch, lyrics-decide
 ```
 
 - `tags.py` provides a unified interface over FLAC Vorbis Comments, MP3
   ID3v2 frames, and MP4/M4A atoms. Field names follow Navidrome's
-  `mappings.yaml` conventions. M4A is **read-only except for genre**:
-  `read_genres`/`write_genres` handle it fully, but `write_tags` raises
-  `NotImplementedError` rather than silently writing nothing.
+  `mappings.yaml` conventions. M4A is **read-only for general tags**. The
+  writes that exist are: genre (`read_genres`/`write_genres`), the rating and
+  play-count atoms (`write_stats_to_file`, `write_rating_to_file`), and the
+  `©lyr` atom (`lyrics --embed`). `write_tags` raises `NotImplementedError`, and
+  `write_locks` refuses M4A, rather than silently writing nothing. `replaygain`
+  writes M4A through `rsgain`.
 - **M4A ratings**: MP4 has no standard star field and the conventions
   collide — the freeform `RATING` atom is 0-100 in MusicBee/EZ CD, while
   this tool writes `RATING` as 1-5 for FLAC and MP3. Writing 1-5 into an
@@ -236,7 +279,10 @@ src/music_tagger/
   retries 429 and 503 up to 4 attempts with exponential backoff.
 - `tagger.py` builds the target tags from an MB release and computes diffs.
   Handles multi-disc albums by parsing `discnumber` tags.
-- `discid.py` parses CUE sheets and computes MusicBrainz disc IDs.
+- `discid.py` reads the TOC and disc ID from whipper's log. With a lookup URL the
+  URL's `toc=` and the logged ID must agree; without one, the disc ID is computed
+  from the TOC section and checked against the logged ID. A directory with several
+  logs needs `toc --log FILE`.
 - `placement.py` computes library destination paths and copies files with
   SHA-256 verification.
 - `coverart.py` fetches front cover images from the Cover Art Archive or
@@ -244,11 +290,17 @@ src/music_tagger/
   accepts `--cover-file <path>` as an alternative to `--release-id`.
   The folder cover is named by its bytes, `cover.jpg` or `cover.png`, and
   installing one removes the other: Navidrome reads `cover.*` before
-  embedded art, and which of two wins is unspecified. `art --embed` embeds
-  `embeddable_cover()`: a JPEG that fits unchanged; a PNG, or a JPEG over
+  embedded art, and which of two wins is unspecified. Every image is fully
+  decoded (Pillow `load()`) before anything is written; a truncated or corrupt
+  JPEG or PNG is refused, and an existing cover is kept. The new cover is
+  written atomically and keeps the mode a plain write would give. `art --embed`
+  embeds `embeddable_cover()`: a valid JPEG that fits unchanged; a PNG, or a JPEG over
   `MAX_EMBEDDED_BYTES`, re-encoded as quality-95 4:4:4 JPEG (Pillow) and
   downscaled until it fits. A FLAC picture block has a 24-bit length, so an
   18.6 MB PNG raised `mutagen.flac.error: block is too long to write`.
+  `art --embed` prints `Skipped N file(s):` naming each M4A file (no cover
+  support), each audio-suffixed entry that is not a regular file, and each audio
+  file that mutagen cannot identify (`unreadable`).
   `art --release-id <uuid> --preview` downloads the full-size front cover to
   a temp file and prints its path and dimensions next to the album's
   current `cover.*`, writing nothing to the album, so the operator can
@@ -256,7 +308,8 @@ src/music_tagger/
 - `replaygain.py` subprocess wrapper around `rsgain` for ReplayGain 2.0 tagging.
 - `navidrome.py` Subsonic API client for library scans, rating writes, and
   the native `/api/song` listing (`get_all_ratings`, `get_all_stats`).
-- `cli.py` wires the subcommands together.
+- `cli/` wires the subcommands together in `__init__.py`; each command group
+  lives in the module named in the tree above.
 
 ## Ratings and play counts
 
@@ -278,7 +331,7 @@ Commands (all through `just`, which loads `.env`):
   changed field with old and new values, and the number of files and bytes
   a real run would rewrite. `just sync-stats` writes.
 - `write-stats --library NAME_OR_ID` selects the Navidrome library to write.
-  The default is `Music Library` (`_DEFAULT_LIBRARY` in cli.py). Songs in
+  The default is `Music Library` (`_DEFAULT_LIBRARY` in `cli/ratings.py`). Songs in
   other libraries, such as `Podcasts` (podcast episodes and audiobooks, whose
   paths are not under the music root), are counted as `other library` and do
   not affect the exit code. `--library all` writes every library. A numeric
@@ -401,7 +454,9 @@ removes the other. Other languages and descriptors, every other tag, and the
 ID3 version are kept. A different value in the managed slot needs `--replace`;
 without it the track is `preserved`. An identical value is `unchanged`. A
 malformed sidecar is `refused` and exits 1. A file the tool cannot read is
-`refused`, and a write error is `failed`. Embedded text is hidden in Navidrome
+`refused`, and a write error is `failed`. An MP3 with an ID3v2.2 tag is `failed`
+and left unchanged: mutagen writes only v2.3 and v2.4, and converting would rewrite
+every frame. Embedded text is hidden in Navidrome
 while a sidecar exists, and an edited sidecar drifts from its embedded copy
 until `--embed --replace` runs again.
 
@@ -513,8 +568,10 @@ uv run music-tagger lyrics-batch "/mnt/synology/media/music/<Artist>" --auto --e
 - `--auto` records the choices the rules accept, after each album's fetch and before
   its embed. The rules are `confident_choice` in `lyrics_batch.py`: (1) a plausible
   album match with synchronized text, closest length first; (2) an album match with
-  synchronized text, length within 5 s, and last synced line inside the audio. Plain
-  text is never auto-chosen. Everything else stays pending for `lyrics-decide`.
+  matching artist and title, synchronized text, length within 5 s, and last synced
+  line inside the audio. A pending entry saved before the `identity_matches` field
+  reads as not matching, so rule (2) skips it. Plain text is never auto-chosen.
+  Everything else stays pending for `lyrics-decide`.
 - `--embed` runs after the fetch pass, for each track that has a sidecar. It never
   replaces a different tag value.
 - Pending file: `~/Projects/music-tagger/lyrics-pending.json`, or
@@ -541,6 +598,11 @@ uv run music-tagger lyrics-decide skip "<album-dir>" --track 1 --reason "no reco
 uv run music-tagger lyrics-decide skip "<album-dir>" --file "01. Star Wars_ Main Title.flac" --reason "no record exists"
 ```
 
+- Decisions and pending entries are keyed by the file's MusicBrainz release track
+  ID (`musicbrainz_releasetrackid`) when the file has one, else by album and file
+  name. An entry with an ID matches the track with that ID after a rename or a move;
+  a batch run then updates its stored album and file (real runs only). Entries
+  written before IDs match by album and file, with no separate migration.
 - `list` prints each undecided pending track with its candidates: ID, title,
   artist, album, duration difference, flags, and what the record offers. Each
   header names the audio file.
@@ -591,10 +653,40 @@ inspection write no log. `lyrics-batch` follows the same rule.
 
 ## Tag mapping details
 
+- **Multi-valued fields.** `MULTI_VALUE_FIELDS` (`tags.py`) holds one value per
+  credited person: `artists`, `albumartists`, `musicbrainz_artistid`,
+  `musicbrainz_albumartistid`, the role names (`composer`, `lyricist`, `producer`,
+  `engineer`, `mixer`, `conductor`, `remixer`) and their `musicbrainz_*id` fields, and
+  `releasetype`. `TrackTags.multi` holds every value in file order; `tags[field]` holds
+  the first. `ARTIST` and `ALBUMARTIST` stay the single display credit, and the review
+  gate does not cover multi fields. A multi change compares whole lists, in order; its
+  `old_value` and `new_value` are the values joined with `; ` for display. An empty
+  list deletes the field. Containers:
+
+  | Container | How values are stored | Keys |
+  | --- | --- | --- |
+  | FLAC (Vorbis) | The field repeated | `ARTISTS`, `ALBUMARTISTS`, `MUSICBRAINZ_ARTISTID`, … |
+  | MP3, ID3v2.4 | One frame, values null-separated | `TXXX:ARTISTS`, `TXXX:ALBUM ARTISTS`, `TXXX:MusicBrainz Artist Id`, role frames such as `TCOM` |
+  | MP3, ID3v2.3 | No multi-value support | Saved as v2.4 on write, so v2.3 files are upgraded |
+  | M4A | Not read | `write_tags` does not support M4A |
+
+  `TXXX:ALBUM ARTISTS` follows the spelling in the design table; it could not be checked
+  against Navidrome's mapping offline.
 - `date` (FLAC `DATE`, MP3 `TDRC`) is the recording date — never overwritten
   by the MB release date. When empty, populated from the release group's
   `first_release_date`.
+- FLAC `totaldiscs` is read from `TOTALDISCS`, else `DISCTOTAL` (whipper writes
+  only `DISCTOTAL`). A multi-disc album, for `rename` and `place`, is one whose
+  tracks state a disc number above 1, a total above 1, or a `n/total` disc number.
 - `releasedate` (FLAC `RELEASEDATE`, MP3 `TDRL`) gets the MB release's date.
+- Retagging a file that carries another release's `musicbrainz_albumid` clears
+  the release-owned fields (`RELEASE_OWNED_FIELDS`, and for a matched track
+  `TRACK_OWNED_FIELDS`) that the new release does not supply. A clear is a
+  `TagChange` with an empty `new_value`; `write_tags` deletes the field (FLAC key,
+  every matching MP3 frame). `tag` shows it as `field: old → (cleared)`. Clears
+  honor locks. A clear of a reviewed field (title, artist, album, albumartist,
+  date) is never automatic: those fields are in neither owned set, and
+  `overwrites_needing_review` flags any clear of a non-empty reviewed value.
 - `releasestatus` is compared case-insensitively (`official` == `Official`).
 - Unicode from MusicBrainz (e.g. U+2010 HYPHEN in titles) is accepted as
   canonical.
@@ -632,8 +724,12 @@ inspection write no log. `lyrics-batch` follows the same rule.
 - `--isrc-code [DISC-]TRACK=CODE` picks a code for one track and overrides
   `--isrc` for it. The code must be the file's code or a MusicBrainz code.
 
-The diff JSON path (`read` → `diff` → `write-tags`) still honors a
-`resolution` set on each conflict, and a kept resolution locks `isrc` there
+The diff JSON path (`read` → `diff` → `write-tags`) enforces the same gate as
+`tag`: review overwrites exit 3 unless `write-tags --approve-overwrites`, and
+unresolved ISRC conflicts exit 4. Dry runs print the verdict and exit with its
+code. Before any write it re-reads each file the diff changes; if a change's
+`old_value` no longer matches the file, the whole run exits 1 and writes nothing.
+The diff JSON path still honors a `resolution` set on each conflict, and a kept resolution locks `isrc` there
 too. Do not add a duplicate ISRC entry to `changes`; the resolution
 generates the required change. Old release JSON containing only a scalar
 `isrc` must be fetched again: that value may have been selected from a
@@ -646,7 +742,9 @@ longer list.
   `TCON` frame with null-separated values, which only works in ID3v2.4.
 - **Types, not keys, are the trap.** MP4 `trkn` is `[(1, 3)]` and `----`
   freeform atoms return `MP4FreeForm` bytes; neither fits the `dict[str, str]`
-  contract. `MP4_MAP` therefore covers only string-valued atoms.
+  contract. `MP4_MAP` therefore covers only string-valued atoms. `trkn` and
+  `disk` are decoded separately into `tracknumber`/`totaltracks` and
+  `discnumber`/`totaldiscs`, skipping zero numbers.
 - **Audit every consumer before widening `AUDIO_EXTENSIONS`.** Adding `.m4a`
   reached `replaygain.py` (fine — `rsgain` supports M4A) and `embed_cover_art`
   (skips M4A, no `covr` support). Anything that globs the shared constant
@@ -677,13 +775,23 @@ output. `write_tags` raising `NotImplementedError` for M4A is the pattern.
   skills had to pass `--log` and did not: `changes.log` had 448 sections and
   zero `## Genre:` entries, so no genre change had an audit trail. `tag`,
   `write-tags`, `write-ratings`, `write-stats`, `genre`, `rename`, `lock`,
-  `unlock`, `art`,
-  `replaygain`, `copy`, and `lyrics --fetch` or `--embed` now append to `$MUSIC_TAGGER_LOG`, else
-  `~/Projects/music-tagger/changes.log`. `--log PATH` redirects; `--no-log`
+  `unlock`, `art`, `replaygain`, `copy`, `place`, `lyrics --fetch` or `--embed`,
+  `lyrics-batch` (without `--dry-run`), and `lyrics-decide choose` now append to
+  `$MUSIC_TAGGER_LOG`, else `~/Projects/music-tagger/changes.log`. `--log PATH` redirects; `--no-log`
   disables. Tests point `MUSIC_TAGGER_LOG` at a temp file (autouse fixture
   in `tests/conftest.py`); never remove that fixture.
+  A command that fails partway still logs what it changed. `tag` and
+  `write-tags` log each track right after it is written. `genre`, `art`,
+  `lock`, `unlock`, and `copy` write their summary from a `finally` with the
+  count done so far (`art` adds a `Failed:` line). `rename` reverts a failed
+  rename, so it logs nothing; if a revert itself fails, it logs what is on disk.
 - `scan` and `candidates` are read-only. Safe to run directly against the
   live library.
+  An audio file that cannot be read is listed in `AlbumTags.unreadable` and
+  never dropped. So is an audio-suffixed entry that is not a regular file, such
+  as a directory or a broken symlink. `tag`, `apply`, and `place` print
+  `Warning: N unreadable file(s): …` and exit 1; `rename`, `candidates`, and
+  `scan` only warn.
 - `tag --dry-run` is read-only. Safe to run directly against the live library.
 - `tag` (without `--dry-run`) writes metadata into files. It does not move,
   rename, or delete files. Use `--dry-run` first, review the diff, then run
@@ -726,8 +834,8 @@ just check        # everything CI runs: lint + type-check + test
 just hooks-install  # install bin/pre-commit.sh into this clone
 ```
 
-The coverage gate sits at 83%, the current floor, so coverage can only
-ratchet upward. The standard is 90%; raising it is ordinary follow-up work.
+The coverage gate sits at 93%, the current floor, so coverage can only
+ratchet upward. The standard is 90%; raise the gate as coverage rises.
 
 Test fixtures are small FLAC/MP3 files in `tests/fixtures/` with known tags.
 Tests copy them to `tmp_path` so mutations don't affect the fixtures.

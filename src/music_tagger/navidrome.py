@@ -24,7 +24,7 @@ def _get_config() -> tuple[str, str, str]:
         raise RuntimeError(
             "Set NAVIDROME_URL, NAVIDROME_USER, and NAVIDROME_PASSWORD environment variables."
         )
-    return url, user, password
+    return url.rstrip("/"), user, password
 
 
 def _reported_total(resp: httpx.Response) -> int:

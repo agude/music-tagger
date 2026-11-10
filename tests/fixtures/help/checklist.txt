@@ -1,0 +1,15 @@
+usage: music-tagger checklist [-h] [--file FILE] {next,done,skip,reopen} ...
+
+Read and update the album checklist.
+
+positional arguments:
+  {next,done,skip,reopen}
+    next                Show the next unchecked album.
+    done                Mark an album done.
+    skip                Mark an album skipped, with the reason.
+    reopen              Uncheck an album, or every skip matching text.
+
+options:
+  -h, --help            show this help message and exit
+  --file FILE           Checklist file (default: $MUSIC_TAGGER_CHECKLIST, else
+                        ~/Projects/music-tagger/checklist.md).

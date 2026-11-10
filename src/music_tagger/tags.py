@@ -40,8 +40,9 @@ FMPS_RATING_ALIASES = ("FMPS_Rating", "FMPS_RATING")
 FMPS_PLAYCOUNT_OUTPUT = "FMPS_Playcount"
 FMPS_PLAYCOUNT_ALIASES = ("FMPS_Playcount", "FMPS_PlayCount", "FMPS_PLAYCOUNT")
 
-# MP4 atoms, for reading only. Genre is the one MP4 field this tool writes;
-# see write_tags, which refuses the rest rather than silently dropping them.
+# MP4 atoms, for reading only. The MP4 writes this tool makes are genre,
+# rating and play-count atoms, and lyrics; write_tags refuses the rest rather
+# than silently dropping them.
 MP4_MAP: dict[str, str] = {
     "title": "\xa9nam",
     "artist": "\xa9ART",
@@ -80,8 +81,11 @@ _MB_DISAMBIG_TERMS = {
 FIELD_MAP: dict[str, tuple[str, str]] = {
     "title": ("TITLE", "TIT2"),
     "artist": ("ARTIST", "TPE1"),
+    # Navidrome's multi-valued artist fields. ARTIST and ALBUMARTIST stay the display credit.
+    "artists": ("ARTISTS", "TXXX:ARTISTS"),
     "album": ("ALBUM", "TALB"),
     "albumartist": ("ALBUMARTIST", "TPE2"),
+    "albumartists": ("ALBUMARTISTS", "TXXX:ALBUM ARTISTS"),
     "tracknumber": ("TRACKNUMBER", "TRCK"),
     "discnumber": ("DISCNUMBER", "TPOS"),
     "totaltracks": ("TOTALTRACKS", "TXXX:TOTALTRACKS"),
@@ -177,6 +181,33 @@ LOCK_VORBIS_KEY = "MUSIC_TAGGER_LOCKED"
 LOCK_MP4_ATOM = "----:com.apple.iTunes:MUSIC_TAGGER_LOCKED"
 LOCKABLE_FIELDS = frozenset(FIELD_MAP) - {"music_tagger_updated"}
 
+# Fields that hold one value per credited person, stored as repeated Vorbis comments
+# (FLAC) or one ID3 frame with null-separated values (MP3). `tags[field]` holds the first
+# value; `TrackTags.multi` holds all of them.
+MULTI_VALUE_FIELDS = frozenset(
+    {
+        "artists",
+        "albumartists",
+        "musicbrainz_artistid",
+        "musicbrainz_albumartistid",
+        "composer",
+        "lyricist",
+        "producer",
+        "engineer",
+        "mixer",
+        "conductor",
+        "remixer",
+        "musicbrainz_composerid",
+        "musicbrainz_lyricistid",
+        "musicbrainz_producerid",
+        "musicbrainz_engineerid",
+        "musicbrainz_mixerid",
+        "musicbrainz_conductorid",
+        "musicbrainz_remixerid",
+        "releasetype",
+    }
+)
+
 
 @dataclass
 class TrackTags:
@@ -185,15 +216,20 @@ class TrackTags:
     duration_secs: float = 0.0
     format: str = ""
     locked_fields: list[str] = field(default_factory=list)
+    # Every value of each MULTI_VALUE_FIELDS field the file holds, in file order.
+    multi: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "path": str(self.path),
             "format": self.format,
             "duration_secs": self.duration_secs,
             "tags": dict(self.tags),
             "locked_fields": list(self.locked_fields),
         }
+        if self.multi:
+            data["multi"] = {name: list(values) for name, values in self.multi.items()}
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TrackTags:
@@ -203,6 +239,7 @@ class TrackTags:
             duration_secs=data.get("duration_secs", 0.0),
             format=data.get("format", ""),
             locked_fields=list(data.get("locked_fields", [])),
+            multi={name: tuple(values) for name, values in data.get("multi", {}).items()},
         )
 
 
@@ -210,6 +247,8 @@ class TrackTags:
 class AlbumTags:
     directory: Path
     tracks: list[TrackTags] = field(default_factory=list)
+    # Audio files that could not be read. They are not in `tracks`.
+    unreadable: list[Path] = field(default_factory=list)
 
     @property
     def artist(self) -> str:
@@ -253,18 +292,34 @@ _FLAC_MAGIC = b"fLaC"
 _VORBIS_COMMENT_BLOCK = 4
 
 
+# Vorbis keys other taggers use for a field, read when the canonical key is absent.
+# whipper writes DISCTOTAL, not TOTALDISCS.
+_FLAC_ALIASES: dict[str, tuple[str, ...]] = {"totaldiscs": ("DISCTOTAL",)}
+
+
 def _flac_tags_from_lookup(lookup: Callable[[str], Sequence[str] | None]) -> dict[str, str]:
     """Map Vorbis comments onto FIELD_MAP names; lookup(key) returns values, first wins."""
     tags: dict[str, str] = {}
     for canonical, (vorbis_key, _) in FIELD_MAP.items():
-        values = lookup(vorbis_key)
-        if values:
-            tags[canonical] = values[0]
+        for key in (vorbis_key, *_FLAC_ALIASES.get(canonical, ())):
+            values = lookup(key)
+            if values:
+                tags[canonical] = values[0]
+                break
     return tags
 
 
 def _read_flac_tags(audio: FLAC) -> dict[str, str]:
     return _flac_tags_from_lookup(audio.get)
+
+
+def _read_flac_multi(audio: FLAC) -> dict[str, tuple[str, ...]]:
+    multi: dict[str, tuple[str, ...]] = {}
+    for canonical in MULTI_VALUE_FIELDS:
+        values = audio.get(FIELD_MAP[canonical][0])  # type: ignore[no-untyped-call]
+        if values:
+            multi[canonical] = tuple(str(value) for value in values)
+    return multi
 
 
 def _parse_vorbis_comments(block: bytes) -> dict[str, list[str]]:
@@ -355,11 +410,31 @@ def _read_mp3_tags(audio: MP3) -> dict[str, str]:
     return tags
 
 
-def _read_mp4_tags(audio: MP4) -> dict[str, str]:
-    """Read the string-valued MP4 atoms.
+def _read_mp3_multi(audio: MP3) -> dict[str, tuple[str, ...]]:
+    multi: dict[str, tuple[str, ...]] = {}
+    if audio.tags is None:
+        return multi
+    for canonical in MULTI_VALUE_FIELDS:
+        id3_key = FIELD_MAP[canonical][1]
+        if id3_key.startswith("TXXX:"):
+            desc = id3_key[5:].lower()
+            frame = next((f for f in audio.tags.getall("TXXX") if f.desc.lower() == desc), None)
+            values = frame.text if frame is not None else []
+        else:
+            frame = audio.tags.get(id3_key)
+            values = frame.text if frame is not None else []
+        if values:
+            multi[canonical] = tuple(str(value) for value in values)
+    return multi
 
-    Skips trkn/disk (tuples, not strings) and anything else whose atom type
-    would not survive the dict[str, str] contract.
+
+def _read_mp4_tags(audio: MP4) -> dict[str, str]:
+    """Read the string-valued MP4 atoms, plus track and disc numbers.
+
+    trkn and disk are (number, total) tuples. Each non-zero number becomes
+    tracknumber or discnumber, and a non-zero total becomes totaltracks or
+    totaldiscs. Other atoms whose type would not survive the dict[str, str]
+    contract are skipped.
     """
     tags: dict[str, str] = {}
     for canonical, atom in MP4_MAP.items():
@@ -370,6 +445,18 @@ def _read_mp4_tags(audio: MP4) -> dict[str, str]:
         tags[canonical] = (
             bytes(first).decode("utf-8", "replace") if isinstance(first, bytes) else str(first)
         )
+    for atom, number_field, total_field in (
+        ("trkn", "tracknumber", "totaltracks"),
+        ("disk", "discnumber", "totaldiscs"),
+    ):
+        pairs = audio.get(atom)  # type: ignore[no-untyped-call]
+        if not pairs:
+            continue
+        number, total = pairs[0]
+        if number:
+            tags[number_field] = str(number)
+        if total:
+            tags[total_field] = str(total)
     return tags
 
 
@@ -424,25 +511,90 @@ def read_fmps(audio: MP3 | MP4) -> FmpsStats:
     )
 
 
+def parse_position(raw: str | None) -> int | None:
+    """The number in a position tag such as "3" or "3/12", or None when absent or not a number."""
+    if raw is None:
+        return None
+    try:
+        return int(raw.split("/")[0])
+    except ValueError:
+        return None
+
+
+def parse_total(raw: str | None) -> int | None:
+    """The total in a position tag such as "3/12", or None when there is no total."""
+    if raw is None or "/" not in raw:
+        return None
+    try:
+        return int(raw.split("/")[1])
+    except ValueError:
+        return None
+
+
+def disc_number(track: TrackTags) -> int:
+    """The track's disc number, 1 when its discnumber tag is missing or not a number."""
+    value = parse_position(track.tags.get("discnumber", "1"))
+    return 1 if value is None else value
+
+
+@dataclass
+class AudioListing:
+    files: list[Path]
+    other: list[Path]
+
+
+def list_audio(directory: Path) -> AudioListing:
+    """Entries directly in directory with an audio suffix, sorted by name. Suffixes match any case.
+
+    `files` holds the regular files. `other` holds the rest, such as a directory or a
+    broken symlink, so a caller can report it instead of dropping it.
+    """
+    listing = AudioListing(files=[], other=[])
+    for entry in sorted(directory.iterdir()):
+        if entry.suffix.lower() not in AUDIO_EXTENSIONS:
+            continue
+        (listing.files if entry.is_file() else listing.other).append(entry)
+    return listing
+
+
+def audio_files(directory: Path) -> list[Path]:
+    """The regular audio files directly in directory, sorted by name. Suffixes match any case."""
+    return list_audio(directory).files
+
+
 def read_album(directory: Path) -> AlbumTags:
     """Read tags from all audio files in a directory."""
     album = AlbumTags(directory=directory)
-    files = sorted(f for f in directory.iterdir() if f.suffix.lower() in AUDIO_EXTENSIONS)
-    for path in files:
-        audio = MutagenFile(path)
+    listing = list_audio(directory)
+    # Non-file entries carry an audio suffix, so they are reported as unreadable, not dropped.
+    album.unreadable.extend(listing.other)
+    for path in listing.files:
+        # Unreadable files are recorded, never dropped: a partial read looks like a partial album.
+        try:
+            audio = MutagenFile(path)
+        except (MutagenError, OSError):
+            audio = None
         if audio is None:
+            album.unreadable.append(path)
             continue
+        multi: dict[str, tuple[str, ...]] = {}
         if isinstance(audio, FLAC):
             tags = _read_flac_tags(audio)
+            multi = _read_flac_multi(audio)
             fmt = "flac"
         elif isinstance(audio, MP3):
             tags = _read_mp3_tags(audio)
+            multi = _read_mp3_multi(audio)
             fmt = "mp3"
         elif isinstance(audio, MP4):
+            # M4A multi-values are not read: write_tags does not support M4A.
             tags = _read_mp4_tags(audio)
             fmt = "m4a"
         else:
+            album.unreadable.append(path)
             continue
+        for canonical, values in multi.items():
+            tags[canonical] = values[0]
         duration = audio.info.length if audio.info else 0.0
         album.tracks.append(
             TrackTags(
@@ -451,6 +603,7 @@ def read_album(directory: Path) -> AlbumTags:
                 duration_secs=duration,
                 format=fmt,
                 locked_fields=_read_locks(audio),
+                multi=multi,
             )
         )
     return album
@@ -458,6 +611,10 @@ def read_album(directory: Path) -> AlbumTags:
 
 def _write_flac_tag(audio: FLAC, canonical: str, value: str) -> None:
     vorbis_key = FIELD_MAP[canonical][0]
+    if value == "":
+        if vorbis_key in audio:
+            audio.pop(vorbis_key)  # type: ignore[no-untyped-call]
+        return
     audio[vorbis_key] = [value]
 
 
@@ -466,6 +623,16 @@ def _write_mp3_tag(audio: MP3, canonical: str, value: str) -> None:
         audio.add_tags()  # type: ignore[no-untyped-call]
     assert audio.tags is not None
     id3_key = FIELD_MAP[canonical][1]
+    if value == "":
+        # An empty value deletes the field: every matching frame, not an empty one.
+        if id3_key.startswith("TXXX:"):
+            desc = id3_key[5:].lower()
+            for frame in audio.tags.getall("TXXX"):
+                if frame.desc.lower() == desc:
+                    audio.tags.delall(frame.HashKey)
+        else:
+            audio.tags.delall(id3_key)
+        return
     if id3_key.startswith("TXXX:"):
         desc = id3_key[5:]
         for frame in audio.tags.getall("TXXX"):
@@ -481,39 +648,122 @@ def _write_mp3_tag(audio: MP3, canonical: str, value: str) -> None:
             audio.tags.setall(id3_key, [frame_cls(text=[value])])
 
 
+def _write_flac_multi(audio: FLAC, canonical: str, values: tuple[str, ...]) -> None:
+    vorbis_key = FIELD_MAP[canonical][0]
+    if not values:
+        if vorbis_key in audio:
+            audio.pop(vorbis_key)  # type: ignore[no-untyped-call]
+        return
+    audio[vorbis_key] = list(values)
+
+
+def _write_mp3_multi(audio: MP3, canonical: str, values: tuple[str, ...]) -> None:
+    """Write every value into one frame. Replaces each matching frame, so none is left over."""
+    if audio.tags is None:
+        audio.add_tags()  # type: ignore[no-untyped-call]
+    assert audio.tags is not None
+    id3_key = FIELD_MAP[canonical][1]
+    if id3_key.startswith("TXXX:"):
+        desc = id3_key[5:]
+        for frame in audio.tags.getall("TXXX"):
+            if frame.desc.lower() == desc.lower():
+                audio.tags.delall(frame.HashKey)
+        if values:
+            audio.tags.add(TXXX(desc=desc, text=list(values)))
+        return
+    from mutagen.id3 import Frames
+
+    audio.tags.delall(id3_key)
+    frame_cls = Frames.get(id3_key)
+    if values and frame_cls:
+        audio.tags.setall(id3_key, [frame_cls(text=list(values))])
+
+
 @dataclass
 class TagChange:
     field: str
     old_value: str
     new_value: str
+    # For a multi-valued field: every value before and after. old_value and new_value
+    # are then the values joined with "; " for display.
+    old_values: tuple[str, ...] = ()
+    new_values: tuple[str, ...] = ()
+    multi: bool = False
 
-    def to_dict(self) -> dict[str, str]:
-        return {
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
             "field": self.field,
             "old_value": self.old_value,
             "new_value": self.new_value,
         }
+        if self.multi:
+            data["multi"] = True
+            data["old_values"] = list(self.old_values)
+            data["new_values"] = list(self.new_values)
+        return data
 
     @classmethod
-    def from_dict(cls, data: dict[str, str]) -> TagChange:
+    def from_dict(cls, data: dict[str, Any]) -> TagChange:
         return cls(
             field=data["field"],
             old_value=data.get("old_value", ""),
             new_value=data["new_value"],
+            old_values=tuple(data.get("old_values", ())),
+            new_values=tuple(data.get("new_values", ())),
+            multi=bool(data.get("multi", False)),
         )
 
 
-def compute_diff(track: TrackTags, new_tags: dict[str, str]) -> list[TagChange]:
-    """Compute the tag changes needed for a single track."""
+def _multi_change(
+    track: TrackTags, field_name: str, new_values: tuple[str, ...], fold: bool
+) -> TagChange | None:
+    """A change for a multi-valued field, or None when the values already match in order."""
+    old_values = track.multi.get(field_name)
+    if old_values is None:
+        old_values = (track.tags[field_name],) if track.tags.get(field_name) else ()
+    if fold:
+        same = [v.lower() for v in old_values] == [v.lower() for v in new_values]
+    else:
+        same = old_values == new_values
+    if same:
+        return None
+    return TagChange(
+        field=field_name,
+        old_value="; ".join(old_values),
+        new_value="; ".join(new_values),
+        old_values=old_values,
+        new_values=new_values,
+        multi=True,
+    )
+
+
+def compute_diff(
+    track: TrackTags,
+    new_tags: dict[str, str],
+    new_multi: dict[str, tuple[str, ...]] | None = None,
+) -> list[TagChange]:
+    """Compute the tag changes needed for a single track.
+
+    new_multi holds the target values of multi-valued fields. Their order matters.
+    """
     # Fields where comparison should be case-insensitive
     case_insensitive = {"releasestatus", "releasetype"}
     # Fields excluded from diff — always written when other changes exist
     skip_diff = {"music_tagger_updated"}
+    multi = new_multi or {}
 
     changes = []
-    for field_name, new_value in sorted(new_tags.items()):
+    for field_name in sorted(set(new_tags) | set(multi)):
         if field_name in skip_diff:
             continue
+        if field_name in multi:
+            change = _multi_change(
+                track, field_name, multi[field_name], field_name in case_insensitive
+            )
+            if change is not None:
+                changes.append(change)
+            continue
+        new_value = new_tags[field_name]
         old_value = track.tags.get(field_name, "")
         if field_name in case_insensitive:
             if old_value.lower() == new_value.lower():
@@ -524,19 +774,26 @@ def compute_diff(track: TrackTags, new_tags: dict[str, str]) -> list[TagChange]:
             suffix = new_value[len(old_value) :].strip()
             if suffix.startswith("(") and suffix.endswith(")"):
                 inner = suffix[1:-1].lower()
-                if any(t in inner for t in _MB_DISAMBIG_TERMS):
+                if any(re.search(rf"\b{re.escape(t)}\b", inner) for t in _MB_DISAMBIG_TERMS):
                     continue
         changes.append(TagChange(field=field_name, old_value=old_value, new_value=new_value))
     return changes
 
 
 def write_tags(track: TrackTags, changes: list[TagChange]) -> None:
-    """Write tag changes to a single audio file."""
+    """Write tag changes to a single audio file.
+
+    Raises ValueError for a field that is not in FIELD_MAP, before anything is written,
+    so a misspelt field cannot be reported as applied.
+    """
     if not changes:
         return
+    for change in changes:
+        if change.field not in FIELD_MAP:
+            raise ValueError(f"unknown field {change.field!r}")
     audio = MutagenFile(track.path)
     if audio is None:
-        return
+        raise UnsupportedFileError(f"not a readable audio file: {track.path}")
     if not isinstance(audio, FLAC | MP3):
         # M4A is readable and its genre is writable via write_genres, but the
         # general field map has no MP4 write path. Fail loudly rather than
@@ -545,9 +802,12 @@ def write_tags(track: TrackTags, changes: list[TagChange]) -> None:
             f"writing tags to {track.path.suffix} is not supported: {track.path}"
         )
     for change in changes:
-        if change.field not in FIELD_MAP:
-            continue
-        if isinstance(audio, FLAC):
+        if change.multi:
+            if isinstance(audio, FLAC):
+                _write_flac_multi(audio, change.field, change.new_values)
+            else:
+                _write_mp3_multi(audio, change.field, change.new_values)
+        elif isinstance(audio, FLAC):
             _write_flac_tag(audio, change.field, change.new_value)
         else:
             _write_mp3_tag(audio, change.field, change.new_value)
@@ -1107,14 +1367,38 @@ def write_rating_to_file(path: Path, rating: int, dry_run: bool = False) -> list
     return write_stats_to_file(path, rating=rating, dry_run=dry_run).changes
 
 
-def embed_cover_art(album_dir: Path, image_data: bytes, mime: str) -> int:
-    """Embed cover art into all audio files in album_dir. Returns count of files updated."""
+@dataclass
+class EmbedResult:
+    count: int
+    m4a: list[Path]
+    other: list[Path]
+    unreadable: list[Path]
 
-    files = sorted(f for f in album_dir.iterdir() if f.suffix.lower() in AUDIO_EXTENSIONS)
+
+def embed_cover_art(
+    album_dir: Path,
+    image_data: bytes,
+    mime: str,
+    on_written: Callable[[Path], None] | None = None,
+) -> EmbedResult:
+    """Embed cover art into the audio files in album_dir.
+
+    The result counts the files updated, lists the M4A files left alone (no cover
+    support), lists the non-file entries skipped, and lists the files that
+    mutagen could not identify. `on_written` is called with
+    each file right after it is saved, so a caller that is interrupted still knows
+    what changed.
+    """
+
+    listing = list_audio(album_dir)
     count = 0
-    for path in files:
+    m4a: list[Path] = []
+    unreadable: list[Path] = []
+    for path in listing.files:
         audio = MutagenFile(path)
         if audio is None:
+            # Recorded, never dropped: the caller reports the file as skipped.
+            unreadable.append(path)
             continue
         if isinstance(audio, FLAC):
             audio.clear_pictures()  # type: ignore[no-untyped-call]
@@ -1125,6 +1409,8 @@ def embed_cover_art(album_dir: Path, image_data: bytes, mime: str) -> int:
             audio.add_picture(pic)  # type: ignore[no-untyped-call]
             audio.save()
             count += 1
+            if on_written:
+                on_written(path)
         elif isinstance(audio, MP3):
             if audio.tags is None:
                 audio.add_tags()  # type: ignore[no-untyped-call]
@@ -1133,4 +1419,9 @@ def embed_cover_art(album_dir: Path, image_data: bytes, mime: str) -> int:
             audio.tags.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=image_data))
             audio.save()
             count += 1
-    return count
+            if on_written:
+                on_written(path)
+        elif isinstance(audio, MP4):
+            # MP4 has no cover support here (no covr atom), so the file is reported, not written.
+            m4a.append(path)
+    return EmbedResult(count=count, m4a=m4a, other=listing.other, unreadable=unreadable)

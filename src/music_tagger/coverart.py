@@ -8,6 +8,8 @@ from pathlib import Path
 
 import httpx
 
+from .fileio import atomic_write_bytes
+
 CAA_BASE_URL = "https://coverartarchive.org"
 USER_AGENT = "music-tagger/0.1 (alex.public.account@gmail.com)"
 
@@ -76,18 +78,31 @@ def find_cover(album_dir: Path) -> Path | None:
     return None
 
 
+def _validate_image(label: str, data: bytes) -> None:
+    """Decode the image fully, so truncated or corrupt data is refused before any write."""
+    from PIL import Image, UnidentifiedImageError
+
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            image.load()
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
+        raise UnsupportedImageError(f"{label}: cannot decode image: {error}") from error
+
+
 def install_cover(data: bytes, dest_dir: Path, force: bool = False) -> ArtResult:
     """Write the folder cover named for its format and remove any other cover.* file.
 
-    Without `force`, an existing cover is kept and the result is skipped.
+    The image is validated before anything is written. Without `force`, an
+    existing cover is kept and the result is skipped.
     """
     existing = find_cover(dest_dir)
     if existing is not None and not force:
         return ArtResult(saved=False, path=existing, skipped=True)
 
     dest = dest_dir / cover_filename(data)
+    _validate_image("cover", data)
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(data)
+    atomic_write_bytes(dest, data)
     removed = []
     for suffix in _COVER_SUFFIXES:
         other = dest_dir / (COVER_STEM + suffix)
@@ -144,6 +159,7 @@ def embeddable_cover(path: Path) -> EmbeddedCover:
     fmt = image_format(data)
     if fmt is None:
         raise UnsupportedImageError(f"{path}: not a JPEG or PNG image")
+    _validate_image(str(path), data)
     if fmt == "jpeg" and len(data) <= MAX_EMBEDDED_BYTES:
         return EmbeddedCover(data=data, mime=_MIME_TYPES[fmt])
     return EmbeddedCover(data=_encode_jpeg(path, data), mime="image/jpeg", converted=True)
@@ -155,7 +171,7 @@ def _encode_jpeg(path: Path, data: bytes) -> bytes:
     try:
         with Image.open(io.BytesIO(data)) as decoded:
             image = decoded.convert("RGB")
-    except (UnidentifiedImageError, OSError) as error:
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as error:
         raise UnsupportedImageError(f"{path}: cannot decode image: {error}") from error
 
     while True:

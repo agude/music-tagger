@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -293,10 +294,10 @@ class TestFetchRelease:
 
         release = client.fetch_release("release-1")
         track = release.discs[1][0]
-        assert track.producer == "Glyn Johns"
-        assert track.producer_id == "prod-1"
-        assert track.composer == "Glenn Frey"
-        assert track.lyricist == "J.D. Souther"
+        assert track.producer == ("Glyn Johns",)
+        assert track.producer_id == ("prod-1",)
+        assert track.composer == ("Glenn Frey",)
+        assert track.lyricist == ("J.D. Souther",)
         assert track.work_id == "work-id-1"
         assert "Glenn Frey (lead vocals, guitar)" in track.performers
 
@@ -312,7 +313,7 @@ class TestMBTrackSerialization:
             recording_id="r1",
             track_id="t1",
             isrcs=["USIR19902220", "USDW10110279"],
-            composer="Bach",
+            composer=("Bach",),
             composer_id="c1",
         )
         restored = MBTrack.from_dict(track.to_dict())
@@ -321,7 +322,7 @@ class TestMBTrackSerialization:
         assert restored.duration_ms == 200000
         assert restored.artist == "The Band"
         assert restored.artist_id == "a1"
-        assert restored.composer == "Bach"
+        assert restored.composer == ("Bach",)
         assert restored.isrcs == ["USIR19902220", "USDW10110279"]
         assert track.to_dict()["isrcs"] == ["USIR19902220", "USDW10110279"]
 
@@ -437,6 +438,102 @@ class TestLookupDiscid:
         assert releases == []
 
 
+def _medium(position: int, fmt: str, count: int) -> dict[str, Any]:
+    """A medium with `count` numbered tracks, shaped like a MusicBrainz release's media."""
+    return {
+        "position": position,
+        "format": fmt,
+        "track-count": count,
+        "tracks": [
+            {
+                "id": f"track-{position}-{n}",
+                "number": str(n),
+                "position": n,
+                "title": f"Track {position}-{n}",
+                "length": 200000,
+                "recording": {"id": f"rec-{position}-{n}", "title": f"Track {position}-{n}"},
+            }
+            for n in range(1, count + 1)
+        ],
+    }
+
+
+def _fetch_json(response: dict[str, Any]) -> MBRelease:
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = response
+    mock_resp.raise_for_status = MagicMock()
+
+    client = MusicBrainzClient()
+    client._client = MagicMock()
+    client._client.get.return_value = mock_resp
+    return client.fetch_release("release-1")
+
+
+def _fetch_with_media(media: list[dict[str, Any]]) -> MBRelease:
+    response = deepcopy(FETCH_RESPONSE)
+    response["media"] = media
+    return _fetch_json(response)
+
+
+TWO_ARTISTS: list[dict[str, Any]] = [
+    {"artist": {"id": "idA", "name": "Alice"}, "joinphrase": " feat. "},
+    {"artist": {"id": "idB", "name": "Bob"}},
+]
+
+
+class TestMultiArtistCredits:
+    def test_fetch_keeps_every_credited_artist_name_and_id(self) -> None:
+        response = deepcopy(FETCH_RESPONSE)
+        response["artist-credit"] = deepcopy(TWO_ARTISTS)
+        medium = _medium(1, "CD", 2)
+        medium["tracks"][0]["artist-credit"] = deepcopy(TWO_ARTISTS)
+        response["media"] = [medium]
+
+        release = _fetch_json(response)
+
+        assert release.artist == "Alice feat. Bob"
+        assert release.artist_credits == (("Alice", "idA"), ("Bob", "idB"))
+        assert release.discs[1][0].artist_credits == (("Alice", "idA"), ("Bob", "idB"))
+
+
+class TestMixedMedia:
+    def test_fetch_counts_only_audio_media(self) -> None:
+        release = _fetch_with_media([_medium(1, "CD", 12), _medium(2, "DVD-Video", 5)])
+
+        assert release.track_count == 12
+        assert set(release.discs) == {1}
+        assert len(release.discs[1]) == 12
+        assert release.format == "CD, DVD-Video"
+
+    def test_disc_numbers_stay_medium_positions(self) -> None:
+        release = _fetch_with_media([_medium(1, "DVD-Video", 5), _medium(2, "CD", 12)])
+
+        assert release.track_count == 12
+        assert set(release.discs) == {2}
+
+    def test_fetch_with_only_non_audio_media_has_no_discs(self) -> None:
+        release = _fetch_with_media([_medium(1, "DVD-Video", 5)])
+
+        assert release.discs == {}
+        assert release.track_count == 0
+        assert release.format == "DVD-Video"
+
+    def test_search_count_excludes_non_audio_media(self) -> None:
+        release = MusicBrainzClient._parse_search_release(
+            {
+                "id": "release-cd-dvd",
+                "title": "Album",
+                "media": [
+                    {"format": "CD", "track-count": 12},
+                    {"format": "DVD-Video", "track-count": 5},
+                ],
+            }
+        )
+
+        assert release.track_count == 12
+        assert release.format == "CD, DVD-Video"
+
+
 class TestLookupToc:
     def test_returns_releases(self) -> None:
         mock_resp = MagicMock()
@@ -533,8 +630,36 @@ class TestParseRecordingCredits:
             ]
         }
         credits = _parse_recording_credits(recording)
-        assert credits["composer"] == "Bach"
-        assert credits["composer_id"] == "c1"
+        assert credits["composer"] == ("Bach",)
+        assert credits["composer_id"] == ("c1",)
+
+    def test_role_credits_keep_one_value_per_person(self) -> None:
+        recording = {
+            "relations": [
+                {
+                    "type": "performance",
+                    "target-type": "work",
+                    "work": {
+                        "id": "w1",
+                        "relations": [
+                            {
+                                "type": "composer",
+                                "target-type": "artist",
+                                "artist": {"id": "c1", "name": "Bach"},
+                            },
+                            {
+                                "type": "composer",
+                                "target-type": "artist",
+                                "artist": {"id": "c2", "name": "Handel"},
+                            },
+                        ],
+                    },
+                }
+            ]
+        }
+        credits = _parse_recording_credits(recording)
+        assert credits["composer"] == ("Bach", "Handel")
+        assert credits["composer_id"] == ("c1", "c2")
 
     def test_empty_relations(self) -> None:
         credits = _parse_recording_credits({})
@@ -587,3 +712,26 @@ class TestRetry:
             client.fetch_release("r-1")
 
         assert client._client.get.call_count == 1
+
+
+class TestSearchQueryEscaping:
+    def _query(self, artist: str, album: str) -> str:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"releases": []}
+        mock_resp.raise_for_status = MagicMock()
+        client = MusicBrainzClient()
+        client._client = MagicMock()
+        client._client.get.return_value = mock_resp
+
+        client.search_releases(artist, album)
+
+        return str(client._client.get.call_args.kwargs["params"]["query"])
+
+    def test_quotes_in_the_album_are_escaped(self) -> None:
+        assert r'release:"\"Heroes\""' in self._query("Bowie", '"Heroes"')
+
+    def test_backslashes_in_the_album_are_escaped(self) -> None:
+        assert r'release:"AC\\DC"' in self._query("AC/DC", r"AC\DC")
+
+    def test_empty_artist_leaves_out_the_artist_clause(self) -> None:
+        assert "artist:" not in self._query("  ", "Heroes")

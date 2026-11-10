@@ -9,11 +9,11 @@ from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.tagger import (
     AlbumResult,
     CandidateMatch,
+    DuplicateTrackError,
     TagConflict,
     TrackDiff,
+    _build_new_multi,
     _build_new_tags,
-    _parse_disc_number,
-    _parse_track_number,
     apply_changes,
     build_diff,
     overwrites_needing_review,
@@ -82,40 +82,15 @@ def _make_two_disc_release() -> MBRelease:
     )
 
 
-class TestParseDiscNumber:
-    def test_simple(self) -> None:
-        t = TrackTags(path=Path("x.flac"), tags={"discnumber": "2"}, format="flac")
-        assert _parse_disc_number(t) == 2
+class TestTotalDiscsFromPositions:
+    def test_totaldiscs_is_the_highest_disc_position(self) -> None:
+        release = _make_release()
+        release.discs = {2: release.discs[1]}
+        track = TrackTags(path=Path("/music/01.flac"), tags={}, duration_secs=209.0, format="flac")
 
-    def test_fraction(self) -> None:
-        t = TrackTags(path=Path("x.flac"), tags={"discnumber": "1/2"}, format="flac")
-        assert _parse_disc_number(t) == 1
+        tags = _build_new_tags(release, track, 0, 2)
 
-    def test_missing(self) -> None:
-        t = TrackTags(path=Path("x.flac"), tags={}, format="flac")
-        assert _parse_disc_number(t) == 1
-
-    def test_garbage(self) -> None:
-        t = TrackTags(path=Path("x.flac"), tags={"discnumber": "abc"}, format="flac")
-        assert _parse_disc_number(t) == 1
-
-
-class TestParseTrackNumber:
-    def test_simple(self) -> None:
-        t = TrackTags(path=Path("x.flac"), tags={"tracknumber": "5"}, format="flac")
-        assert _parse_track_number(t) == 5
-
-    def test_fraction(self) -> None:
-        t = TrackTags(path=Path("x.flac"), tags={"tracknumber": "3/10"}, format="flac")
-        assert _parse_track_number(t) == 3
-
-    def test_missing(self) -> None:
-        t = TrackTags(path=Path("x.flac"), tags={}, format="flac")
-        assert _parse_track_number(t) is None
-
-    def test_garbage(self) -> None:
-        t = TrackTags(path=Path("x.flac"), tags={"tracknumber": "abc"}, format="flac")
-        assert _parse_track_number(t) is None
+        assert tags["totaldiscs"] == "2"
 
 
 class TestBuildNewTags:
@@ -135,7 +110,7 @@ class TestBuildNewTags:
         assert tags["catalognumber"] == "SD 5068"
         assert tags["barcode"] == "075596066624"
         assert tags["musicbrainz_albumid"] == "release-1"
-        assert tags["musicbrainz_artistid"] == "artist-1"
+        assert _build_new_multi(release, track, 0, 1)["musicbrainz_artistid"] == ("artist-1",)
         assert tags["musicbrainz_releasegroupid"] == "rg-1"
         assert tags["releasestatus"] == "Official"
         assert tags["media"] == "CD"
@@ -176,14 +151,16 @@ class TestBuildNewTags:
         tags = _build_new_tags(release, track, 0, 1)
         assert tags["artist"] == "Artist A"
         assert tags["albumartist"] == "Various Artists"
-        assert tags["musicbrainz_artistid"] == "artist-a"
-        assert tags["musicbrainz_albumartistid"] == "album-artist"
+        multi = _build_new_multi(release, track, 0, 1)
+        assert multi["musicbrainz_artistid"] == ("artist-a",)
+        assert multi["musicbrainz_albumartistid"] == ("album-artist",)
 
         tags2 = _build_new_tags(release, track, 1, 1)
         assert tags2["artist"] == "Artist B"
         assert tags2["albumartist"] == "Various Artists"
-        assert tags2["musicbrainz_artistid"] == "artist-b"
-        assert tags2["musicbrainz_albumartistid"] == "album-artist"
+        multi2 = _build_new_multi(release, track, 1, 1)
+        assert multi2["musicbrainz_artistid"] == ("artist-b",)
+        assert multi2["musicbrainz_albumartistid"] == ("album-artist",)
 
     def test_sets_release_group_fields(self) -> None:
         release = MBRelease(
@@ -201,7 +178,7 @@ class TestBuildNewTags:
         )
         track = TrackTags(path=Path("/music/01.flac"), tags={}, format="flac")
         tags = _build_new_tags(release, track, 0, 1)
-        assert tags["releasetype"] == "Album; Compilation"
+        assert _build_new_multi(release, track, 0, 1)["releasetype"] == ("Album", "Compilation")
         assert tags["compilation"] == "1"
         assert tags["originaldate"] == "1990-01-01"
         assert tags["asin"] == "B00001234"
@@ -221,10 +198,10 @@ class TestBuildNewTags:
                         track_id="trk-1",
                         isrcs=["USEE10400287"],
                         work_id="work-1",
-                        composer="Bach",
-                        composer_id="c1",
-                        producer="George Martin",
-                        producer_id="p1",
+                        composer=("Bach",),
+                        composer_id=("c1",),
+                        producer=("George Martin",),
+                        producer_id=("p1",),
                         performers="John (guitar)",
                         performer_ids="j1",
                     ),
@@ -237,9 +214,10 @@ class TestBuildNewTags:
         assert tags["musicbrainz_releasetrackid"] == "trk-1"
         assert tags["isrc"] == "USEE10400287"
         assert tags["musicbrainz_workid"] == "work-1"
-        assert tags["composer"] == "Bach"
-        assert tags["musicbrainz_composerid"] == "c1"
-        assert tags["producer"] == "George Martin"
+        multi = _build_new_multi(release, track, 0, 1)
+        assert multi["composer"] == ("Bach",)
+        assert multi["musicbrainz_composerid"] == ("c1",)
+        assert multi["producer"] == ("George Martin",)
         assert tags["performer"] == "John (guitar)"
 
     def test_disc_two_track(self) -> None:
@@ -290,6 +268,7 @@ class TestBuildDiff:
         track = TrackTags(
             path=Path("/music/01.flac"),
             tags={"tracknumber": "1", **existing_tags},
+            duration_secs=209.0,
             format="flac",
         )
         release = _make_release()
@@ -303,7 +282,9 @@ class TestBuildDiff:
 
     @pytest.mark.parametrize("isrcs", [[], ["USIR19902220", "USDW10110279"]])
     def test_does_not_guess_missing_isrc(self, isrcs: list[str]) -> None:
-        track = TrackTags(Path("/music/01.flac"), {"tracknumber": "1"}, format="flac")
+        track = TrackTags(
+            Path("/music/01.flac"), {"tracknumber": "1"}, duration_secs=209.0, format="flac"
+        )
         release = _make_release()
         release.discs[1][0].isrcs = isrcs
 
@@ -322,7 +303,10 @@ class TestBuildDiff:
     )
     def test_preserves_existing_isrc_in_recording_list(self, isrcs: list[str]) -> None:
         track = TrackTags(
-            Path("/music/01.flac"), {"tracknumber": "1", "isrc": "USIR19902220"}, format="flac"
+            Path("/music/01.flac"),
+            {"tracknumber": "1", "isrc": "USIR19902220"},
+            duration_secs=209.0,
+            format="flac",
         )
         release = _make_release()
         release.discs[1][0].isrcs = isrcs
@@ -336,7 +320,10 @@ class TestBuildDiff:
     @pytest.mark.parametrize("isrcs", [["USDW10110279"], ["USDW10110279", "USIR19701434"]])
     def test_reports_isrc_conflict_without_proposing_replacement(self, isrcs: list[str]) -> None:
         track = TrackTags(
-            Path("/music/01.flac"), {"tracknumber": "1", "isrc": "USIR19902220"}, format="flac"
+            Path("/music/01.flac"),
+            {"tracknumber": "1", "isrc": "USIR19902220"},
+            duration_secs=209.0,
+            format="flac",
         )
         release = _make_release()
         release.discs[1][0].isrcs = isrcs
@@ -349,7 +336,10 @@ class TestBuildDiff:
 
     def test_preserves_unverified_isrc_when_recording_has_no_codes(self) -> None:
         track = TrackTags(
-            Path("/music/01.flac"), {"tracknumber": "1", "isrc": "USIR19902220"}, format="flac"
+            Path("/music/01.flac"),
+            {"tracknumber": "1", "isrc": "USIR19902220"},
+            duration_secs=209.0,
+            format="flac",
         )
 
         result = build_diff(AlbumTags(Path("/music"), [track]), _make_release())
@@ -568,18 +558,19 @@ class TestBuildDiff:
         assert "musicbrainz_albumid" in untagged_fields
         assert "title" not in untagged_fields
 
-    def test_positional_fallback_warns(self, capsys) -> None:
-        """Positional fallback prints a warning to stderr."""
+    def test_positional_fallback_returns_a_warning_and_prints_nothing(self, capsys) -> None:
+        """Positional fallback is reported in the result; build_diff itself prints nothing."""
         release = _make_release()
         tracks = [
             TrackTags(path=Path("01.flac"), tags={}, duration_secs=209.0, format="flac"),
         ]
         album = AlbumTags(directory=Path("/music"), tracks=tracks)
-        build_diff(album, release)
+        result = build_diff(album, release)
 
-        captured = capsys.readouterr()
-        assert "no tracknumber tags found" in captured.err
-        assert "matching 1 files by position" in captured.err
+        assert capsys.readouterr().err == ""
+        assert len(result.warnings) == 1
+        assert "no tracknumber tags found" in result.warnings[0]
+        assert "matching 1 files by position" in result.warnings[0]
 
 
 class TestScoreCandidates:
@@ -846,6 +837,7 @@ class TestBuildDiffLocks:
         track = TrackTags(
             Path("/music/01.flac"),
             {"tracknumber": "1", "title": "Doolin-Dalton (Edit)"},
+            duration_secs=209.0,
             format="flac",
             locked_fields=["title"],
         )
@@ -862,6 +854,7 @@ class TestBuildDiffLocks:
         track = TrackTags(
             Path("/music/01.flac"),
             {"tracknumber": "1"},
+            duration_secs=209.0,
             format="flac",
             locked_fields=["musicbrainz_recordingid"],
         )
@@ -890,6 +883,7 @@ class TestBuildDiffLocks:
         track = TrackTags(
             Path("/music/01.flac"),
             {"tracknumber": "1", "title": "Doolin-Dalton (Edit)"},
+            duration_secs=209.0,
             format="flac",
             locked_fields=["title"],
         )
@@ -905,6 +899,7 @@ class TestBuildDiffLocks:
         track = TrackTags(
             Path("/music/01.flac"),
             {"tracknumber": "1", "isrc": "USIR19902220"},
+            duration_secs=209.0,
             format="flac",
             locked_fields=["isrc"],
         )
@@ -921,6 +916,7 @@ class TestBuildDiffLocks:
         track = TrackTags(
             Path("/music/01.flac"),
             {"tracknumber": "1", "isrc": "USIR19902220"},
+            duration_secs=209.0,
             format="flac",
             locked_fields=["isrc"],
         )
@@ -1189,6 +1185,37 @@ def _candidate(
 LOCAL_DURATIONS = {1: 200.0, 2: 180.0, 3: 210.0}
 
 
+class TestCdPlusDvdCandidate:
+    def test_cd_plus_dvd_search_result_counts_the_cd_only(self) -> None:
+        from music_tagger.musicbrainz import MusicBrainzClient
+
+        tracks = [
+            TrackTags(
+                path=Path(f"{n:02d}.flac"),
+                tags={"tracknumber": str(n), "discnumber": "1"},
+                duration_secs=200.0,
+                format="flac",
+            )
+            for n in range(1, 13)
+        ]
+        album = AlbumTags(directory=Path("/music"), tracks=tracks)
+        candidate = MusicBrainzClient._parse_search_release(
+            {
+                "id": "release-cd-dvd",
+                "title": "Album",
+                "media": [
+                    {"format": "CD", "track-count": 12},
+                    {"format": "DVD-Video", "track-count": 5},
+                ],
+            }
+        )
+
+        results = score_candidates(album, [candidate])
+
+        assert results[0].stats.track_count_match is True
+        assert "partial" not in results[0].flags
+
+
 class TestRankCandidates:
     def _ranked_ids(self, album: AlbumTags, *candidates: MBRelease) -> list[str]:
         return [match.release.id for match in score_candidates(album, list(candidates))]
@@ -1250,3 +1277,359 @@ class TestRankCandidates:
         restored = CandidateMatch.from_dict(match.to_dict())
 
         assert restored.flags == ["on-files"]
+
+
+def _file(name: str, **tags: str) -> TrackTags:
+    return TrackTags(path=Path("/music") / name, tags=dict(tags), format="flac")
+
+
+class TestDuplicateTrackKeys:
+    def test_two_files_with_the_same_key_raise_and_name_both(self) -> None:
+        album = AlbumTags(
+            Path("/music"),
+            [
+                _file("a.flac", tracknumber="1", discnumber="1"),
+                _file("b.flac", tracknumber="1", discnumber="1"),
+                _file("c.flac", tracknumber="1"),
+                _file("d.flac", tracknumber="2"),
+            ],
+        )
+
+        with pytest.raises(DuplicateTrackError) as error:
+            build_diff(album, _make_two_disc_release())
+
+        message = str(error.value)
+        assert "disc 1 track 1" in message
+        assert '"a.flac"' in message
+        assert '"b.flac"' in message
+
+    def test_score_candidates_flags_duplicates_without_raising(self) -> None:
+        album = AlbumTags(
+            Path("/music"),
+            [
+                _file("a.flac", tracknumber="1", discnumber="1"),
+                _file("b.flac", tracknumber="1", discnumber="1"),
+            ],
+        )
+
+        [match] = score_candidates(album, [_make_two_disc_release()])
+
+        assert "duplicate-keys" in match.flags
+
+
+class TestPositionalMatchingPerDisc:
+    def test_files_use_their_index_within_their_disc(self) -> None:
+        album = AlbumTags(
+            Path("/music"),
+            [
+                _file("01.flac", discnumber="1"),
+                _file("02.flac", discnumber="1"),
+                _file("03.flac", discnumber="2"),
+                _file("04.flac", discnumber="2"),
+            ],
+        )
+
+        result = build_diff(album, _make_two_disc_release())
+
+        titles = [
+            next((c.new_value for c in d.changes if c.field == "title"), None) for d in result.diffs
+        ]
+        assert titles == [
+            "Let's Go Crazy",
+            "Take Me With U",
+            "The Dance Electric",
+            "Love and Sex",
+        ]
+
+    def test_unequal_discs_get_the_right_titles(self) -> None:
+        release = MBRelease(
+            id="release-unequal",
+            title="Unequal",
+            track_count=4,
+            discs={
+                1: [
+                    MBTrack(number=1, title="One A"),
+                    MBTrack(number=2, title="One B"),
+                    MBTrack(number=3, title="One C"),
+                ],
+                2: [MBTrack(number=1, title="Two A")],
+            },
+        )
+        album = AlbumTags(
+            Path("/music"),
+            [
+                _file("01.flac", discnumber="1"),
+                _file("02.flac", discnumber="1"),
+                _file("03.flac", discnumber="1"),
+                _file("04.flac", discnumber="2"),
+            ],
+        )
+
+        result = build_diff(album, release)
+
+        titles = [
+            next((c.new_value for c in d.changes if c.field == "title"), None) for d in result.diffs
+        ]
+        assert titles == ["One A", "One B", "One C", "Two A"]
+
+
+class TestPartialEvidence:
+    def _release_without_track_1_length(self) -> MBRelease:
+        release = _make_release()
+        release.discs[1][0].duration_ms = None
+        return release
+
+    def test_tracknumber_without_length_needs_a_matching_title(self) -> None:
+        track = TrackTags(
+            path=Path("01.flac"),
+            tags={"tracknumber": "1", "title": "Different song"},
+            duration_secs=200.0,
+            format="flac",
+        )
+
+        result = build_diff(
+            AlbumTags(Path("/music"), [track]), self._release_without_track_1_length()
+        )
+
+        assert not any(c.field == "title" for c in result.diffs[0].changes)
+        assert result.diffs[0].warnings
+
+    def test_tracknumber_without_length_with_matching_title_is_matched(self) -> None:
+        track = TrackTags(
+            path=Path("01.flac"),
+            tags={"tracknumber": "1", "title": "doolin-dalton"},
+            duration_secs=200.0,
+            format="flac",
+        )
+
+        result = build_diff(
+            AlbumTags(Path("/music"), [track]), self._release_without_track_1_length()
+        )
+
+        title = next(c for c in result.diffs[0].changes if c.field == "title")
+        assert title.new_value == "Doolin-Dalton"
+        assert result.diffs[0].warnings == []
+
+    def test_two_files_claiming_one_release_track_get_neither_title(self) -> None:
+        release = _make_release()
+        release.discs[1][1].duration_ms = 100000
+        release.discs[1][2].duration_ms = 100000
+        album = AlbumTags(
+            Path("/music"),
+            [
+                TrackTags(
+                    path=Path("a.flac"),
+                    tags={"tracknumber": "1", "title": "Different one"},
+                    duration_secs=209.0,
+                    format="flac",
+                ),
+                TrackTags(
+                    path=Path("b.flac"),
+                    tags={"tracknumber": "2", "title": "Different two"},
+                    duration_secs=208.5,
+                    format="flac",
+                ),
+            ],
+        )
+
+        result = build_diff(album, release)
+
+        for diff in result.diffs:
+            assert not any(c.field == "title" for c in diff.changes)
+            assert any("matches the same release track as" in w for w in diff.warnings)
+
+
+class TestReleaseOwnedFields:
+    def _track(self, **tags: str) -> TrackTags:
+        return TrackTags(
+            path=Path("/music/01.flac"),
+            tags={"tracknumber": "1", **tags},
+            duration_secs=0.0,
+            format="flac",
+        )
+
+    def test_retagging_to_a_release_without_barcode_clears_it(self) -> None:
+        track = self._track(musicbrainz_albumid="release-A", barcode="123")
+        other = MBRelease(id="release-B", title="Other", discs={1: [MBTrack(number=1, title="T")]})
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), other)
+
+        assert TagChange("barcode", "123", "") in result.diffs[0].changes
+
+    def test_same_release_without_barcode_keeps_it(self) -> None:
+        track = self._track(musicbrainz_albumid="release-A", barcode="123")
+        same = MBRelease(id="release-A", title="Same", discs={1: [MBTrack(number=1, title="T")]})
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), same)
+
+        assert not any(c.field == "barcode" for c in result.diffs[0].changes)
+
+    def test_locked_field_is_not_cleared(self) -> None:
+        track = self._track(musicbrainz_albumid="release-A", label="Old Label")
+        track.locked_fields = ["label"]
+        other = MBRelease(id="release-B", title="Other", discs={1: [MBTrack(number=1, title="T")]})
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), other)
+
+        assert not any(c.field == "label" for c in result.diffs[0].changes)
+        assert TagChange("label", "Old Label", "") in result.diffs[0].locked_changes
+
+    def test_release_without_artist_does_not_clear_the_artist(self) -> None:
+        track = self._track(musicbrainz_albumid="release-A", artist="Eagles")
+        other = MBRelease(id="release-B", title="Other", discs={1: [MBTrack(number=1, title="T")]})
+
+        result = build_diff(AlbumTags(Path("/music"), [track]), other)
+
+        assert not any(c.field == "artist" for c in result.diffs[0].changes)
+
+    def test_clearing_a_reviewed_title_needs_review(self) -> None:
+        track = self._track(musicbrainz_albumid="release-A", title="Doolin-Dalton")
+        result = AlbumResult(
+            album=AlbumTags(Path("/music"), [track]),
+            release=MBRelease(id="release-B", title="Other"),
+            diffs=[TrackDiff(track, [TagChange("title", "Doolin-Dalton", "")])],
+        )
+
+        assert overwrites_needing_review(result) == [
+            (track.path, TagChange("title", "Doolin-Dalton", ""))
+        ]
+
+
+class TestUnmatchedFullAlbumFile:
+    def _album_with_track_13(self) -> AlbumTags:
+        tracks = [
+            _file("01.flac", tracknumber="1", discnumber="1"),
+            _file("02.flac", tracknumber="2", discnumber="1"),
+            _file("13.flac", tracknumber="13", discnumber="1"),
+        ]
+        return AlbumTags(Path("/music"), tracks)
+
+    def _release(self) -> MBRelease:
+        return MBRelease(
+            id="release-1",
+            title="Album",
+            artist="Eagles",
+            track_count=3,
+            discs={
+                1: [
+                    MBTrack(number=1, title="One"),
+                    MBTrack(number=2, title="Two"),
+                    MBTrack(number=3, title="Three"),
+                ]
+            },
+        )
+
+    def test_unmatched_file_gets_a_warning(self) -> None:
+        result = build_diff(self._album_with_track_13(), self._release())
+
+        assert any(
+            "no release track for disc 1 track 13; only album fields proposed" in w
+            for w in result.diffs[2].warnings
+        )
+
+    def test_unmatched_file_is_not_proposed_the_artist(self) -> None:
+        result = build_diff(self._album_with_track_13(), self._release())
+
+        assert not any(c.field == "artist" for c in result.diffs[2].changes)
+
+    def test_unmatched_file_keeps_its_track_ids_after_a_release_change(self) -> None:
+        """Track-owned fields are cleared only for matched files, so an unmatched one keeps them."""
+        album = AlbumTags(
+            Path("/music"),
+            [
+                _file("01.flac", tracknumber="1", discnumber="1"),
+                _file("02.flac", tracknumber="2", discnumber="1"),
+                _file(
+                    "13.flac",
+                    tracknumber="13",
+                    discnumber="1",
+                    artist="Old Band",
+                    musicbrainz_albumid="other-release",
+                ),
+            ],
+        )
+
+        result = build_diff(album, self._release())
+
+        assert not any(
+            c.field in {"artist", "musicbrainz_artistid"} for c in result.diffs[2].changes
+        )
+
+
+def _two_artist_release() -> MBRelease:
+    release = _make_release()
+    release.artist = "Alice feat. Bob"
+    release.artist_credits = (("Alice", "idA"), ("Bob", "idB"))
+    for track in release.discs[1]:
+        track.artist = "Alice feat. Bob"
+        track.artist_credits = (("Alice", "idA"), ("Bob", "idB"))
+    return release
+
+
+def _three_track_album(extra: dict[str, str] | None = None) -> AlbumTags:
+    tracks = [
+        TrackTags(
+            path=Path(f"0{n}.flac"),
+            tags={"tracknumber": str(n), "discnumber": "1", **(extra or {})},
+            duration_secs=200.0,
+            format="flac",
+        )
+        for n in (1, 2, 3)
+    ]
+    return AlbumTags(directory=Path("/music"), tracks=tracks)
+
+
+class TestMultiValuedArtists:
+    def test_build_diff_proposes_every_artist_and_id(self) -> None:
+        result = build_diff(_three_track_album(), _two_artist_release())
+        changes = {c.field: c for c in result.diffs[0].changes}
+
+        assert changes["artist"].new_value == "Alice feat. Bob"
+        assert changes["artists"].new_values == ("Alice", "Bob")
+        assert changes["musicbrainz_artistid"].new_values == ("idA", "idB")
+
+    def test_existing_single_id_becomes_a_two_value_change(self) -> None:
+        album = _three_track_album({"musicbrainz_artistid": "idA"})
+
+        result = build_diff(album, _two_artist_release())
+        change = {c.field: c for c in result.diffs[0].changes}["musicbrainz_artistid"]
+
+        assert (change.old_value, change.new_value) == ("idA", "idA; idB")
+        assert change.old_values == ("idA",)
+
+    def test_mp3_retag_after_writing_proposes_nothing(self, mp3_album: Path) -> None:
+        first = build_diff(read_album(mp3_album), _two_artist_release())
+        apply_changes(first)
+
+        second = build_diff(read_album(mp3_album), _two_artist_release())
+
+        assert [c.field for d in second.diffs for c in d.changes] == []
+
+    def test_retag_after_writing_proposes_nothing(self, flac_album: Path) -> None:
+        first = build_diff(read_album(flac_album), _two_artist_release())
+        apply_changes(first)
+
+        second = build_diff(read_album(flac_album), _two_artist_release())
+
+        assert [c.field for d in second.diffs for c in d.changes] == []
+
+
+class TestMultiValuedDiffJson:
+    def test_multi_change_survives_the_json_round_trip(self) -> None:
+        track = TrackTags(Path("/music/01.flac"), {}, format="flac")
+        change = TagChange(
+            field="artists",
+            old_value="",
+            new_value="Alice; Bob",
+            new_values=("Alice", "Bob"),
+            multi=True,
+        )
+        result = AlbumResult(
+            AlbumTags(Path("/music"), [track]),
+            _make_release(),
+            [TrackDiff(track, [change])],
+        )
+
+        restored = AlbumResult.from_dict(result.to_dict())
+
+        assert restored.diffs[0].changes == [change]

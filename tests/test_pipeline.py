@@ -9,13 +9,27 @@ from unittest.mock import patch
 import pytest
 from mutagen.flac import FLAC
 
-from music_tagger.cli import EXIT_REVIEW, _apply, _place, _rip
+from music_tagger.cli.common import EXIT_REVIEW
+from music_tagger.cli.library import _place
+from music_tagger.cli.rip import _rip
+from music_tagger.cli.tagging import _apply
 from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.replaygain import ReplayGainResult
 from music_tagger.ripper import RipResult
 from music_tagger.tags import read_album, read_genres
 
-JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+
+def _decodable_jpeg() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (16, 16), (90, 90, 90)).save(buffer, "JPEG")
+    return buffer.getvalue()
+
+
+JPEG = _decodable_jpeg()
 
 
 def _release(first_title: str = "Desperado") -> MBRelease:
@@ -35,7 +49,7 @@ def _release(first_title: str = "Desperado") -> MBRelease:
 
 def _run_apply(album_dir: Path, *args: str, release: MBRelease | None = None) -> None:
     with (
-        patch("music_tagger.cli.MusicBrainzClient") as client,
+        patch("music_tagger.cli.tagging.MusicBrainzClient") as client,
         patch("music_tagger.replaygain.scan_replaygain") as scan,
     ):
         client.return_value.fetch_release.return_value = release or _release()
@@ -363,7 +377,7 @@ class TestApplyCoverChecks:
         self, flac_album: Path, cover: Path, capsys: object
     ) -> None:
         with (
-            patch("music_tagger.cli._art", side_effect=RuntimeError("boom")),
+            patch("music_tagger.cli.tagging._art", side_effect=RuntimeError("boom")),
             pytest.raises(SystemExit) as error,
         ):
             _run_apply(flac_album, "--cover-file", str(cover), "--genre", "Retro Rock")
@@ -409,3 +423,19 @@ class TestRipFailure:
         err = capsys.readouterr().err  # type: ignore[attr-defined]
         assert "whipper failed (exit 2)" in err
         assert "--unknown" in err
+
+
+class TestApplyInvalidJpeg:
+    def test_invalid_jpeg_cover_exits_before_any_tag_write(
+        self, flac_album: Path, tmp_path: Path, capsys: object
+    ) -> None:
+        bad = tmp_path / "front.jpg"
+        bad.write_bytes(b"\xff\xd8not a jpeg")
+        before = {path: path.read_bytes() for path in flac_album.glob("*.flac")}
+
+        with pytest.raises(SystemExit) as error:
+            _run_apply(flac_album, "--cover-file", str(bad), "--genre", "Retro Rock")
+
+        assert error.value.code == 1
+        assert {path: path.read_bytes() for path in before} == before
+        assert "cannot be embedded" in capsys.readouterr().err  # type: ignore[attr-defined]

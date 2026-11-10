@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,15 +12,40 @@ from typing import Any
 
 from .musicbrainz import MBRelease, MBTrack, MusicBrainzClient
 from .tags import (
+    MULTI_VALUE_FIELDS,
     AlbumTags,
     TagChange,
     TrackTags,
     compute_diff,
+    disc_number,
+    parse_position,
     read_album,
     read_locks,
     write_locks,
     write_tags,
 )
+
+
+class DuplicateTrackError(ValueError):
+    """Two or more files claim the same (disc, track) key."""
+
+
+def duplicate_track_keys(album: AlbumTags) -> dict[tuple[int, int], list[TrackTags]]:
+    """Each (disc, track) key claimed by more than one file, with the files that claim it."""
+    groups: dict[tuple[int, int], list[TrackTags]] = {}
+    for track in album.tracks:
+        track_num = parse_position(track.tags.get("tracknumber", ""))
+        if track_num is not None:
+            groups.setdefault((disc_number(track), track_num), []).append(track)
+    return {key: files for key, files in groups.items() if len(files) > 1}
+
+
+def duplicate_track_message(duplicates: dict[tuple[int, int], list[TrackTags]]) -> str:
+    """Name each duplicated key and the files that claim it."""
+    return "; ".join(
+        f"disc {disc} track {track}: " + ", ".join(f'"{t.path.name}"' for t in files)
+        for (disc, track), files in duplicates.items()
+    )
 
 
 @dataclass
@@ -96,6 +122,8 @@ class AlbumResult:
     album: AlbumTags
     release: MBRelease
     diffs: list[TrackDiff] = field(default_factory=list)
+    # Album-level notes for the operator, such as positional matching. Not serialized.
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def has_changes(self) -> bool:
@@ -196,12 +224,14 @@ def score_candidates(
         if track.tags.get("musicbrainz_albumid")
     }
 
+    # With duplicate keys the first file keeps the key; the flag reports the problem.
+    duplicates = duplicate_track_keys(album)
     local_by_key: dict[tuple[int, int], float] = {}
     for track in album.tracks:
-        disc = _parse_disc_number(track)
-        tnum = _parse_track_number(track)
+        disc = disc_number(track)
+        tnum = parse_position(track.tags.get("tracknumber", ""))
         if tnum is not None:
-            local_by_key[(disc, tnum)] = track.duration_secs
+            local_by_key.setdefault((disc, tnum), track.duration_secs)
 
     for candidate in candidates:
         compared, within_2s, max_dev = _match_stats(album, local_by_key, candidate)
@@ -211,6 +241,8 @@ def score_candidates(
             flags.append("on-files")
         if _is_partial_match(album, local_by_key, candidate):
             flags.append("partial")
+        if duplicates:
+            flags.append("duplicate-keys")
         results.append(
             CandidateMatch(
                 release=candidate,
@@ -263,13 +295,64 @@ def _rank_key(match: CandidateMatch) -> tuple[int, int, bool, bool, bool, str, f
     )
 
 
-def _parse_disc_number(track: TrackTags) -> int:
-    """Extract disc number from tags. Handles '2', '2/3', etc. Falls back to 1."""
-    raw = track.tags.get("discnumber", "1")
-    try:
-        return int(raw.split("/")[0])
-    except (ValueError, IndexError):
-        return 1
+# Fields _build_new_tags sets only when MusicBrainz has a value. When a file moves
+# to a different release, a field the new release lacks must not keep the old value.
+RELEASE_OWNED_FIELDS = frozenset(
+    {
+        "releasedate",
+        "country",
+        "label",
+        "catalognumber",
+        "barcode",
+        "media",
+        "releasestatus",
+        "musicbrainz_albumartistid",
+        "musicbrainz_releasegroupid",
+        "releasetype",
+        "compilation",
+        "originaldate",
+        "asin",
+        "script",
+    }
+)
+# Set only when the file matches a release track.
+TRACK_OWNED_FIELDS = frozenset(
+    {
+        "musicbrainz_artistid",
+        "musicbrainz_recordingid",
+        "musicbrainz_releasetrackid",
+        "musicbrainz_workid",
+        "composer",
+        "musicbrainz_composerid",
+        "lyricist",
+        "musicbrainz_lyricistid",
+        "producer",
+        "musicbrainz_producerid",
+        "engineer",
+        "musicbrainz_engineerid",
+        "mixer",
+        "musicbrainz_mixerid",
+        "conductor",
+        "musicbrainz_conductorid",
+        "remixer",
+        "musicbrainz_remixerid",
+        "performer",
+        "musicbrainz_performerid",
+    }
+)
+
+
+def _stale_owned_fields(track: TrackTags, release: MBRelease, *, matched: bool) -> list[str]:
+    """The owned fields the file carries but the new release may not supply.
+
+    Applies only when the file carries another release's ID. Each name is cleared by
+    its builder: an empty value for a single field, an empty tuple for a multi field.
+    """
+    current_id = track.tags.get("musicbrainz_albumid", "")
+    if not current_id or current_id == release.id:
+        return []
+    owned = RELEASE_OWNED_FIELDS | (TRACK_OWNED_FIELDS if matched else frozenset())
+    return sorted(name for name in owned if track.tags.get(name) or track.multi.get(name))
 
 
 def _build_new_tags(
@@ -290,7 +373,7 @@ def _build_new_tags(
 
     tags["album"] = release.title
     tags["discnumber"] = str(disc_num)
-    tags["totaldiscs"] = str(len(release.discs)) if release.discs else "1"
+    tags["totaldiscs"] = str(max(release.discs)) if release.discs else "1"
     tags["totaltracks"] = str(len(disc_tracks)) if disc_tracks else str(release.track_count)
 
     if release.first_release_date and not track.tags.get("date"):
@@ -310,7 +393,7 @@ def _build_new_tags(
     if release.status:
         tags["releasestatus"] = release.status
 
-    # Artist
+    # Artist display credits. The per-person artist values are in _build_new_multi.
     if release.artist:
         tags["albumartist"] = release.artist
     if mb_track and mb_track.artist:
@@ -320,13 +403,8 @@ def _build_new_tags(
 
     # Release-level metadata
     tags["musicbrainz_albumid"] = release.id
-    if release.artist_id:
-        tags["musicbrainz_albumartistid"] = release.artist_id
     if release.release_group_id:
         tags["musicbrainz_releasegroupid"] = release.release_group_id
-    if release.release_group_type:
-        types = [release.release_group_type, *release.secondary_types]
-        tags["releasetype"] = "; ".join(types)
     if "Compilation" in release.secondary_types:
         tags["compilation"] = "1"
     if release.first_release_date:
@@ -335,12 +413,6 @@ def _build_new_tags(
         tags["asin"] = release.asin
     if release.script:
         tags["script"] = release.script
-
-    # Track-level artist
-    if mb_track and mb_track.artist_id:
-        tags["musicbrainz_artistid"] = mb_track.artist_id
-    elif release.artist_id:
-        tags["musicbrainz_artistid"] = release.artist_id
 
     # Track-level IDs and credits
     if mb_track:
@@ -354,24 +426,7 @@ def _build_new_tags(
         if mb_track.work_id:
             tags["musicbrainz_workid"] = mb_track.work_id
 
-        # Personnel
-        _set_credit(
-            tags, "composer", mb_track.composer, "musicbrainz_composerid", mb_track.composer_id
-        )
-        _set_credit(
-            tags, "lyricist", mb_track.lyricist, "musicbrainz_lyricistid", mb_track.lyricist_id
-        )
-        _set_credit(
-            tags, "producer", mb_track.producer, "musicbrainz_producerid", mb_track.producer_id
-        )
-        _set_credit(
-            tags, "engineer", mb_track.engineer, "musicbrainz_engineerid", mb_track.engineer_id
-        )
-        _set_credit(tags, "mixer", mb_track.mixer, "musicbrainz_mixerid", mb_track.mixer_id)
-        _set_credit(
-            tags, "conductor", mb_track.conductor, "musicbrainz_conductorid", mb_track.conductor_id
-        )
-        _set_credit(tags, "remixer", mb_track.remixer, "musicbrainz_remixerid", mb_track.remixer_id)
+        # Performers stay one display string; see _build_new_multi for the roles.
         _set_credit(
             tags,
             "performer",
@@ -380,6 +435,9 @@ def _build_new_tags(
             mb_track.performer_ids,
         )
 
+    for name in _stale_owned_fields(track, release, matched=mb_track is not None):
+        if name not in MULTI_VALUE_FIELDS and name not in tags:
+            tags[name] = ""
     return tags
 
 
@@ -388,6 +446,62 @@ def _set_credit(tags: dict[str, str], name_field: str, name: str, id_field: str,
         tags[name_field] = name
     if aid:
         tags[id_field] = aid
+
+
+# Personnel roles: each name and its ID field, one value per person.
+_ROLE_CREDITS = ("composer", "lyricist", "producer", "engineer", "mixer", "conductor", "remixer")
+
+
+def _build_new_multi(
+    release: MBRelease,
+    track: TrackTags,
+    track_index: int,
+    disc_num: int,
+) -> dict[str, tuple[str, ...]]:
+    """Build the target values of each multi-valued field for a track from the matched release."""
+    disc_tracks = release.discs.get(disc_num, [])
+    mb_track = disc_tracks[track_index] if track_index < len(disc_tracks) else None
+    multi: dict[str, tuple[str, ...]] = {}
+
+    # Track artists: the track's own credit, else the release's.
+    if mb_track and mb_track.artist_credits:
+        credits, legacy_id = mb_track.artist_credits, mb_track.artist_id
+    elif mb_track and mb_track.artist:
+        credits, legacy_id = (), mb_track.artist_id or release.artist_id
+    else:
+        credits, legacy_id = release.artist_credits, release.artist_id
+    if credits:
+        multi["artists"] = tuple(name for name, _ in credits)
+        ids = tuple(aid for _, aid in credits if aid)
+        if ids:
+            multi["musicbrainz_artistid"] = ids
+    elif legacy_id:
+        multi["musicbrainz_artistid"] = (legacy_id,)
+
+    if release.artist_credits:
+        multi["albumartists"] = tuple(name for name, _ in release.artist_credits)
+        ids = tuple(aid for _, aid in release.artist_credits if aid)
+        if ids:
+            multi["musicbrainz_albumartistid"] = ids
+    elif release.artist_id:
+        multi["musicbrainz_albumartistid"] = (release.artist_id,)
+
+    if release.release_group_type:
+        multi["releasetype"] = (release.release_group_type, *release.secondary_types)
+
+    if mb_track:
+        for role in _ROLE_CREDITS:
+            names = getattr(mb_track, role)
+            ids = getattr(mb_track, f"{role}_id")
+            if names:
+                multi[role] = tuple(names)
+            if ids:
+                multi[f"musicbrainz_{role}id"] = tuple(ids)
+
+    for name in _stale_owned_fields(track, release, matched=mb_track is not None):
+        if name in MULTI_VALUE_FIELDS and name not in multi:
+            multi[name] = ()
+    return multi
 
 
 def search_candidates(
@@ -415,15 +529,6 @@ def search_candidates(
         detailed.append(mb_client.fetch_release(c.id))
 
     return album, detailed
-
-
-def _parse_track_number(track: TrackTags) -> int | None:
-    """Extract track number from tags. Returns None if missing/unparseable."""
-    raw = track.tags.get("tracknumber", "")
-    try:
-        return int(raw.split("/")[0])
-    except (ValueError, IndexError):
-        return None
 
 
 def _check_isrc(track: TrackTags, mb_track: MBTrack) -> tuple[list[TagConflict], list[str]]:
@@ -461,15 +566,13 @@ def _find_partial_track(track: TrackTags, release: MBRelease, disc_num: int) -> 
     disc_tracks = release.discs.get(disc_num, [])
     file_title = track.tags.get("title", "")
 
-    track_num = _parse_track_number(track)
+    track_num = parse_position(track.tags.get("tracknumber", ""))
     if track_num is not None:
         for index, mb_track in enumerate(disc_tracks):
             if mb_track.number == track_num:
                 dev = _duration_dev(track, mb_track)
-                if (
-                    dev is None
-                    or dev <= _MATCH_TOLERANCE_SECS
-                    or _same_title(file_title, mb_track.title)
+                if (dev is not None and dev <= _MATCH_TOLERANCE_SECS) or _same_title(
+                    file_title, mb_track.title
                 ):
                     return index
                 break
@@ -497,7 +600,7 @@ def _match_stats(
     max_dev = 0.0
     if album.track_count < candidate.track_count:
         for track in album.tracks:
-            disc_num = _parse_disc_number(track)
+            disc_num = disc_number(track)
             index = _find_partial_track(track, candidate, disc_num)
             if index is None:
                 continue
@@ -537,8 +640,6 @@ def build_diff(album: AlbumTags, release: MBRelease, *, ignore_locks: bool = Fal
     Changes to a track's locked fields go to `locked_changes` instead of
     `changes`, unless `ignore_locks` is set.
     """
-    import sys
-
     # Index MB tracks by (disc, number) for direct lookup
     mb_index: dict[tuple[int, int], int] = {}
     for disc_num, disc_tracks in release.discs.items():
@@ -546,62 +647,115 @@ def build_diff(album: AlbumTags, release: MBRelease, *, ignore_locks: bool = Fal
             mb_index[(disc_num, mbt.number)] = i
 
     # Detect whether any track has a tracknumber tag
-    has_any_tracknumber = any(_parse_track_number(t) is not None for t in album.tracks)
+    has_any_tracknumber = any(
+        parse_position(t.tags.get("tracknumber", "")) is not None for t in album.tracks
+    )
     positional = not has_any_tracknumber and len(album.tracks) > 0
+    album_warnings: list[str] = []
     if positional:
-        print(
-            f"Warning: no tracknumber tags found; matching {len(album.tracks)} files by position",
-            file=sys.stderr,
+        album_warnings.append(
+            f"no tracknumber tags found; matching {len(album.tracks)} files by position"
         )
 
+    duplicates = duplicate_track_keys(album)
+    if duplicates:
+        raise DuplicateTrackError(duplicate_track_message(duplicates))
+
     partial = album.track_count < release.track_count
+    partial_matches: list[int | None] = []
+    shared_with: dict[int, list[TrackTags]] = {}
+    if partial:
+        partial_matches = [
+            _find_partial_track(track, release, disc_number(track)) for track in album.tracks
+        ]
+        # A release track claimed by two files is claimed by neither.
+        claimants: dict[tuple[int, int], list[int]] = {}
+        for position, (track, index) in enumerate(zip(album.tracks, partial_matches, strict=True)):
+            if index is not None:
+                claimants.setdefault((disc_number(track), index), []).append(position)
+        for positions in claimants.values():
+            if len(positions) > 1:
+                for position in positions:
+                    partial_matches[position] = None
+                    shared_with[position] = [album.tracks[p] for p in positions if p != position]
+
     diffs: list[TrackDiff] = []
-    for file_pos, track in enumerate(album.tracks):
-        disc_num = _parse_disc_number(track)
-        track_num = _parse_track_number(track)
+    # Positional matching uses each file's index within its own disc.
+    disc_positions: dict[int, int] = {}
+    for position, track in enumerate(album.tracks):
+        disc_num = disc_number(track)
+        track_num = parse_position(track.tags.get("tracknumber", ""))
+        disc_pos = disc_positions.get(disc_num, 0)
+        disc_positions[disc_num] = disc_pos + 1
 
         track_index: int | None = None
         if partial:
-            track_index = _find_partial_track(track, release, disc_num)
+            track_index = partial_matches[position]
         elif track_num is not None:
             key = (disc_num, track_num)
             if key in mb_index:
                 track_index = mb_index[key]
         elif positional:
-            track_index = file_pos if file_pos < len(release.discs.get(disc_num, [])) else None
+            track_index = disc_pos if disc_pos < len(release.discs.get(disc_num, [])) else None
 
         locked_fields = set() if ignore_locks else set(track.locked_fields)
         conflicts: list[TagConflict] = []
         warnings: list[str] = []
         if track_index is not None:
             new_tags = _build_new_tags(release, track, track_index, disc_num)
+            new_multi = _build_new_multi(release, track, track_index, disc_num)
             mb_track = release.discs[disc_num][track_index]
             # A locked ISRC is a decision already made; do not re-raise it.
             if "isrc" not in locked_fields:
                 conflicts, warnings = _check_isrc(track, mb_track)
         else:
-            new_tags = _build_new_tags(
-                release, track, len(release.discs.get(disc_num, [])), disc_num
-            )
-            if partial:
+            unmatched_index = len(release.discs.get(disc_num, []))
+            new_tags = _build_new_tags(release, track, unmatched_index, disc_num)
+            new_multi = _build_new_multi(release, track, unmatched_index, disc_num)
+            if partial and position in shared_with:
+                others = ", ".join(other.path.name for other in shared_with[position])
+                warnings.append(
+                    f"{track.path.name}: matches the same release track as {others}; "
+                    "title and track number left unchanged"
+                )
+            elif partial:
                 warnings.append(
                     f"{track.path.name}: no release track matches its duration and title "
                     f"(tracknumber {track_num}); title and track number left unchanged"
                 )
+            else:
+                # A full album file that matches no release track: album fields only.
+                # Its artist is not proposed, since no release track names it.
+                new_tags.pop("artist", None)
+                new_multi.pop("artists", None)
+                new_multi.pop("musicbrainz_artistid", None)
+                track_label = "(none)" if track_num is None else str(track_num)
+                warnings.append(
+                    f"{track.path.name}: no release track for disc {disc_num} track {track_label}; "
+                    "only album fields proposed"
+                )
 
-        all_changes = compute_diff(track, new_tags)
+        all_changes = compute_diff(track, new_tags, new_multi)
         changes = [c for c in all_changes if c.field not in locked_fields]
         locked_changes = [c for c in all_changes if c.field in locked_fields]
         diffs.append(TrackDiff(track, changes, conflicts, warnings, locked_changes))
 
-    return AlbumResult(album=album, release=release, diffs=diffs)
+    return AlbumResult(album=album, release=release, diffs=diffs, warnings=album_warnings)
 
 
-def apply_changes(result: AlbumResult, *, ignore_locks: bool = False) -> int:
+def apply_changes(
+    result: AlbumResult,
+    *,
+    ignore_locks: bool = False,
+    on_written: Callable[[TrackDiff], None] | None = None,
+) -> int:
     """Write all tag changes. Returns the number of tracks modified.
 
     Raises ValueError, before writing any track, for unresolved conflicts or
     for a change to a field the file has locked, unless `ignore_locks` is set.
+    `on_written` is called with each diff, in order, right after its track is
+    written, or straight away for a diff that needs no write (its locked fields
+    are still reported).
     """
     # Check the whole album before writing any track or changing recording IDs.
     if result.has_unresolved_conflicts:
@@ -628,6 +782,8 @@ def apply_changes(result: AlbumResult, *, ignore_locks: bool = False) -> int:
     for diff in result.diffs:
         changes = diff.effective_changes
         if not changes and not diff.keeps_conflicting_isrc:
+            if on_written:
+                on_written(diff)
             continue
         if changes:
             timestamp = TagChange(
@@ -641,6 +797,8 @@ def apply_changes(result: AlbumResult, *, ignore_locks: bool = False) -> int:
             locked = sorted({*read_locks(diff.track.path), "isrc"})
             write_locks(diff.track.path, locked, timestamp=now)
         count += 1
+        if on_written:
+            on_written(diff)
     return count
 
 
@@ -664,7 +822,10 @@ def resolve_isrc_conflicts(
         raise ValueError(f"unknown ISRC policy {policy!r}; use one of {', '.join(ISRC_POLICIES)}")
 
     conflicts_by_track = {
-        (_parse_disc_number(diff.track), _parse_track_number(diff.track)): (diff, conflict)
+        (disc_number(diff.track), parse_position(diff.track.tags.get("tracknumber", ""))): (
+            diff,
+            conflict,
+        )
         for diff in result.diffs
         for conflict in diff.conflicts
         if conflict.field == "isrc"

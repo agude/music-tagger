@@ -1,0 +1,14 @@
+usage: music-tagger lyrics-decide [-h] {list,choose,skip} ...
+
+Show the lyric options lyrics-batch saved, and record a choice or a skip for
+each track. A choice must be one of the saved record IDs and is written as a
+sidecar through the lyrics --lyrics-id path.
+
+positional arguments:
+  {list,choose,skip}
+    list              Show undecided tracks and their options. No network.
+    choose            Write one saved record's lyrics for a track.
+    skip              Record that a track gets no lyrics. Writes no file.
+
+options:
+  -h, --help          show this help message and exit

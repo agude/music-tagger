@@ -1,0 +1,13 @@
+usage: music-tagger copy [-h] --plan PLAN_FILE [--dry-run] [--log LOG |
+                         --no-log]
+
+Copy files to library destinations per a placement plan.
+
+options:
+  -h, --help        show this help message and exit
+  --plan PLAN_FILE  Plan JSON from `path-for` (possibly LLM-edited).
+  --dry-run         Show what would be copied without copying.
+  --log LOG         Append changes to this log file (default:
+                    $MUSIC_TAGGER_LOG, else ~/Projects/music-
+                    tagger/changes.log).
+  --no-log          Do not write the change log.

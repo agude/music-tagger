@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .fileio import atomic_write_text
 from .lyrics import MISSING, LyricsKind
 
 # Track statuses that already hold lyrics. The batch leaves these alone.
@@ -43,6 +44,8 @@ class Candidate:
     notes: tuple[str, ...]
     # Seconds the record's last synced line falls after the audio ends (negative: before).
     last_line_delta: float | None = None
+    # The artist and the title match the track. Entries saved before this field read as False.
+    identity_matches: bool = False
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,8 @@ class PendingEntry:
     outcome: str  # a lookup outcome, or INSPECTION_LABEL
     reason: str
     candidates: tuple[Candidate, ...] = ()
+    # The file's musicbrainz_releasetrackid, or "". Entries written before IDs read as "".
+    release_track_id: str = ""
 
 
 @dataclass
@@ -73,9 +78,10 @@ def confident_choice(entry: PendingEntry) -> Candidate | None:
     """The candidate the rules accept without a judgment, or None.
 
     A plausible album match with synchronized text is taken, closest length first.
-    Otherwise an album match with synchronized text is taken when its length is within
-    AUTO_LENGTH_SECS of the audio and its last synced line falls inside the audio. Plain
-    text is never taken: its timing cannot be checked against the audio.
+    Otherwise an album match with matching artist and title and synchronized text is
+    taken when its length is within AUTO_LENGTH_SECS of the audio and its last synced
+    line falls inside the audio. Plain text is never taken: its timing cannot be checked
+    against the audio.
     """
 
     def length(candidate: Candidate) -> float:
@@ -90,7 +96,8 @@ def confident_choice(entry: PendingEntry) -> Candidate | None:
     fits = [
         c
         for c in synced
-        if c.last_line_delta is not None
+        if c.identity_matches
+        and c.last_line_delta is not None
         and c.last_line_delta <= 0
         and length(c) <= AUTO_LENGTH_SECS
     ]
@@ -107,58 +114,146 @@ class Decision:
     choice: int | None  # the LRCLIB record ID written; None when skipped
     reason: str
     decided: str  # UTC timestamp
+    # The file's musicbrainz_releasetrackid, or "". Decisions written before IDs read as "".
+    release_track_id: str = ""
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(path.name + ".tmp")
-    temp.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    temp.replace(path)
+    atomic_write_text(path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
 
-def _read_json(path: Path) -> list[Any] | None:
-    """Return the entry list of a schema-1 file, or None when the file does not exist."""
+def _read_entries(path: Path) -> list[dict[str, Any]] | None:
+    """Return the entry objects of a schema-1 file, or None when the file does not exist.
+
+    Raises ValueError, naming the file and entry, for any shape the loaders cannot read.
+    """
     if not path.exists():
         return None
     data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or data.get("version") != SCHEMA_VERSION:
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: expected a JSON object")
+    version = data.get("version")
+    if isinstance(version, bool) or version != SCHEMA_VERSION:
         raise ValueError(f"{path} is not a version {SCHEMA_VERSION} lyric file")
-    entries: list[Any] = data["entries"]
+    raw = data.get("entries")
+    if not isinstance(raw, list):
+        raise ValueError(f"{path}: entries: expected a list")
+    entries: list[dict[str, Any]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"{path}: entry {index}: expected an object")
+        entries.append(item)
     return entries
 
 
-def _candidate_from_json(item: dict[str, Any]) -> Candidate:
+def _value(item: dict[str, Any], key: str, where: str) -> Any:
+    if key not in item:
+        raise ValueError(f"{where}: {key}: missing")
+    return item[key]
+
+
+def _text(item: dict[str, Any], key: str, where: str) -> str:
+    value = _value(item, key, where)
+    if not isinstance(value, str):
+        raise ValueError(f"{where}: {key}: expected a string, got {value!r}")
+    return value
+
+
+def _int(item: dict[str, Any], key: str, where: str) -> int:
+    value = _value(item, key, where)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{where}: {key}: expected an integer, got {value!r}")
+    return value
+
+
+def _optional_int(item: dict[str, Any], key: str, where: str) -> int | None:
+    if _value(item, key, where) is None:
+        return None
+    return _int(item, key, where)
+
+
+def _flag(item: dict[str, Any], key: str, where: str) -> bool:
+    value = _value(item, key, where)
+    if not isinstance(value, bool):
+        raise ValueError(f"{where}: {key}: expected true or false, got {value!r}")
+    return value
+
+
+def _seconds(item: dict[str, Any], key: str, where: str) -> float:
+    value = _value(item, key, where)
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        raise ValueError(f"{where}: {key}: expected a finite number, got {value!r}")
+    return float(value)
+
+
+def _optional_seconds(item: dict[str, Any], key: str, where: str) -> float | None:
+    if _value(item, key, where) is None:
+        return None
+    return _seconds(item, key, where)
+
+
+def _texts(item: dict[str, Any], key: str, where: str) -> tuple[str, ...]:
+    value = _value(item, key, where)
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ValueError(f"{where}: {key}: expected a list of strings")
+    return tuple(value)
+
+
+def _objects(item: dict[str, Any], key: str, where: str) -> list[dict[str, Any]]:
+    value = _value(item, key, where)
+    if not isinstance(value, list) or not all(isinstance(v, dict) for v in value):
+        raise ValueError(f"{where}: {key}: expected a list of objects")
+    return value
+
+
+def _candidate_from_json(item: dict[str, Any], where: str) -> Candidate:
+    # Absent in files written before these fields existed: read as unknown or False.
     return Candidate(
-        id=int(item["id"]),
-        title=str(item["title"]),
-        artist=str(item["artist"]),
-        album=str(item["album"]),
-        duration_delta=None if item["duration_delta"] is None else float(item["duration_delta"]),
-        plausible=bool(item["plausible"]),
-        album_matches=bool(item["album_matches"]),
-        offers=tuple(str(o) for o in item["offers"]),
-        notes=tuple(str(n) for n in item["notes"]),
+        id=_int(item, "id", where),
+        title=_text(item, "title", where),
+        artist=_text(item, "artist", where),
+        album=_text(item, "album", where),
+        duration_delta=_optional_seconds(item, "duration_delta", where),
+        plausible=_flag(item, "plausible", where),
+        album_matches=_flag(item, "album_matches", where),
+        offers=_texts(item, "offers", where),
+        notes=_texts(item, "notes", where),
         last_line_delta=(
-            None if item.get("last_line_delta") is None else float(item["last_line_delta"])
+            _optional_seconds(item, "last_line_delta", where) if "last_line_delta" in item else None
+        ),
+        identity_matches=(
+            _flag(item, "identity_matches", where) if "identity_matches" in item else False
         ),
     )
 
 
-def _entry_from_json(item: dict[str, Any]) -> PendingEntry:
+def _optional_text(item: dict[str, Any], key: str, where: str) -> str:
+    """A string, or "" when the key is absent."""
+    return _text(item, key, where) if key in item else ""
+
+
+def _entry_from_json(item: dict[str, Any], where: str) -> PendingEntry:
+    candidates = _objects(item, "candidates", where)
     return PendingEntry(
-        album=str(item["album"]),
-        file=str(item["file"]),
-        track=None if item["track"] is None else int(item["track"]),
-        disc=None if item["disc"] is None else int(item["disc"]),
-        outcome=str(item["outcome"]),
-        reason=str(item["reason"]),
-        candidates=tuple(_candidate_from_json(c) for c in item["candidates"]),
+        album=_text(item, "album", where),
+        file=_text(item, "file", where),
+        track=_optional_int(item, "track", where),
+        disc=_optional_int(item, "disc", where),
+        outcome=_text(item, "outcome", where),
+        reason=_text(item, "reason", where),
+        release_track_id=_optional_text(item, "release_track_id", where),
+        candidates=tuple(
+            _candidate_from_json(c, f"{where}: candidates[{n}]") for n, c in enumerate(candidates)
+        ),
     )
 
 
 def load_pending(path: Path) -> list[PendingEntry]:
-    entries = _read_json(path)
-    return [] if entries is None else [_entry_from_json(item) for item in entries]
+    entries = _read_entries(path)
+    if entries is None:
+        return []
+    return [_entry_from_json(item, f"{path}: entry {n}") for n, item in enumerate(entries)]
 
 
 def save_pending(path: Path, entries: list[PendingEntry], stamp: str) -> None:
@@ -171,63 +266,137 @@ def save_pending(path: Path, entries: list[PendingEntry], stamp: str) -> None:
 
 
 def _entry_to_json(entry: PendingEntry) -> dict[str, Any]:
-    return {
+    data: dict[str, Any] = {
         "album": entry.album,
         "file": entry.file,
         "track": entry.track,
         "disc": entry.disc,
         "outcome": entry.outcome,
         "reason": entry.reason,
-        "candidates": [
-            {
-                "id": c.id,
-                "title": c.title,
-                "artist": c.artist,
-                "album": c.album,
-                "duration_delta": c.duration_delta,
-                "plausible": c.plausible,
-                "album_matches": c.album_matches,
-                "offers": list(c.offers),
-                "notes": list(c.notes),
-                "last_line_delta": c.last_line_delta,
-            }
-            for c in entry.candidates
-        ],
     }
+    if entry.release_track_id:
+        data["release_track_id"] = entry.release_track_id
+    data["candidates"] = [
+        {
+            "id": c.id,
+            "title": c.title,
+            "artist": c.artist,
+            "album": c.album,
+            "duration_delta": c.duration_delta,
+            "plausible": c.plausible,
+            "album_matches": c.album_matches,
+            "offers": list(c.offers),
+            "notes": list(c.notes),
+            "last_line_delta": c.last_line_delta,
+            "identity_matches": c.identity_matches,
+        }
+        for c in entry.candidates
+    ]
+    return data
 
 
-def load_decisions(path: Path) -> dict[tuple[str, str], Decision]:
-    entries = _read_json(path)
-    decisions: dict[tuple[str, str], Decision] = {}
-    for item in entries or []:
+DecisionKey = tuple[str, str]
+
+
+def decision_key(album: str, file: str, release_track_id: str) -> DecisionKey:
+    """The key a decision is stored under: its release track ID, else its album and file."""
+    return ("release-track", release_track_id) if release_track_id else (album, file)
+
+
+def same_track(
+    stored_album: str,
+    stored_file: str,
+    stored_release_track_id: str,
+    album: str,
+    file: str,
+    release_track_id: str,
+) -> bool:
+    """Whether a stored decision or pending entry is the track now at album/file with this ID.
+
+    When both have a release track ID, the IDs alone decide, so a renamed or moved file
+    keeps its entry and two files with different IDs never share one. Otherwise the
+    album and file name decide, so entries written before IDs keep matching.
+    """
+    if release_track_id and stored_release_track_id:
+        return stored_release_track_id == release_track_id
+    return stored_album == album and stored_file == file
+
+
+def find_decision(
+    decisions: dict[DecisionKey, Decision], album: str, file: str, release_track_id: str
+) -> tuple[DecisionKey, Decision] | None:
+    """The stored decision for this track, with the key it is stored under, or None."""
+    for key, decision in decisions.items():
+        if same_track(
+            decision.album,
+            decision.file,
+            decision.release_track_id,
+            album,
+            file,
+            release_track_id,
+        ):
+            return key, decision
+    return None
+
+
+def find_pending(
+    entries: list[PendingEntry], album: str, file: str, release_track_id: str
+) -> PendingEntry | None:
+    """The pending entry for this track, or None."""
+    return next(
+        (
+            entry
+            for entry in entries
+            if same_track(
+                entry.album, entry.file, entry.release_track_id, album, file, release_track_id
+            )
+        ),
+        None,
+    )
+
+
+def load_decisions(path: Path) -> dict[DecisionKey, Decision]:
+    entries = _read_entries(path) or []
+    decisions: dict[DecisionKey, Decision] = {}
+    for n, item in enumerate(entries):
+        where = f"{path}: entry {n}"
         decision = Decision(
-            album=str(item["album"]),
-            file=str(item["file"]),
-            track=None if item["track"] is None else int(item["track"]),
-            choice=None if item["choice"] is None else int(item["choice"]),
-            reason=str(item["reason"]),
-            decided=str(item["decided"]),
+            album=_text(item, "album", where),
+            file=_text(item, "file", where),
+            track=_optional_int(item, "track", where),
+            choice=_optional_int(item, "choice", where),
+            reason=_text(item, "reason", where),
+            decided=_text(item, "decided", where),
+            release_track_id=_optional_text(item, "release_track_id", where),
         )
-        decisions[(decision.album, decision.file)] = decision
+        key = decision_key(decision.album, decision.file, decision.release_track_id)
+        decisions[key] = decision
     return decisions
 
 
-def save_decisions(path: Path, decisions: dict[tuple[str, str], Decision]) -> None:
+def save_decisions(path: Path, decisions: dict[DecisionKey, Decision]) -> None:
     payload = {
         "version": SCHEMA_VERSION,
         "entries": [
-            {
-                "album": d.album,
-                "file": d.file,
-                "track": d.track,
-                "choice": d.choice,
-                "reason": d.reason,
-                "decided": d.decided,
-            }
+            _decision_to_json(d)
             for d in sorted(decisions.values(), key=lambda d: (d.album, d.file))
         ],
     }
     _write_json(path, payload)
+
+
+def _decision_to_json(decision: Decision) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "album": decision.album,
+        "file": decision.file,
+        "track": decision.track,
+        "choice": decision.choice,
+        "reason": decision.reason,
+        "decided": decision.decided,
+    }
+    if decision.release_track_id:
+        data["release_track_id"] = decision.release_track_id
+    return data
 
 
 def merge_pending(
@@ -239,9 +408,13 @@ def merge_pending(
 
 
 def undecided(
-    entries: list[PendingEntry], decisions: dict[tuple[str, str], Decision]
+    entries: list[PendingEntry], decisions: dict[DecisionKey, Decision]
 ) -> list[PendingEntry]:
-    return [entry for entry in entries if (entry.album, entry.file) not in decisions]
+    return [
+        entry
+        for entry in entries
+        if find_decision(decisions, entry.album, entry.file, entry.release_track_id) is None
+    ]
 
 
 def _track_label(entry: PendingEntry) -> str:
