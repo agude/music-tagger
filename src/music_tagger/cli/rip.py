@@ -96,7 +96,8 @@ def _rip(argv: list[str] | None = None) -> None:
     except RuntimeError as error:
         print(f"Error: {error}", file=sys.stderr)
         sys.exit(1)
-    print(f"Ripped {result.track_count} tracks.")
+    hidden = " plus the hidden track before track 1" if result.hidden_track else ""
+    print(f"Ripped {result.track_count} tracks{hidden}.")
 
     if result.cue_file:
         print(f"CUE: {result.cue_file}")
@@ -104,7 +105,9 @@ def _rip(argv: list[str] | None = None) -> None:
         print("Error: whipper wrote no log; AccurateRip results unknown.", file=sys.stderr)
         sys.exit(EXIT_REVIEW)
     print(f"Log: {result.log_file}")
-    accuraterip = ripper.parse_accuraterip(result.log_file.read_text(), result.track_count)
+    accuraterip = ripper.parse_accuraterip(
+        result.log_file.read_text(), result.track_count, hidden_track=result.hidden_track
+    )
     print("\n".join(accuraterip.describe()))
     disc = f"Disc {result.disc_number} of {result.disc_total}" if result.is_multi_disc else "Disc"
     if accuraterip.needs_review:

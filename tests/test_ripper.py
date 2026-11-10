@@ -257,6 +257,86 @@ class TestAccurateRipEvidence:
         assert summary.needs_review is False
 
 
+class TestHiddenTrack:
+    def test_track_zero_is_expected_with_a_hidden_track(self) -> None:
+        summary = parse_accuraterip(
+            _log(
+                _track_block(0, ABSENT, ABSENT),
+                _track_block(1, EXACT, EXACT),
+                _track_block(2, EXACT, EXACT),
+            ),
+            expected_tracks=2,
+            hidden_track=True,
+        )
+
+        assert summary.missing == []
+        assert summary.unexpected == []
+        assert summary.needs_review is False
+
+    def test_track_zero_without_a_hidden_track_needs_review(self) -> None:
+        summary = parse_accuraterip(
+            _log(_track_block(0, ABSENT, ABSENT), _track_block(1, EXACT, EXACT)),
+            expected_tracks=1,
+        )
+
+        assert summary.unexpected == [0]
+        assert summary.needs_review is True
+
+    def test_missing_track_zero_needs_review(self) -> None:
+        summary = parse_accuraterip(
+            _log(_track_block(1, EXACT, EXACT)), expected_tracks=1, hidden_track=True
+        )
+
+        assert summary.missing == [0]
+        assert summary.needs_review is True
+
+    def test_rip_counts_numbered_tracks_and_flags_the_hidden_one(self, tmp_path: Path) -> None:
+        output = tmp_path / "output"
+
+        def fake_whipper(cmd: list[str], **kwargs: object) -> MagicMock:
+            out = Path(cmd[cmd.index("-O") + 1])
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "00. Hidden Track One Audio.flac").write_bytes(b"\x00" * 50)
+            for i in range(1, 3):
+                (out / f"{i:02d}. Track {i}.flac").write_bytes(b"\x00" * 50)
+            (out / "Artist - Album.log").write_text("rip log")
+            return MagicMock(returncode=0)
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/whipper"),
+            patch("music_tagger.ripper.subprocess.run", side_effect=fake_whipper),
+        ):
+            result = rip_cd(output, device="/dev/sr0")
+
+        assert result.track_count == 2
+        assert len(result.tracks) == 3
+        assert result.hidden_track is True
+
+    def test_rip_command_verifies_a_disc_with_a_hidden_track(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from music_tagger.cli.rip import _rip
+        from music_tagger.ripper import RipResult
+
+        log_file = tmp_path / "rip.log"
+        log_file.write_text(
+            _log(
+                _track_block(0, ABSENT, ABSENT),
+                _track_block(1, EXACT, EXACT),
+                _track_block(2, EXACT, EXACT),
+            )
+        )
+        with patch("music_tagger.ripper.rip_cd") as rip:
+            rip.return_value = RipResult(
+                tracks=[], track_count=2, log_file=log_file, hidden_track=True
+            )
+            _rip([str(tmp_path / "out")])
+
+        out = capsys.readouterr().out
+        assert "Ripped 2 tracks plus the hidden track before track 1." in out
+        assert "verified; safe to eject" in out
+
+
 class TestRipCommandMissingEvidence:
     def test_log_without_tracks_section_is_not_verified(
         self, tmp_path: Path, capsys: object

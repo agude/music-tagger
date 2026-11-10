@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import json
 import math
-from collections import Counter
+from collections import Counter, UserDict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -322,21 +323,71 @@ def same_track(
     return stored_album == album and stored_file == file
 
 
+class Decisions(UserDict[DecisionKey, Decision]):
+    """Stored decisions by key, indexed by release track ID and by album and file.
+
+    `find` answers in constant time what `same_track` would answer by scanning every
+    decision, so a library-wide batch does not slow down as decisions accumulate.
+    Every mutation goes through __setitem__ and __delitem__, which keep the indexes.
+    """
+
+    def __init__(self, initial: Mapping[DecisionKey, Decision] | None = None) -> None:
+        self._seq: dict[DecisionKey, int] = {}
+        self._next = 0
+        self._by_id: dict[str, list[DecisionKey]] = {}
+        self._by_path: dict[tuple[str, str], list[DecisionKey]] = {}
+        super().__init__(initial)
+
+    def __setitem__(self, key: DecisionKey, decision: Decision) -> None:
+        if key in self.data:
+            self._unindex(key, self.data[key])
+        else:
+            self._seq[key] = self._next
+            self._next += 1
+        self.data[key] = decision
+        if decision.release_track_id:
+            self._by_id.setdefault(decision.release_track_id, []).append(key)
+        self._by_path.setdefault((decision.album, decision.file), []).append(key)
+
+    def __delitem__(self, key: DecisionKey) -> None:
+        self._unindex(key, self.data[key])
+        del self.data[key]
+        del self._seq[key]
+
+    def _unindex(self, key: DecisionKey, decision: Decision) -> None:
+        _remove_key(self._by_id, decision.release_track_id, key)
+        _remove_key(self._by_path, (decision.album, decision.file), key)
+
+    def find(
+        self, album: str, file: str, release_track_id: str
+    ) -> tuple[DecisionKey, Decision] | None:
+        """The first stored decision, in insertion order, that `same_track` matches."""
+        path_keys = self._by_path.get((album, file), [])
+        if release_track_id:
+            candidates = [k for k in path_keys if not self.data[k].release_track_id]
+            candidates += self._by_id.get(release_track_id, [])
+        else:
+            candidates = list(path_keys)
+        if not candidates:
+            return None
+        key = min(candidates, key=self._seq.__getitem__)
+        return key, self.data[key]
+
+
+def _remove_key[K](index: dict[K, list[DecisionKey]], name: K, key: DecisionKey) -> None:
+    keys = index.get(name)
+    if keys is None or key not in keys:
+        return
+    keys.remove(key)
+    if not keys:
+        del index[name]
+
+
 def find_decision(
-    decisions: dict[DecisionKey, Decision], album: str, file: str, release_track_id: str
+    decisions: Decisions, album: str, file: str, release_track_id: str
 ) -> tuple[DecisionKey, Decision] | None:
     """The stored decision for this track, with the key it is stored under, or None."""
-    for key, decision in decisions.items():
-        if same_track(
-            decision.album,
-            decision.file,
-            decision.release_track_id,
-            album,
-            file,
-            release_track_id,
-        ):
-            return key, decision
-    return None
+    return decisions.find(album, file, release_track_id)
 
 
 def find_pending(
@@ -355,9 +406,9 @@ def find_pending(
     )
 
 
-def load_decisions(path: Path) -> dict[DecisionKey, Decision]:
+def load_decisions(path: Path) -> Decisions:
     entries = _read_entries(path) or []
-    decisions: dict[DecisionKey, Decision] = {}
+    decisions = Decisions()
     for n, item in enumerate(entries):
         where = f"{path}: entry {n}"
         decision = Decision(
@@ -374,7 +425,7 @@ def load_decisions(path: Path) -> dict[DecisionKey, Decision]:
     return decisions
 
 
-def save_decisions(path: Path, decisions: dict[DecisionKey, Decision]) -> None:
+def save_decisions(path: Path, decisions: Mapping[DecisionKey, Decision]) -> None:
     payload = {
         "version": SCHEMA_VERSION,
         "entries": [
@@ -407,9 +458,7 @@ def merge_pending(
     return kept + fresh
 
 
-def undecided(
-    entries: list[PendingEntry], decisions: dict[DecisionKey, Decision]
-) -> list[PendingEntry]:
+def undecided(entries: list[PendingEntry], decisions: Decisions) -> list[PendingEntry]:
     return [
         entry
         for entry in entries

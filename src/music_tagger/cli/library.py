@@ -783,10 +783,15 @@ def _rename(argv: list[str] | None = None) -> None:
     sidecar_pairs = [pair for _, _, _, moves in plan for pair in moves]
     try:
         _two_phase_rename(pairs)
-    except OSError as error:
+    except RenameFailedError as error:
         # A normal revert leaves nothing renamed and nothing logged. If a revert
-        # itself failed, log what is on disk now.
-        landed = {(src, dst) for src, dst in pairs if dst.exists() and not src.exists()}
+        # itself failed, report where each stranded file is and log the ones that
+        # reached their planned name.
+        if not error.stranded:
+            print(f"Error: rename failed and was reverted: {error.cause}", file=sys.stderr)
+            sys.exit(1)
+        planned = set(pairs)
+        landed = {pair for pair in error.stranded if pair in planned}
         log_path = _log_path(args)
         if log_path and landed:
             _write_rename_log(
@@ -796,13 +801,13 @@ def _rename(argv: list[str] | None = None) -> None:
                 [],
                 [(s.name, d.name) for s, d in sidecar_pairs if (s, d) in landed],
             )
-        if landed:
-            print(
-                f"Error: rename failed; {len(landed)} file(s) left renamed: {error}",
-                file=sys.stderr,
-            )
-        else:
-            print(f"Error: rename failed and was reverted: {error}", file=sys.stderr)
+        print(
+            f"Error: rename failed and {len(error.stranded)} file(s) could not be reverted: "
+            f"{error.cause}",
+            file=sys.stderr,
+        )
+        for src, now in error.stranded:
+            print(f"  {src.name} is now {now.name}", file=sys.stderr)
         sys.exit(1)
 
     renames: list[tuple[str, str]] = []
@@ -832,12 +837,26 @@ def _is_same_file(a: Path, b: Path) -> bool:
         return a.parent == b.parent and a.name.casefold() == b.name.casefold()
 
 
+class RenameFailedError(OSError):
+    """A rename failed. `stranded` lists each file the revert could not move back.
+
+    Each entry is (original path, path the file has now). An empty list means the
+    revert restored every file.
+    """
+
+    def __init__(self, cause: OSError, stranded: list[tuple[Path, Path]]) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.stranded = stranded
+
+
 def _two_phase_rename(pairs: list[tuple[Path, Path]]) -> None:
     """Rename each source to its target, so that sources may trade names.
 
     Phase 1 moves every source to a unique temporary name in its own directory;
     phase 2 moves each temporary name to its target. If a step fails, the renames
-    already made are reverted and the error is raised.
+    already made are reverted and RenameFailedError is raised, naming any file the
+    revert could not restore.
     """
     staged: list[tuple[Path, Path, Path]] = []  # (source, temporary, target)
     finished: list[tuple[Path, Path, Path]] = []
@@ -850,19 +869,25 @@ def _two_phase_rename(pairs: list[tuple[Path, Path]]) -> None:
             _, temporary, target = item
             temporary.rename(target)
             finished.append(item)
-    except OSError:
-        for _, temporary, target in reversed(finished):
+    except OSError as cause:
+        stranded: list[tuple[Path, Path]] = []
+        at_target: set[Path] = set()
+        for source, temporary, target in reversed(finished):
             try:
                 target.rename(temporary)
             except OSError as error:
                 print(f"Error: could not revert {target}: {error}", file=sys.stderr)
+                stranded.append((source, target))
+                at_target.add(source)
         for source, temporary, _ in reversed(staged):
-            if temporary.exists():
-                try:
-                    temporary.rename(source)
-                except OSError as error:
-                    print(f"Error: could not revert {temporary}: {error}", file=sys.stderr)
-        raise
+            if source in at_target:
+                continue
+            try:
+                temporary.rename(source)
+            except OSError as error:
+                print(f"Error: could not revert {temporary}: {error}", file=sys.stderr)
+                stranded.append((source, temporary))
+        raise RenameFailedError(cause, stranded) from cause
 
 
 def _update_cue_sheets(album_dir: Path, renames: dict[str, str]) -> list[Path]:

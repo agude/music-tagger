@@ -610,12 +610,16 @@ def read_album(directory: Path) -> AlbumTags:
 
 
 def _write_flac_tag(audio: FLAC, canonical: str, value: str) -> None:
+    """Write one value, or delete the field for "". Alias keys the file already has
+    get the same value, or are deleted, so no reader sees a stale total."""
     vorbis_key = FIELD_MAP[canonical][0]
-    if value == "":
-        if vorbis_key in audio:
-            audio.pop(vorbis_key)  # type: ignore[no-untyped-call]
-        return
-    audio[vorbis_key] = [value]
+    for key in (vorbis_key, *_FLAC_ALIASES.get(canonical, ())):
+        present = key in audio
+        if value == "":
+            if present:
+                audio.pop(key)  # type: ignore[no-untyped-call]
+        elif key == vorbis_key or present:
+            audio[key] = [value]
 
 
 def _write_mp3_tag(audio: MP3, canonical: str, value: str) -> None:
@@ -817,8 +821,8 @@ def write_tags(track: TrackTags, changes: list[TagChange]) -> None:
 def read_genres(path: Path) -> list[str]:
     """Read every genre value from a file.
 
-    Genre is the only multi-valued field in the schema. `_read_flac_tags` keeps
-    just the first value, which is enough for matching but would silently drop
+    Genre is multi-valued but not in MULTI_VALUE_FIELDS. `_read_flac_tags` keeps
+    just its first value, which is enough for matching but would silently drop
     the rest on a write-back, so genre edits go through this instead.
     """
     audio = MutagenFile(path)

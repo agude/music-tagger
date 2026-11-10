@@ -173,6 +173,44 @@ class TestRenameLogsPartialFailure:
         assert sorted(p.name for p in flac_album.glob("*.flac")) == before
         assert "## Rename" not in _log_text(log)
 
+    def test_failed_revert_reports_and_logs_the_stranded_file(
+        self, flac_album: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        tracks = read_album(flac_album).tracks
+        for track, title in zip(tracks, ["Desperado", "Twenty-One", "Out of Control"], strict=True):
+            write_tags(track, [TagChange("title", track.tags["title"], title)])
+        log = tmp_path / "changes.log"
+        real_rename = Path.rename
+        calls = {"revert": 0}
+
+        def fail_second_and_its_revert(self: Path, target: str | Path) -> Path:
+            name = Path(target).name
+            if name == "02. Twenty-One.flac":
+                raise OSError("disk full")
+            # The first reverting move takes "01. Desperado.flac" back to a temporary name.
+            if self.name == "01. Desperado.flac" and name.endswith(".tmp"):
+                calls["revert"] += 1
+                raise OSError("share went away")
+            return real_rename(self, target)
+
+        with (
+            patch.object(Path, "rename", fail_second_and_its_revert),
+            pytest.raises(SystemExit) as error,
+        ):
+            _rename([str(flac_album), "--log", str(log)])
+
+        assert error.value.code == 1
+        assert calls["revert"] == 1
+        names = sorted(p.name for p in flac_album.glob("*.flac"))
+        assert "01. Desperado.flac" in names
+        err = capsys.readouterr().err
+        assert "1 file(s) could not be reverted" in err
+        assert "is now 01. Desperado.flac" in err
+        text = _log_text(log)
+        assert "## Rename" in text
+        assert "01. Desperado.flac" in text
+        assert "Twenty-One" not in text
+
 
 class TestArtLogsPartialFailure:
     def test_embed_failure_logs_the_files_embedded_so_far(

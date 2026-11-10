@@ -20,11 +20,14 @@ from music_tagger.lyrics_batch import (
     AUTO_LENGTH_SECS,
     Candidate,
     Decision,
+    Decisions,
     PendingEntry,
     confident_choice,
+    decision_key,
     load_decisions,
     load_pending,
     render_pending,
+    same_track,
     save_decisions,
     save_pending,
 )
@@ -918,3 +921,83 @@ class TestStateFileValidation:
 
         assert len(calls) == 1
         assert sorted(p.name for p in tmp_path.iterdir()) == ["pending.json"]
+
+
+def _decision(album: str, file: str, rtid: str = "") -> Decision:
+    return Decision(
+        album=album,
+        file=file,
+        track=1,
+        choice=None,
+        reason="test",
+        decided="2026-11-10 12:00 UTC",
+        release_track_id=rtid,
+    )
+
+
+def _scan(decisions: Decisions, album: str, file: str, rtid: str) -> Decision | None:
+    """The reference answer: the first decision, in insertion order, that same_track matches."""
+    for decision in decisions.values():
+        if same_track(decision.album, decision.file, decision.release_track_id, album, file, rtid):
+            return decision
+    return None
+
+
+_INDEX_QUERIES = (
+    ("/a", "01.flac", ""),
+    ("/a", "01.flac", "id-1"),
+    ("/a", "01.flac", "id-2"),
+    ("/b", "renamed.flac", "id-1"),
+    ("/b", "renamed.flac", ""),
+    ("/c", "x.flac", "id-3"),
+)
+
+
+class TestDecisionsIndex:
+    def _assert_matches_scan(self, decisions: Decisions) -> None:
+        for album, file, rtid in _INDEX_QUERIES:
+            found = decisions.find(album, file, rtid)
+            expected = _scan(decisions, album, file, rtid)
+            assert (found[1] if found else None) == expected, (album, file, rtid)
+
+    def _populated(self) -> Decisions:
+        decisions = Decisions()
+        for d in [
+            _decision("/a", "01.flac"),  # legacy, no ID
+            _decision("/a", "01.flac", "id-2"),  # same path, another ID
+            _decision("/b", "renamed.flac", "id-1"),
+            _decision("/c", "x.flac"),
+        ]:
+            decisions[decision_key(d.album, d.file, d.release_track_id)] = d
+        return decisions
+
+    def test_find_agrees_with_a_linear_scan(self) -> None:
+        self._assert_matches_scan(self._populated())
+
+    def test_a_different_stored_id_never_matches_by_path(self) -> None:
+        decisions = Decisions()
+        d = _decision("/a", "01.flac", "id-2")
+        decisions[decision_key(d.album, d.file, d.release_track_id)] = d
+
+        assert decisions.find("/a", "01.flac", "id-1") is None
+        assert decisions.find("/a", "01.flac", "") is not None
+
+    def test_index_follows_replacement_and_deletion(self) -> None:
+        decisions = self._populated()
+        key = decision_key("/b", "renamed.flac", "id-1")
+        decisions[key] = replace(decisions[key], album="/a", file="01.flac")
+        self._assert_matches_scan(decisions)
+        assert decisions.find("/b", "renamed.flac", "") is None
+
+        del decisions[decision_key("/a", "01.flac", "")]
+        self._assert_matches_scan(decisions)
+
+    def test_load_returns_an_index_that_round_trips(self, tmp_path: Path) -> None:
+        path = tmp_path / "decisions.json"
+        save_decisions(path, self._populated())
+
+        loaded = load_decisions(path)
+
+        assert isinstance(loaded, Decisions)
+        assert loaded == self._populated()
+        self._assert_matches_scan(loaded)

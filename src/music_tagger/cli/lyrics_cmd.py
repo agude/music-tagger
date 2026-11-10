@@ -31,7 +31,7 @@ from ..lyrics_batch import (
     AlbumReport,
     Candidate,
     Decision,
-    DecisionKey,
+    Decisions,
     PendingEntry,
     confident_choice,
     decision_key,
@@ -491,7 +491,7 @@ def _batch_fetch_track(
     client: LrclibClient,
     report: AlbumReport,
     *,
-    decisions: dict[DecisionKey, Decision],
+    decisions: Decisions,
     dry_run: bool,
     log: _BatchLog,
 ) -> None:
@@ -560,7 +560,7 @@ def _choose_record(
     record_id: int,
     *,
     client: LrclibClient,
-    decisions: dict[DecisionKey, Decision],
+    decisions: Decisions,
     decisions_path: Path,
     dry_run: bool,
     log: _BatchLog,
@@ -609,7 +609,7 @@ def _auto_choose(
     album: AlbumTags,
     client: LrclibClient,
     *,
-    decisions: dict[tuple[str, str], Decision],
+    decisions: Decisions,
     decisions_path: Path,
     dry_run: bool,
     log: _BatchLog,
@@ -643,7 +643,7 @@ def _auto_choose(
 def _refresh_decisions(
     album_dir: Path,
     album: AlbumTags,
-    decisions: dict[DecisionKey, Decision],
+    decisions: Decisions,
     decisions_path: Path,
     *,
     dry_run: bool,
@@ -670,7 +670,7 @@ def _batch_album(
     album_dir: Path,
     client: LrclibClient,
     *,
-    decisions: dict[DecisionKey, Decision],
+    decisions: Decisions,
     decisions_path: Path,
     auto: bool,
     embed: bool,
@@ -873,7 +873,7 @@ def _resolve_pending_track(
     parser: argparse.ArgumentParser,
     args: argparse.Namespace,
     pending_path: Path,
-    decisions: dict[tuple[str, str], Decision],
+    decisions: Decisions,
 ) -> tuple[Path, AlbumTags, TrackTags, PendingEntry]:
     """Find the one track a decision names. Refuses with exit 2 when it is not pending."""
     if args.track is None and args.file is None:

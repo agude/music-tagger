@@ -1652,6 +1652,42 @@ class TestWhipperDiscTotal:
 
         assert tags["totaldiscs"] == "2"
 
+    def _whipper_total(self, path: Path, total: str) -> None:
+        audio = FLAC(path)
+        audio.pop("TOTALDISCS", None)
+        audio["DISCTOTAL"] = [total]
+        audio.save()
+
+    def test_writing_totaldiscs_also_updates_disctotal(self, flac_album: Path) -> None:
+        path = sorted(flac_album.glob("*.flac"))[0]
+        # whipper counts every medium, so a CD + DVD release gets DISCTOTAL=2.
+        self._whipper_total(path, "2")
+        track = read_album(flac_album).tracks[0]
+
+        write_tags(track, [TagChange("totaldiscs", "2", "1")])
+
+        audio = FLAC(path)
+        assert audio["TOTALDISCS"] == ["1"]
+        assert audio["DISCTOTAL"] == ["1"]
+
+    def test_disctotal_is_not_added_when_absent(self, flac_album: Path) -> None:
+        track = read_album(flac_album).tracks[0]
+
+        write_tags(track, [TagChange("totaldiscs", track.tags.get("totaldiscs", ""), "3")])
+
+        audio = FLAC(track.path)
+        assert audio["TOTALDISCS"] == ["3"]
+        assert "DISCTOTAL" not in audio
+
+    def test_clearing_totaldiscs_removes_disctotal(self, flac_album: Path) -> None:
+        path = sorted(flac_album.glob("*.flac"))[0]
+        self._whipper_total(path, "2")
+        track = read_album(flac_album).tracks[0]
+
+        write_tags(track, [TagChange("totaldiscs", "2", "")])
+
+        assert "totaldiscs" not in read_album(flac_album).tracks[0].tags
+
 
 class TestUnreadableFiles:
     def test_unreadable_audio_file_is_listed_not_dropped(self, flac_album: Path) -> None:

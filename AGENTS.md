@@ -81,7 +81,8 @@ Key CLI subcommands, driven by Claude Code in conversation:
    rename (exit 1, nothing renamed) unless it is another file this rename moves,
    so two files may swap names, or the same file, so a case-only change works.
    Renames go through temporary names; a failure reverts the renames already
-   made. `apply` stops at rename on exit 1. Rewrites the `FILE "…"` lines of every `.cue` in the
+   made. A file the revert cannot move back is printed as `<old> is now <name>`,
+   and logged when it reached its planned name. `apply` stops at rename on exit 1. Rewrites the `FILE "…"` lines of every `.cue` in the
    album for the renamed files and warns about any FILE line naming a file
    that does not exist.
 
@@ -96,7 +97,9 @@ Key CLI subcommands, driven by Claude Code in conversation:
    is a mismatch (`Found, NO exact match`), its status is not `Copy OK`, or
    the log has no section for a ripped track (`Missing from log`) or has one
    for a number outside 1..N (`Unexpected in log`). It prints `verified` only
-   when none of these hold. Tracks absent from the AccurateRip database are normal. A whipper
+   when none of these hold. When whipper rips audio hidden before track 1
+   (`00. Hidden Track One Audio.flac`), N counts only the numbered tracks and the
+   log's track 0 section is expected. Tracks absent from the AccurateRip database are normal. A whipper
    failure exits 1 with `Error: whipper failed (exit N)`, not a traceback.
    Whipper refuses an output directory that holds a `.log`, so `rip` runs
    it in a fresh `.whipper-*` subdirectory and moves the files up. When
@@ -676,7 +679,10 @@ inspection write no log. `lyrics-batch` follows the same rule.
   by the MB release date. When empty, populated from the release group's
   `first_release_date`.
 - FLAC `totaldiscs` is read from `TOTALDISCS`, else `DISCTOTAL` (whipper writes
-  only `DISCTOTAL`). A multi-disc album, for `rename` and `place`, is one whose
+  only `DISCTOTAL`, counting every medium of the release, DVDs included). A write
+  also sets `DISCTOTAL` when the file has one, and a clear removes it, so the two
+  never disagree. Navidrome's `mappings.yaml` lists `disctotal` before
+  `totaldiscs`. A multi-disc album, for `rename` and `place`, is one whose
   tracks state a disc number above 1, a total above 1, or a `n/total` disc number.
 - `releasedate` (FLAC `RELEASEDATE`, MP3 `TDRL`) gets the MB release's date.
 - Retagging a file that carries another release's `musicbrainz_albumid` clears

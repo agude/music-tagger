@@ -25,6 +25,9 @@ class RipResult:
     cue_file: Path | None = None
     disc_number: int | None = None
     disc_total: int | None = None
+    # Whipper ripped audio hidden before track 1 as "00. Hidden Track One Audio".
+    # It is in `tracks` but not in `track_count`, and the log numbers it 0.
+    hidden_track: bool = False
 
     @property
     def is_multi_disc(self) -> bool:
@@ -72,12 +75,15 @@ class AccurateRipSummary:
 _TRACK_HEADER = re.compile(r"^  (\d+):$")
 
 
-def parse_accuraterip(log_text: str, expected_tracks: int) -> AccurateRipSummary:
+def parse_accuraterip(
+    log_text: str, expected_tracks: int, *, hidden_track: bool = False
+) -> AccurateRipSummary:
     """Summarize the Tracks section of a whipper 0.10 log.
 
-    `expected_tracks` is the number of tracks ripped from this disc; the log's
-    track numbers run 1..expected_tracks. A missing or unexpected section means
-    the log cannot verify the rip.
+    `expected_tracks` is the number of numbered tracks ripped from this disc; the
+    log's track numbers run 1..expected_tracks. With `hidden_track`, whipper also
+    ripped the audio before track 1 and logs it as track 0. A missing or unexpected
+    section means the log cannot verify the rip.
     """
     results: dict[int, list[str]] = {}
     statuses: dict[int, str] = {}
@@ -100,8 +106,9 @@ def parse_accuraterip(log_text: str, expected_tracks: int) -> AccurateRipSummary
             statuses[track] = line.split(":", 1)[1].strip()
 
     summary = AccurateRipSummary()
-    summary.missing = [n for n in range(1, expected_tracks + 1) if n not in results]
-    summary.unexpected = sorted(n for n in results if not 1 <= n <= expected_tracks)
+    first = 0 if hidden_track else 1
+    summary.missing = [n for n in range(first, expected_tracks + 1) if n not in results]
+    summary.unexpected = sorted(n for n in results if not first <= n <= expected_tracks)
     for number, track_results in results.items():
         if any(result.endswith("exact match") and "NO" not in result for result in track_results):
             summary.exact.append(number)
@@ -174,15 +181,18 @@ def rip_cd(
     moved = _move_disc_files(work_dir, output_dir, prefix, replace)
 
     flac_paths = sorted(path for path in moved if path.suffix == ".flac")
+    # The track template "%t. %n" names the hidden track "00. Hidden Track One Audio".
+    hidden = [path for path in flac_paths if path.name.startswith(f"{prefix}00. ")]
     log_files = [path for path in moved if path.suffix == ".log"]
     cue_files = [path for path in moved if path.suffix == ".cue"]
     return RipResult(
         tracks=flac_paths,
-        track_count=len(flac_paths),
+        track_count=len(flac_paths) - len(hidden),
         log_file=log_files[0] if log_files else None,
         cue_file=cue_files[0] if cue_files else None,
         disc_number=disc_number,
         disc_total=disc_total,
+        hidden_track=bool(hidden),
     )
 
 

@@ -36,6 +36,7 @@ lyrics-pending.json
 lyrics-pending.json.tmp
 lyrics-decisions.json
 lyrics-decisions.json.tmp
+lyrics-batch-*.log
 
 # Temp planning
 CODE_REVIEW.md
