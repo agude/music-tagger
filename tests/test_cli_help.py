@@ -10,6 +10,7 @@ change, with::
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -59,6 +60,9 @@ HELP_CASES: list[tuple[str, list[str]]] = [
 ]
 
 
+# The snapshots hold Python 3.13+ argparse output. Python 3.12 indents and
+# lists option metavars differently, so the text cannot match there.
+@pytest.mark.skipif(sys.version_info < (3, 13), reason="argparse help format changed in 3.13")
 @pytest.mark.parametrize(("name", "argv"), HELP_CASES, ids=[name for name, _ in HELP_CASES])
 def test_help_matches_snapshot(
     name: str, argv: list[str], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
