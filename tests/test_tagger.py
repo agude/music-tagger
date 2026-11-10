@@ -461,6 +461,74 @@ class TestBuildDiff:
         title_change = next(c for c in result.diffs[0].changes if c.field == "title")
         assert title_change.new_value != "Doolin-Dalton"
 
+    def test_partial_album_distrusts_tracknumber_with_wrong_duration(self) -> None:
+        """A file whose tracknumber disagrees with its duration matches by duration."""
+        release = _make_release()
+        tracks = [
+            TrackTags(
+                path=Path("03.flac"),
+                tags={"tracknumber": "3"},
+                duration_secs=209.0,
+                format="flac",
+            ),
+        ]
+        album = AlbumTags(directory=Path("/music"), tracks=tracks)
+        result = build_diff(album, release)
+
+        title_change = next(c for c in result.diffs[0].changes if c.field == "title")
+        assert title_change.new_value == "Doolin-Dalton"
+        assert result.diffs[0].warnings == []
+
+    def test_partial_album_unmatched_file_keeps_title_and_tracknumber(self) -> None:
+        """A file that fits no release track gets album tags only, plus a warning."""
+        release = _make_release()
+        tracks = [
+            TrackTags(
+                path=Path("03.flac"),
+                tags={"tracknumber": "3", "title": "Unrelated"},
+                duration_secs=300.0,
+                format="flac",
+            ),
+        ]
+        album = AlbumTags(directory=Path("/music"), tracks=tracks)
+        result = build_diff(album, release)
+
+        changed = {c.field for c in result.diffs[0].changes}
+        assert "album" in changed
+        assert "title" not in changed
+        assert "tracknumber" not in changed
+        assert len(result.diffs[0].warnings) == 1
+        assert "left unchanged" in result.diffs[0].warnings[0]
+
+    def test_partial_album_title_breaks_duration_tie(self) -> None:
+        """Several release tracks within 2 s: the matching title decides."""
+        release = MBRelease(
+            id="release-tie",
+            title="Tie",
+            track_count=3,
+            discs={
+                1: [
+                    MBTrack(number=1, title="Alpha", duration_ms=200000, artist="A"),
+                    MBTrack(number=2, title="Beta", duration_ms=195000, artist="A"),
+                    MBTrack(number=3, title="Gamma", duration_ms=195000, artist="A"),
+                ]
+            },
+        )
+        tracks = [
+            TrackTags(
+                path=Path("x.flac"),
+                tags={"tracknumber": "7", "title": "Gamma"},
+                duration_secs=195.0,
+                format="flac",
+            ),
+        ]
+        album = AlbumTags(directory=Path("/music"), tracks=tracks)
+        result = build_diff(album, release)
+
+        track_change = next(c for c in result.diffs[0].changes if c.field == "tracknumber")
+        assert track_change.new_value == "3"
+        assert result.diffs[0].warnings == []
+
     def test_no_tracknumbers_uses_positional_fallback(self) -> None:
         """When no files have tracknumber tags, match by file position."""
         release = _make_release()

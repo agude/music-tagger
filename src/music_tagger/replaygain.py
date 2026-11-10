@@ -38,15 +38,27 @@ def scan_replaygain(
     *,
     dry_run: bool = False,
     skip_existing: bool = False,
+    track_only: bool = False,
 ) -> ReplayGainResult:
+    """Scan the directory's audio files and write ReplayGain tags.
+
+    By default this computes album and track gain over the directory, which is
+    only right when the directory is one album. With `track_only`, each file
+    gets its own track gain and peak, and album tags are not written.
+    """
     _check_tool()
 
     files = _audio_files(directory)
     if not files:
         raise RuntimeError(f"No audio files in {directory}")
 
-    if dry_run:
-        cmd: list[str] = ["rsgain", "custom", "-a", "--tagmode=s", "-O"]
+    if track_only:
+        cmd: list[str] = ["rsgain", "custom", "-O"] if dry_run else ["rsgain", "custom", "-s", "i"]
+        if skip_existing:
+            cmd.append("-S")
+        cmd.extend(str(f) for f in files)
+    elif dry_run:
+        cmd = ["rsgain", "custom", "-a", "--tagmode=s", "-O"]
         if skip_existing:
             cmd.append("-S")
         cmd.extend(str(f) for f in files)

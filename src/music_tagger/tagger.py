@@ -204,20 +204,7 @@ def score_candidates(
             local_by_key[(disc, tnum)] = track.duration_secs
 
     for candidate in candidates:
-        within_2s = 0
-        compared = 0
-        max_dev = 0.0
-
-        for disc_num, disc_tracks in candidate.discs.items():
-            for mb_track in disc_tracks:
-                local_dur = local_by_key.get((disc_num, mb_track.number))
-                if local_dur is None or mb_track.duration_ms is None:
-                    continue
-                compared += 1
-                dev = abs(local_dur - mb_track.duration_ms / 1000.0)
-                max_dev = max(max_dev, dev)
-                if dev <= 2.0:
-                    within_2s += 1
+        compared, within_2s, max_dev = _match_stats(album, local_by_key, candidate)
 
         flags = []
         if candidate.id in local_release_ids:
@@ -449,12 +436,103 @@ def _check_isrc(track: TrackTags, mb_track: MBTrack) -> tuple[list[TagConflict],
     return [TagConflict("isrc", existing, list(mb_track.isrcs))], []
 
 
+_MATCH_TOLERANCE_SECS = 2.0
+
+
+def _duration_dev(track: TrackTags, mb_track: MBTrack) -> float | None:
+    """Absolute duration difference in seconds, or None when either side is unknown."""
+    if not track.duration_secs or mb_track.duration_ms is None:
+        return None
+    return abs(track.duration_secs - mb_track.duration_ms / 1000.0)
+
+
+def _same_title(a: str, b: str) -> bool:
+    return bool(a.strip()) and _style_key(a) == _style_key(b)
+
+
+def _find_partial_track(track: TrackTags, release: MBRelease, disc_num: int) -> int | None:
+    """Index on this disc of the release track that a partial album's file is.
+
+    A file's tracknumber is trusted only when that release track's duration or
+    title agrees with the file. Otherwise the disc is searched for tracks within
+    2 s of the file's duration, and a matching title breaks a tie. Returns None
+    when no single track fits.
+    """
+    disc_tracks = release.discs.get(disc_num, [])
+    file_title = track.tags.get("title", "")
+
+    track_num = _parse_track_number(track)
+    if track_num is not None:
+        for index, mb_track in enumerate(disc_tracks):
+            if mb_track.number == track_num:
+                dev = _duration_dev(track, mb_track)
+                if (
+                    dev is None
+                    or dev <= _MATCH_TOLERANCE_SECS
+                    or _same_title(file_title, mb_track.title)
+                ):
+                    return index
+                break
+
+    fits: list[int] = []
+    for index, mb_track in enumerate(disc_tracks):
+        dev = _duration_dev(track, mb_track)
+        if dev is not None and dev <= _MATCH_TOLERANCE_SECS:
+            fits.append(index)
+    if len(fits) > 1:
+        fits = [i for i in fits if _same_title(file_title, disc_tracks[i].title)]
+    return fits[0] if len(fits) == 1 else None
+
+
+def _match_stats(
+    album: AlbumTags, local_by_key: dict[tuple[int, int], float], candidate: MBRelease
+) -> tuple[int, int, float]:
+    """Compared tracks, tracks within 2 s, and max deviation for one candidate.
+
+    A partial album is matched per file (see `_find_partial_track`). A full
+    album is matched by (disc, tracknumber).
+    """
+    compared = 0
+    within_2s = 0
+    max_dev = 0.0
+    if album.track_count < candidate.track_count:
+        for track in album.tracks:
+            disc_num = _parse_disc_number(track)
+            index = _find_partial_track(track, candidate, disc_num)
+            if index is None:
+                continue
+            dev = _duration_dev(track, candidate.discs[disc_num][index])
+            if dev is None:
+                continue
+            compared += 1
+            max_dev = max(max_dev, dev)
+            if dev <= _MATCH_TOLERANCE_SECS:
+                within_2s += 1
+        return compared, within_2s, max_dev
+
+    for disc_num, disc_tracks in candidate.discs.items():
+        for mb_track in disc_tracks:
+            local_dur = local_by_key.get((disc_num, mb_track.number))
+            if local_dur is None or mb_track.duration_ms is None:
+                continue
+            compared += 1
+            dev = abs(local_dur - mb_track.duration_ms / 1000.0)
+            max_dev = max(max_dev, dev)
+            if dev <= _MATCH_TOLERANCE_SECS:
+                within_2s += 1
+    return compared, within_2s, max_dev
+
+
 def build_diff(album: AlbumTags, release: MBRelease, *, ignore_locks: bool = False) -> AlbumResult:
     """Compute the tag diff between current tags and a chosen release.
 
-    Matches local files to MB tracks by tracknumber tag. When no tracks
-    have tracknumber tags (e.g. freshly ripped files), falls back to
-    positional matching by file sort order.
+    For a full album, matches local files to MB tracks by tracknumber tag.
+    When no tracks have tracknumber tags (e.g. freshly ripped files), falls
+    back to positional matching by file sort order.
+
+    For a partial album (fewer files than release tracks), tracknumber tags
+    are not trusted alone; see `_find_partial_track`. A file that matches no
+    release track is reported as a warning and gets no changes.
 
     Changes to a track's locked fields go to `locked_changes` instead of
     `changes`, unless `ignore_locks` is set.
@@ -476,13 +554,16 @@ def build_diff(album: AlbumTags, release: MBRelease, *, ignore_locks: bool = Fal
             file=sys.stderr,
         )
 
+    partial = album.track_count < release.track_count
     diffs: list[TrackDiff] = []
     for file_pos, track in enumerate(album.tracks):
         disc_num = _parse_disc_number(track)
         track_num = _parse_track_number(track)
 
         track_index: int | None = None
-        if track_num is not None:
+        if partial:
+            track_index = _find_partial_track(track, release, disc_num)
+        elif track_num is not None:
             key = (disc_num, track_num)
             if key in mb_index:
                 track_index = mb_index[key]
@@ -502,6 +583,11 @@ def build_diff(album: AlbumTags, release: MBRelease, *, ignore_locks: bool = Fal
             new_tags = _build_new_tags(
                 release, track, len(release.discs.get(disc_num, [])), disc_num
             )
+            if partial:
+                warnings.append(
+                    f"{track.path.name}: no release track matches its duration and title "
+                    f"(tracknumber {track_num}); title and track number left unchanged"
+                )
 
         all_changes = compute_diff(track, new_tags)
         changes = [c for c in all_changes if c.field not in locked_fields]

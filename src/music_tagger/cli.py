@@ -3043,6 +3043,12 @@ def _replaygain(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Skip files that already have ReplayGain tags.",
     )
+    parser.add_argument(
+        "--track-only",
+        action="store_true",
+        help="Write each file's track gain and peak only. Album tags are not written, "
+        "so use this when the directory holds files from more than one album.",
+    )
     _add_log_arguments(parser)
     args = parser.parse_args(argv)
 
@@ -3054,17 +3060,24 @@ def _replaygain(argv: list[str] | None = None) -> None:
     from . import replaygain
 
     result = replaygain.scan_replaygain(
-        target, dry_run=args.dry_run, skip_existing=args.skip_existing
+        target,
+        dry_run=args.dry_run,
+        skip_existing=args.skip_existing,
+        track_only=args.track_only,
     )
 
     if args.dry_run:
         print(f"\n(dry run — {result.track_count} tracks scanned, no tags written)")
         return
-    print(f"Wrote ReplayGain tags to {result.track_count} track(s).")
+    kind = "track" if args.track_only else "ReplayGain"
+    print(f"Wrote {kind} tags to {result.track_count} track(s).")
 
     log_path = _log_path(args)
     if log_path:
-        album_gain = replaygain.read_album_gain(target) or "(not found)"
+        if args.track_only:
+            album_gain = "(not written; track only)"
+        else:
+            album_gain = replaygain.read_album_gain(target) or "(not found)"
         _write_replaygain_log(log_path, target, result.track_count, album_gain)
 
 

@@ -66,7 +66,9 @@ Key CLI subcommands, driven by Claude Code in conversation:
 5. `uv run music-tagger replaygain <album-dir> [--dry-run] [--skip-existing]`
    — computes ReplayGain 2.0 (EBU R128) loudness via `rsgain` and writes
    track + album gain/peak tags. Use `--dry-run` to preview values without
-   writing. Use `--skip-existing` to skip files already tagged.
+   writing. Use `--skip-existing` to skip files already tagged. Use
+   `--track-only` when the directory holds files from more than one album: it
+   writes each file's track gain and leaves album tags alone.
    Requires system package: `rsgain`.
 
 6. `uv run music-tagger rename <album-dir> [--dry-run]` — renames audio
@@ -183,6 +185,11 @@ Processing the library is staged album by album across sessions:
 ## Matching rules
 
 - Track count must match (except partial albums / singles).
+- Partial albums: a file's tracknumber is trusted only when that release
+  track's duration (within 2 s) or title agrees with the file. Otherwise the
+  file matches the one release track on its disc that fits by duration, with a
+  title breaking a tie. A file that fits nothing is warned about, and its
+  title and track number are left unchanged.
 - Track durations are ground truth. A good match has most tracks within 2s.
 - Existing metadata tags may be wrong — use them as search seeds and
   tiebreakers, not as matching criteria.

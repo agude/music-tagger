@@ -1,13 +1,45 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 from mutagen.flac import FLAC
 from mutagen.id3 import TXXX
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4FreeForm
 
-from music_tagger.replaygain import read_album_gain
+from music_tagger.replaygain import read_album_gain, scan_replaygain
+
+
+class TestScanReplayGainCommand:
+    """The rsgain command line for each mode."""
+
+    def _command(self, album: Path, **kwargs: object) -> list[str]:
+        with (
+            patch("music_tagger.replaygain.shutil.which", return_value="/usr/bin/rsgain"),
+            patch("music_tagger.replaygain.subprocess.run") as run,
+        ):
+            scan_replaygain(album, **kwargs)  # type: ignore[arg-type]
+        cmd: list[str] = run.call_args.args[0]
+        return cmd
+
+    def test_default_is_album_mode_over_directory(self, flac_album: Path) -> None:
+        cmd = self._command(flac_album)
+        assert cmd[:2] == ["rsgain", "easy"]
+        assert cmd[-1] == str(flac_album)
+
+    def test_track_only_writes_track_gain_per_file(self, flac_album: Path) -> None:
+        cmd = self._command(flac_album, track_only=True)
+        assert cmd[:4] == ["rsgain", "custom", "-s", "i"]
+        assert "-a" not in cmd
+        assert "easy" not in cmd
+        assert len(cmd) == 4 + len(list(flac_album.glob("*.flac")))
+
+    def test_track_only_dry_run_writes_nothing(self, flac_album: Path) -> None:
+        cmd = self._command(flac_album, track_only=True, dry_run=True)
+        assert cmd[:3] == ["rsgain", "custom", "-O"]
+        assert "-a" not in cmd
+        assert "-s" not in cmd
 
 
 class TestReadAlbumGain:
