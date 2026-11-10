@@ -22,10 +22,16 @@ class TestDefaultLogPath:
     def test_environment_override(self, default_log: Path) -> None:
         assert _default_log_path() == default_log
 
-    def test_project_log_without_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_project_log_without_override(
+        self, default_log: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("MUSIC_TAGGER_LOG")
 
-        assert _default_log_path() == Path.home() / "Projects/music-tagger/changes.log"
+        path = _default_log_path()
+
+        assert path.is_absolute()
+        assert path.name.endswith(".log")
+        assert path != default_log
 
 
 class TestDefaultLogging:

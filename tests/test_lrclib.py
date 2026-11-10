@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from typing import Any
 
@@ -8,7 +9,7 @@ import pytest
 
 from music_tagger.lrclib import (
     APP_ID,
-    MIN_INTERVAL_SECS,
+    MAX_ATTEMPTS,
     SEARCH_RESULT_CAP,
     LrclibClient,
     LyricsRecord,
@@ -118,7 +119,8 @@ class TestClient:
 
     def test_default_pacing_stays_within_registered_allowance(self) -> None:
         # Registered client-side apps get about 180 requests/min per IP.
-        assert 60 / MIN_INTERVAL_SECS <= 180
+        default = inspect.signature(LrclibClient).parameters["min_interval"].default
+        assert default >= 60 / 180
 
     def test_only_get_requests(self) -> None:
         methods: list[str] = []
@@ -218,7 +220,7 @@ class TestClient:
         assert client.search(title="Song", artist="Band").records == []
         assert clock.sleeps == [2.0]
 
-    def test_rate_limit_exhausted_is_rate_limited(self) -> None:
+    def test_retry_after_is_honoured_until_attempts_run_out(self) -> None:
         attempts: list[int] = []
 
         def respond(request: httpx.Request) -> httpx.Response:
@@ -229,8 +231,8 @@ class TestClient:
         with pytest.raises(ProviderError) as info:
             client.search(title="Song", artist="Band")
         assert info.value.rate_limited is True
-        assert len(attempts) == 4
-        assert clock.sleeps == [2.0, 2.0, 2.0]
+        assert len(attempts) == MAX_ATTEMPTS
+        assert clock.sleeps == [2.0] * (MAX_ATTEMPTS - 1)
 
     def test_long_retry_after_fails_without_waiting(self) -> None:
         attempts: list[int] = []

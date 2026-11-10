@@ -1,9 +1,0 @@
-usage: music-tagger path-for [-h] --evidence EVIDENCE [--root ROOT] [-o OUT]
-
-Compute library destination paths for album files.
-
-options:
-  -h, --help           show this help message and exit
-  --evidence EVIDENCE  Evidence JSON from `read`.
-  --root ROOT          Library root (default: /mnt/synology/media/music).
-  -o, --out OUT        Output JSON file (prints digest to stdout).

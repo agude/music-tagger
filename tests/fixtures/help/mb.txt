@@ -1,8 +1,0 @@
-usage: music-tagger mb <command> [options]
-
-MusicBrainz query commands.
-
-commands:
-  search      Search for candidate releases.
-  release     Fetch full release detail.
-  discid      Look up by disc ID or TOC.

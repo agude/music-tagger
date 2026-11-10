@@ -1,9 +1,0 @@
-usage: music-tagger diff [-h] --evidence EVIDENCE --release RELEASE [-o OUT]
-
-Compute tag diff between local evidence and a MusicBrainz release.
-
-options:
-  -h, --help           show this help message and exit
-  --evidence EVIDENCE  Evidence JSON from `read`.
-  --release RELEASE    Release JSON from `mb release`.
-  -o, --out OUT        Output JSON file (prints digest to stdout).

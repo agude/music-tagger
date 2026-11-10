@@ -8,7 +8,13 @@ import pytest
 from mutagen.flac import FLAC
 
 from music_tagger.lyrics import LyricsKind, inspect_track
-from music_tagger.lyrics_write import SidecarPlan, WriteStatus, apply_plan, plan_sidecar_write
+from music_tagger.lyrics_write import (
+    SIDECAR_MODE,
+    SidecarPlan,
+    WriteStatus,
+    apply_plan,
+    plan_sidecar_write,
+)
 
 TRACK = "01 - Track 1.flac"
 
@@ -187,7 +193,7 @@ class TestApply:
 
     def test_written_sidecar_has_standard_mode(self, flac_album: Path) -> None:
         apply_plan(_plan(flac_album, LyricsKind.PLAIN, "Words"))
-        assert (flac_album / "01 - Track 1.txt").stat().st_mode & 0o777 == 0o644
+        assert (flac_album / "01 - Track 1.txt").stat().st_mode & 0o777 == SIDECAR_MODE
 
     def test_audio_is_not_modified(self, flac_album: Path) -> None:
         audio = flac_album / TRACK

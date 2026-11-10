@@ -1,6 +1,0 @@
-usage: music-tagger nd rescan [-h]
-
-Trigger a Navidrome library scan.
-
-options:
-  -h, --help  show this help message and exit

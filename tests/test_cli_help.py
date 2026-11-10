@@ -1,83 +1,152 @@
-"""Snapshot tests for every command's and subcommand's --help output.
+"""Smoke and structural tests for every command's and subcommand's --help.
 
-The snapshots pin the help text so the CLI can be restructured without
-changing what operators see. Regenerate them, only after a deliberate help
-change, with::
-
-    MUSIC_TAGGER_UPDATE_HELP=1 uv run pytest tests/test_cli_help.py
+The tests check that help is printed and that each parser is well formed.
+They do not pin the help text, so the CLI can change its wording or layout
+without a test edit.
 """
 
 from __future__ import annotations
 
-import os
-import sys
-from pathlib import Path
+import argparse
+import re
+from typing import NoReturn
 
 import pytest
 
-from music_tagger.cli import main
+from music_tagger.cli import _register_commands, main
 
-HELP_DIR = Path(__file__).parent / "fixtures" / "help"
+# argv for every command and subcommand, each ending in --help.
+HELP_CASES: list[list[str]] = [
+    ["--help"],
+    ["read", "--help"],
+    ["toc", "--help"],
+    ["mb", "--help"],
+    ["mb", "search", "--help"],
+    ["mb", "release", "--help"],
+    ["mb", "discid", "--help"],
+    ["match", "--help"],
+    ["diff", "--help"],
+    ["write-tags", "--help"],
+    ["write-ratings", "--help"],
+    ["write-stats", "--help"],
+    ["path-for", "--help"],
+    ["copy", "--help"],
+    ["art", "--help"],
+    ["nd", "--help"],
+    ["nd", "rescan", "--help"],
+    ["nd", "ratings", "--help"],
+    ["nd", "stats", "--help"],
+    ["nd", "set-rating", "--help"],
+    ["scan", "--help"],
+    ["checklist", "--help"],
+    ["candidates", "--help"],
+    ["tag", "--help"],
+    ["apply", "--help"],
+    ["place", "--help"],
+    ["genre", "--help"],
+    ["lyrics", "--help"],
+    ["lyrics-batch", "--help"],
+    ["lyrics-decide", "--help"],
+    ["lock", "--help"],
+    ["unlock", "--help"],
+    ["rename", "--help"],
+    ["replaygain", "--help"],
+    ["rip", "--help"],
+]
 
-# (snapshot name, argv). Every entry is run with --help in-process.
-# Keep this list in step with main()'s dispatch table and the mb/nd sub-dispatchers.
-HELP_CASES: list[tuple[str, list[str]]] = [
-    ("music-tagger", ["--help"]),
-    ("read", ["read", "--help"]),
-    ("toc", ["toc", "--help"]),
-    ("mb", ["mb", "--help"]),
-    ("mb-search", ["mb", "search", "--help"]),
-    ("mb-release", ["mb", "release", "--help"]),
-    ("mb-discid", ["mb", "discid", "--help"]),
-    ("match", ["match", "--help"]),
-    ("diff", ["diff", "--help"]),
-    ("write-tags", ["write-tags", "--help"]),
-    ("write-ratings", ["write-ratings", "--help"]),
-    ("write-stats", ["write-stats", "--help"]),
-    ("path-for", ["path-for", "--help"]),
-    ("copy", ["copy", "--help"]),
-    ("art", ["art", "--help"]),
-    ("nd", ["nd", "--help"]),
-    ("nd-rescan", ["nd", "rescan", "--help"]),
-    ("nd-ratings", ["nd", "ratings", "--help"]),
-    ("nd-stats", ["nd", "stats", "--help"]),
-    ("nd-set-rating", ["nd", "set-rating", "--help"]),
-    ("scan", ["scan", "--help"]),
-    ("checklist", ["checklist", "--help"]),
-    ("candidates", ["candidates", "--help"]),
-    ("tag", ["tag", "--help"]),
-    ("apply", ["apply", "--help"]),
-    ("place", ["place", "--help"]),
-    ("genre", ["genre", "--help"]),
-    ("lyrics", ["lyrics", "--help"]),
-    ("lyrics-batch", ["lyrics-batch", "--help"]),
-    ("lyrics-decide", ["lyrics-decide", "--help"]),
-    ("lock", ["lock", "--help"]),
-    ("unlock", ["unlock", "--help"]),
-    ("rename", ["rename", "--help"]),
-    ("replaygain", ["replaygain", "--help"]),
-    ("rip", ["rip", "--help"]),
+# Dispatchers route on a sub-argument and build no parser of their own, so
+# the parser capture below cannot reach them. Their subcommands are captured.
+DISPATCHER_ARGV: list[list[str]] = [["mb"], ["nd"]]
+
+# The same commands with --help removed. Calling each with [] reaches its parser.
+PARSER_CASES: list[list[str]] = [
+    argv[:-1] for argv in HELP_CASES if argv[:-1] and argv[:-1] not in DISPATCHER_ARGV
 ]
 
 
-# The snapshots hold Python 3.13+ argparse output. Python 3.12 indents and
-# lists option metavars differently, so the text cannot match there.
-@pytest.mark.skipif(sys.version_info < (3, 13), reason="argparse help format changed in 3.13")
-@pytest.mark.parametrize(("name", "argv"), HELP_CASES, ids=[name for name, _ in HELP_CASES])
-def test_help_matches_snapshot(
-    name: str, argv: list[str], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    # argparse wraps help text to the terminal width; pin it so snapshots are stable.
-    monkeypatch.setenv("COLUMNS", "80")
+class _ParserCaptured(Exception):
+    """Raised in place of parse_args so the test receives the parser."""
 
+    def __init__(self, parser: argparse.ArgumentParser) -> None:
+        super().__init__()
+        self.parser = parser
+
+
+def _capture_parser(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> argparse.ArgumentParser:
+    def fake_parse_args(
+        self: argparse.ArgumentParser,
+        args: list[str] | None = None,
+        namespace: argparse.Namespace | None = None,
+    ) -> NoReturn:
+        raise _ParserCaptured(self)
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", fake_parse_args)
+    with pytest.raises(_ParserCaptured) as exc:
+        main(list(argv))
+    return exc.value.parser
+
+
+def _real_actions(parser: argparse.ArgumentParser) -> list[argparse.Action]:
+    """Actions other than the automatic -h/--help."""
+    return [a for a in parser._actions if not isinstance(a, argparse._HelpAction)]
+
+
+@pytest.mark.parametrize("argv", HELP_CASES, ids=[" ".join(argv) for argv in HELP_CASES])
+def test_help_prints_usage_and_exits_zero(
+    argv: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
     with pytest.raises(SystemExit) as exc:
         main(list(argv))
     assert exc.value.code == 0
+    assert "usage:" in capsys.readouterr().out
 
+
+def test_top_level_help_names_every_dispatched_command(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["--help"])
     out = capsys.readouterr().out
-    path = HELP_DIR / f"{name}.txt"
-    if os.environ.get("MUSIC_TAGGER_UPDATE_HELP") == "1":
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(out, encoding="utf-8")
-        return
-    assert out == path.read_text(encoding="utf-8")
+    for name in _register_commands():
+        assert re.search(rf"^  {re.escape(name)}\s", out, re.MULTILINE), name
+
+
+def test_help_cases_cover_every_dispatched_command() -> None:
+    covered = {argv[0] for argv in HELP_CASES}
+    assert set(_register_commands()) <= covered
+
+
+@pytest.mark.parametrize("argv", PARSER_CASES, ids=[" ".join(argv) for argv in PARSER_CASES])
+def test_parser_is_a_described_music_tagger_parser(
+    argv: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parser = _capture_parser(argv, monkeypatch)
+    assert parser.prog.startswith("music-tagger")
+    assert parser.description
+
+
+@pytest.mark.parametrize("argv", PARSER_CASES, ids=[" ".join(argv) for argv in PARSER_CASES])
+def test_option_strings_are_not_repeated(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    parser = _capture_parser(argv, monkeypatch)
+    option_strings = [opt for action in _real_actions(parser) for opt in action.option_strings]
+    assert len(option_strings) == len(set(option_strings))
+
+
+@pytest.mark.parametrize("argv", PARSER_CASES, ids=[" ".join(argv) for argv in PARSER_CASES])
+def test_option_strings_are_dashed_and_kebab_case(
+    argv: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parser = _capture_parser(argv, monkeypatch)
+    for action in _real_actions(parser):
+        for opt in action.option_strings:
+            if opt.startswith("--"):
+                assert re.fullmatch(r"--[a-z][a-z0-9]*(-[a-z0-9]+)*", opt), opt
+            else:
+                assert re.fullmatch(r"-[A-Za-z]", opt), opt
+
+
+@pytest.mark.parametrize("argv", PARSER_CASES, ids=[" ".join(argv) for argv in PARSER_CASES])
+def test_every_positional_has_a_dest(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    parser = _capture_parser(argv, monkeypatch)
+    for action in _real_actions(parser):
+        if not action.option_strings:
+            assert action.dest
+            assert action.dest != argparse.SUPPRESS

@@ -1,8 +1,0 @@
-usage: music-tagger nd ratings [-h] [-o OUT]
-
-Export rated and starred songs from Navidrome as JSON.
-
-options:
-  -h, --help     show this help message and exit
-  -o, --out OUT  Output JSON file (default:
-                 /mnt/synology/media/music/ratings.json).

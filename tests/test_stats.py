@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from music_tagger.stats import (
+    MAX_DROP_FRACTION,
     SNAPSHOT_VERSION,
     SnapshotError,
     SongStats,
@@ -381,13 +382,28 @@ class TestDropGuard:
         assert previous.read_bytes() == before_previous
         assert _names(tmp_path) == ["stats.json", "stats.json.previous"]
 
-    def test_drop_of_exactly_ten_percent_is_allowed(self, tmp_path: Path) -> None:
+    def test_drop_at_the_limit_is_allowed(self, tmp_path: Path) -> None:
         dest = tmp_path / "stats.json"
-        write_snapshot_file(_library(10, starred=10), dest)
+        total = round(10 / MAX_DROP_FRACTION)
+        limit = round(total * MAX_DROP_FRACTION)
+        assert total * MAX_DROP_FRACTION == limit
+        write_snapshot_file(_library(total, starred=total), dest)
 
-        write_snapshot_file(_library(10, starred=9), dest)
+        write_snapshot_file(_library(total, starred=total - limit), dest)
 
-        assert sum(song.starred is True for song in read_snapshot(dest).songs) == 9
+        starred = sum(song.starred is True for song in read_snapshot(dest).songs)
+        assert starred == total - limit
+
+    def test_drop_one_past_the_limit_is_refused(self, tmp_path: Path) -> None:
+        dest = tmp_path / "stats.json"
+        total = round(10 / MAX_DROP_FRACTION)
+        limit = round(total * MAX_DROP_FRACTION)
+        write_snapshot_file(_library(total, starred=total), dest)
+
+        with pytest.raises(
+            SnapshotError, match=rf"starred count would fall from {total} to {total - limit - 1}"
+        ):
+            write_snapshot_file(_library(total, starred=total - limit - 1), dest)
 
     def test_force_replaces_a_large_drop_and_rotates(self, tmp_path: Path) -> None:
         dest = tmp_path / "stats.json"

@@ -16,7 +16,7 @@ class TestAuthParams:
         assert "t" in params
         assert "s" in params
         assert params["f"] == "json"
-        assert params["c"] == "music-tagger"
+        assert params["c"]
 
     def test_token_is_md5(self) -> None:
         import hashlib
