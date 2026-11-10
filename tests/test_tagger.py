@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from mutagen.flac import FLAC
 
 from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.tagger import (
@@ -16,6 +17,7 @@ from music_tagger.tagger import (
     _build_new_tags,
     apply_changes,
     build_diff,
+    duplicate_track_keys,
     overwrites_needing_review,
     resolve_isrc_conflicts,
     score_candidates,
@@ -1633,3 +1635,94 @@ class TestMultiValuedDiffJson:
         restored = AlbumResult.from_dict(result.to_dict())
 
         assert restored.diffs[0].changes == [change]
+
+
+def _hidden_file(name: str = "00. Hidden Track One Audio.flac", **extra: str) -> TrackTags:
+    tags = {"tracknumber": "0", "discnumber": "1", "title": "Hidden Track One Audio", **extra}
+    return TrackTags(Path("/music") / name, tags, duration_secs=209.0, format="flac")
+
+
+def _album_with_hidden_track() -> AlbumTags:
+    numbered = [_file(f"0{n}.flac", tracknumber=str(n), discnumber="1") for n in (1, 2, 3)]
+    return AlbumTags(Path("/music"), [*numbered, _hidden_file()])
+
+
+class TestHiddenTrack:
+    def test_hidden_file_is_not_counted_against_the_release(self) -> None:
+        [match] = score_candidates(_album_with_hidden_track(), [_make_release()])
+
+        assert match.stats.track_count_match
+        assert "partial" not in match.flags
+
+    def test_numbered_files_are_matched_and_the_album_is_not_partial(self) -> None:
+        result = build_diff(_album_with_hidden_track(), _make_release())
+
+        titles = [
+            {c.field: c.new_value for c in diff.changes}.get("title") for diff in result.diffs[:3]
+        ]
+        assert titles == ["Doolin-Dalton", "Twenty-One", "Out of Control"]
+        assert all("no release track" not in w for diff in result.diffs for w in diff.warnings)
+
+    def test_hidden_file_gets_album_fields_only_and_a_note(self) -> None:
+        result = build_diff(_album_with_hidden_track(), _make_release())
+        hidden = result.diffs[3]
+        fields = {c.field for c in hidden.changes}
+
+        assert "musicbrainz_albumid" in fields
+        assert "album" in fields
+        assert fields.isdisjoint({"title", "tracknumber", "artist"})
+        assert hidden.warnings == [
+            "00. Hidden Track One Audio.flac: hidden track before track 1; album fields only"
+        ]
+
+    def test_single_hidden_file_is_not_a_duplicate_key(self) -> None:
+        assert duplicate_track_keys(_album_with_hidden_track()) == {}
+
+    def test_two_hidden_files_on_one_disc_are_still_a_duplicate(self) -> None:
+        album = AlbumTags(
+            Path("/music"),
+            [
+                _hidden_file("00 a.flac"),
+                _hidden_file("00 b.flac"),
+                _file("01.flac", tracknumber="1"),
+            ],
+        )
+
+        assert set(duplicate_track_keys(album)) == {(1, 0)}
+
+    def test_hidden_file_is_not_matched_to_a_release_track_in_a_partial_album(self) -> None:
+        # Two numbered files and a hidden file: the release has three tracks, so the album is
+        # partial. The hidden file's duration fits release track 1, but it must not take it.
+        album = AlbumTags(
+            Path("/music"),
+            [
+                _file("01.flac", tracknumber="1", discnumber="1", title="Doolin-Dalton"),
+                _file("02.flac", tracknumber="2", discnumber="1", title="Twenty-One"),
+                _hidden_file(),
+            ],
+        )
+
+        result = build_diff(album, _make_release())
+        hidden = result.diffs[2]
+
+        assert not {"title", "tracknumber"} & {c.field for c in hidden.changes}
+        assert hidden.warnings == [
+            "00. Hidden Track One Audio.flac: hidden track before track 1; album fields only"
+        ]
+
+
+class TestDiscTotalReadOrder:
+    def test_build_diff_proposes_the_disctotal_of_a_one_disc_release(
+        self, flac_album: Path
+    ) -> None:
+        for path in flac_album.glob("*.flac"):
+            audio = FLAC(path)
+            audio["TOTALDISCS"] = ["1"]
+            audio["DISCTOTAL"] = ["2"]
+            audio.save()
+
+        result = build_diff(read_album(flac_album), _make_release())
+        changes = {c.field: c for c in result.diffs[0].changes}
+
+        assert "totaldiscs" in changes
+        assert (changes["totaldiscs"].old_value, changes["totaldiscs"].new_value) == ("2", "1")

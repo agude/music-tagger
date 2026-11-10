@@ -791,7 +791,7 @@ def _rename(argv: list[str] | None = None) -> None:
             print(f"Error: rename failed and was reverted: {error.cause}", file=sys.stderr)
             sys.exit(1)
         planned = set(pairs)
-        landed = {pair for pair in error.stranded if pair in planned}
+        landed = {(src, now) for src, now, _ in error.stranded if (src, now) in planned}
         log_path = _log_path(args)
         if log_path and landed:
             _write_rename_log(
@@ -806,8 +806,8 @@ def _rename(argv: list[str] | None = None) -> None:
             f"{error.cause}",
             file=sys.stderr,
         )
-        for src, now in error.stranded:
-            print(f"  {src.name} is now {now.name}", file=sys.stderr)
+        for src, now, reason in error.stranded:
+            print(f"  {src.name} is now {now.name} ({reason})", file=sys.stderr)
         sys.exit(1)
 
     renames: list[tuple[str, str]] = []
@@ -828,6 +828,11 @@ def _rename(argv: list[str] | None = None) -> None:
         _write_rename_log(log_path, album, renames, cues, sidecar_renames)
 
 
+def _path_key(path: Path) -> tuple[Path, str]:
+    """A path's identity within its directory, case-insensitive as the NAS share is."""
+    return (path.parent, path.name.casefold())
+
+
 def _is_same_file(a: Path, b: Path) -> bool:
     """True when both paths name one file. Falls back to a case-insensitive name match
     when the file system cannot answer (the target does not exist, or is missing)."""
@@ -840,11 +845,11 @@ def _is_same_file(a: Path, b: Path) -> bool:
 class RenameFailedError(OSError):
     """A rename failed. `stranded` lists each file the revert could not move back.
 
-    Each entry is (original path, path the file has now). An empty list means the
-    revert restored every file.
+    Each entry is (original path, path the file has now, the revert's error text).
+    An empty list means the revert restored every file.
     """
 
-    def __init__(self, cause: OSError, stranded: list[tuple[Path, Path]]) -> None:
+    def __init__(self, cause: OSError, stranded: list[tuple[Path, Path, str]]) -> None:
         super().__init__(str(cause))
         self.cause = cause
         self.stranded = stranded
@@ -870,23 +875,29 @@ def _two_phase_rename(pairs: list[tuple[Path, Path]]) -> None:
             temporary.rename(target)
             finished.append(item)
     except OSError as cause:
-        stranded: list[tuple[Path, Path]] = []
+        stranded: list[tuple[Path, Path, str]] = []
         at_target: set[Path] = set()
+        # The source whose stranded file sits at each occupied path, by path key.
+        held: dict[tuple[Path, str], Path] = {}
         for source, temporary, target in reversed(finished):
             try:
                 target.rename(temporary)
             except OSError as error:
-                print(f"Error: could not revert {target}: {error}", file=sys.stderr)
-                stranded.append((source, target))
+                stranded.append((source, target, str(error)))
                 at_target.add(source)
+                held[_path_key(target)] = source
         for source, temporary, _ in reversed(staged):
             if source in at_target:
+                continue
+            holder = held.get(_path_key(source))
+            if holder is not None:
+                # Renaming onto this path would replace the stranded file that sits there.
+                stranded.append((source, temporary, f"{source.name} is held by {holder.name}"))
                 continue
             try:
                 temporary.rename(source)
             except OSError as error:
-                print(f"Error: could not revert {temporary}: {error}", file=sys.stderr)
-                stranded.append((source, temporary))
+                stranded.append((source, temporary, str(error)))
         raise RenameFailedError(cause, stranded) from cause
 
 

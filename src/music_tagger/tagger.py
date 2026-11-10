@@ -207,6 +207,21 @@ class CandidateMatch:
         )
 
 
+def _is_hidden_track(track: TrackTags) -> bool:
+    """True for a hidden track: the audio whipper rips before track 1, numbered 0."""
+    return parse_position(track.tags.get("tracknumber", "")) == 0
+
+
+def _counted_tracks(album: AlbumTags) -> list[TrackTags]:
+    """The files compared with a release: every file except a hidden track."""
+    return [track for track in album.tracks if not _is_hidden_track(track)]
+
+
+def counted_track_count(album: AlbumTags) -> int:
+    """How many files the album is compared with a release by: hidden tracks not counted."""
+    return len(_counted_tracks(album))
+
+
 def score_candidates(
     album: AlbumTags,
     candidates: list[MBRelease],
@@ -227,7 +242,7 @@ def score_candidates(
     # With duplicate keys the first file keeps the key; the flag reports the problem.
     duplicates = duplicate_track_keys(album)
     local_by_key: dict[tuple[int, int], float] = {}
-    for track in album.tracks:
+    for track in _counted_tracks(album):
         disc = disc_number(track)
         tnum = parse_position(track.tags.get("tracknumber", ""))
         if tnum is not None:
@@ -247,7 +262,7 @@ def score_candidates(
             CandidateMatch(
                 release=candidate,
                 stats=MatchStats(
-                    track_count_match=candidate.track_count == album.track_count,
+                    track_count_match=candidate.track_count == len(_counted_tracks(album)),
                     tracks_within_2s=within_2s,
                     tracks_compared=compared,
                     max_deviation_secs=max_dev,
@@ -264,7 +279,8 @@ def _is_partial_match(
     album: AlbumTags, local_by_key: dict[tuple[int, int], float], candidate: MBRelease
 ) -> bool:
     """True when every local track's (disc, number) exists in a longer release."""
-    if album.track_count >= candidate.track_count or len(local_by_key) != album.track_count:
+    counted = len(_counted_tracks(album))
+    if counted >= candidate.track_count or len(local_by_key) != counted:
         return False
     release_keys = {
         (disc_num, mb_track.number)
@@ -598,8 +614,8 @@ def _match_stats(
     compared = 0
     within_2s = 0
     max_dev = 0.0
-    if album.track_count < candidate.track_count:
-        for track in album.tracks:
+    if len(_counted_tracks(album)) < candidate.track_count:
+        for track in _counted_tracks(album):
             disc_num = disc_number(track)
             index = _find_partial_track(track, candidate, disc_num)
             if index is None:
@@ -624,6 +640,13 @@ def _match_stats(
             if dev <= _MATCH_TOLERANCE_SECS:
                 within_2s += 1
     return compared, within_2s, max_dev
+
+
+def _drop_track_artist(new_tags: dict[str, str], new_multi: dict[str, tuple[str, ...]]) -> None:
+    """Remove the track artist from a proposal: no release track names it for this file."""
+    new_tags.pop("artist", None)
+    new_multi.pop("artists", None)
+    new_multi.pop("musicbrainz_artistid", None)
 
 
 def build_diff(album: AlbumTags, release: MBRelease, *, ignore_locks: bool = False) -> AlbumResult:
@@ -661,12 +684,15 @@ def build_diff(album: AlbumTags, release: MBRelease, *, ignore_locks: bool = Fal
     if duplicates:
         raise DuplicateTrackError(duplicate_track_message(duplicates))
 
-    partial = album.track_count < release.track_count
+    partial = len(_counted_tracks(album)) < release.track_count
     partial_matches: list[int | None] = []
     shared_with: dict[int, list[TrackTags]] = {}
     if partial:
         partial_matches = [
-            _find_partial_track(track, release, disc_number(track)) for track in album.tracks
+            None
+            if _is_hidden_track(track)
+            else _find_partial_track(track, release, disc_number(track))
+            for track in album.tracks
         ]
         # A release track claimed by two files is claimed by neither.
         claimants: dict[tuple[int, int], list[int]] = {}
@@ -712,7 +738,13 @@ def build_diff(album: AlbumTags, release: MBRelease, *, ignore_locks: bool = Fal
             unmatched_index = len(release.discs.get(disc_num, []))
             new_tags = _build_new_tags(release, track, unmatched_index, disc_num)
             new_multi = _build_new_multi(release, track, unmatched_index, disc_num)
-            if partial and position in shared_with:
+            if _is_hidden_track(track):
+                # Album fields only, so Navidrome keeps the hidden track in the album.
+                _drop_track_artist(new_tags, new_multi)
+                warnings.append(
+                    f"{track.path.name}: hidden track before track 1; album fields only"
+                )
+            elif partial and position in shared_with:
                 others = ", ".join(other.path.name for other in shared_with[position])
                 warnings.append(
                     f"{track.path.name}: matches the same release track as {others}; "
@@ -725,10 +757,7 @@ def build_diff(album: AlbumTags, release: MBRelease, *, ignore_locks: bool = Fal
                 )
             else:
                 # A full album file that matches no release track: album fields only.
-                # Its artist is not proposed, since no release track names it.
-                new_tags.pop("artist", None)
-                new_multi.pop("artists", None)
-                new_multi.pop("musicbrainz_artistid", None)
+                _drop_track_artist(new_tags, new_multi)
                 track_label = "(none)" if track_num is None else str(track_num)
                 warnings.append(
                     f"{track.path.name}: no release track for disc {disc_num} track {track_label}; "

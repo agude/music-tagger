@@ -211,6 +211,119 @@ class TestRenameLogsPartialFailure:
         assert "01. Desperado.flac" in text
         assert "Twenty-One" not in text
 
+    def test_stranded_file_is_reported_once_with_its_error(
+        self, flac_album: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        tracks = read_album(flac_album).tracks
+        for track, title in zip(tracks, ["Desperado", "Twenty-One", "Out of Control"], strict=True):
+            write_tags(track, [TagChange("title", track.tags["title"], title)])
+        source_name = tracks[0].path.name
+        real_rename = Path.rename
+
+        def fail_second_and_its_revert(self: Path, target: str | Path) -> Path:
+            name = Path(target).name
+            if name == "02. Twenty-One.flac":
+                raise OSError("disk full")
+            if self.name == "01. Desperado.flac" and name.endswith(".tmp"):
+                raise OSError("share went away")
+            return real_rename(self, target)
+
+        with (
+            patch.object(Path, "rename", fail_second_and_its_revert),
+            pytest.raises(SystemExit) as error,
+        ):
+            _rename([str(flac_album)])
+
+        assert error.value.code == 1
+        err = capsys.readouterr().err
+        assert err.count("01. Desperado.flac") == 1
+        assert f"  {source_name} is now 01. Desperado.flac (share went away)" in err
+
+
+def _swap_two_files(flac_album: Path) -> None:
+    """Two files whose targets are each other's names: "01. Alpha" becomes track 2 Beta."""
+    (flac_album / "03 - Track 3.flac").unlink()
+    first, second = sorted(flac_album.glob("*.flac"))
+    alpha = flac_album / "01. Alpha.flac"
+    beta = flac_album / "02. Beta.flac"
+    first.rename(alpha)
+    second.rename(beta)
+    write_tags(
+        read_album(flac_album).tracks[0],
+        [TagChange("tracknumber", "", "2"), TagChange("title", "", "Beta")],
+    )
+    write_tags(
+        read_album(flac_album).tracks[1],
+        [TagChange("tracknumber", "", "1"), TagChange("title", "", "Alpha")],
+    )
+
+
+class TestRenameSwapRollbackKeepsEveryFile:
+    def test_failed_swap_revert_does_not_replace_a_stranded_file(
+        self, flac_album: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from music_tagger.cli.library import _rename
+
+        _swap_two_files(flac_album)
+        before = sorted(p.read_bytes() for p in flac_album.iterdir())
+        real_rename = Path.rename
+        beta_moves = {"count": 0}
+
+        def fail_swap_and_its_revert(self: Path, target: str | Path) -> Path:
+            name = Path(target).name
+            if name == "01. Alpha.flac" and self.name.endswith(".tmp"):
+                raise OSError("disk full")
+            if self.name == "02. Beta.flac" and name.endswith(".tmp"):
+                # The first such move is phase 1 of the swap; the second reverts Beta.
+                beta_moves["count"] += 1
+                if beta_moves["count"] == 2:
+                    raise OSError("share went away")
+            return real_rename(self, target)
+
+        with (
+            patch.object(Path, "rename", fail_swap_and_its_revert),
+            pytest.raises(SystemExit) as error,
+        ):
+            _rename([str(flac_album)])
+
+        assert error.value.code == 1
+        after = sorted(p.read_bytes() for p in flac_album.iterdir())
+        assert after == before
+        err = capsys.readouterr().err
+        assert "01. Alpha.flac is now 02. Beta.flac (share went away)" in err
+        assert "02. Beta.flac is held by 01. Alpha.flac" in err
+
+
+class TestRenameCaseVariantHeld:
+    def test_source_matching_a_stranded_path_in_case_is_held(self, tmp_path: Path) -> None:
+        from music_tagger.cli.library import RenameFailedError, _two_phase_rename
+
+        alpha = tmp_path / "a.flac"
+        beta = tmp_path / "B.flac"
+        alpha.write_bytes(b"audio-A")
+        beta.write_bytes(b"audio-B")
+        real_rename = Path.rename
+
+        def fail_onto_a_and_revert_onto_b(self: Path, target: str | Path) -> Path:
+            name = Path(target).name
+            if name == "a.flac" and self.name.endswith(".tmp"):
+                raise OSError("disk full")
+            if name.endswith(".tmp") and self.name == "b.flac":
+                raise OSError("share went away")
+            return real_rename(self, target)
+
+        with (
+            patch.object(Path, "rename", fail_onto_a_and_revert_onto_b),
+            pytest.raises(RenameFailedError) as error,
+        ):
+            _two_phase_rename([(alpha, tmp_path / "b.flac"), (beta, alpha)])
+
+        held = [entry for entry in error.value.stranded if entry[0] == beta]
+        assert len(held) == 1
+        assert held[0][2] == "B.flac is held by a.flac"
+        assert held[0][1].exists()
+        assert sorted(p.read_bytes() for p in tmp_path.iterdir()) == [b"audio-A", b"audio-B"]
+
 
 class TestArtLogsPartialFailure:
     def test_embed_failure_logs_the_files_embedded_so_far(

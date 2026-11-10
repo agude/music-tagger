@@ -2984,6 +2984,65 @@ class TestUnmatchedFileWarningInTag:
         assert f"{name}: no release track for disc 1 track 13; only album fields proposed" in err
 
 
+class TestHiddenTrackInTag:
+    def _add_hidden_file(self, flac_album: Path) -> None:
+        first = sorted(flac_album.glob("*.flac"))[0]
+        hidden = flac_album / "00. Hidden Track One Audio.flac"
+        shutil.copy(first, hidden)
+        audio = FLAC(hidden)
+        audio["TRACKNUMBER"] = ["0"]
+        audio["TITLE"] = ["Hidden Track One Audio"]
+        audio.save()
+
+    def test_candidates_counts_the_hidden_file_separately(
+        self, flac_album: Path, capsys: object
+    ) -> None:
+        self._add_hidden_file(flac_album)
+        release = _desperado_release()
+        release.track_count = 3
+
+        _run_candidates(flac_album, [release])
+
+        out = capsys.readouterr().out  # type: ignore[attr-defined]
+        assert "(3 tracks + hidden track)" in out
+        assert "3/3" in out
+
+    def test_read_header_counts_the_hidden_file_separately(
+        self, flac_album: Path, tmp_path: Path, capsys: object
+    ) -> None:
+        from music_tagger.cli.tagging import _read
+
+        self._add_hidden_file(flac_album)
+
+        _read([str(flac_album), "-o", str(tmp_path / "evidence.json")])
+
+        out = capsys.readouterr().out  # type: ignore[attr-defined]
+        assert "(3 tracks + hidden track, FLAC)" in out
+
+    def test_tag_dry_run_notes_the_hidden_track_without_a_no_release_warning(
+        self, flac_album: Path, capsys: object
+    ) -> None:
+        from music_tagger.cli.tagging import _tag
+
+        first = sorted(flac_album.glob("*.flac"))[0]
+        hidden = flac_album / "00. Hidden Track One Audio.flac"
+        shutil.copy(first, hidden)
+        audio = FLAC(hidden)
+        audio["TRACKNUMBER"] = ["0"]
+        audio["TITLE"] = ["Hidden Track One Audio"]
+        audio.save()
+
+        with patch("music_tagger.cli.tagging.MusicBrainzClient") as client:
+            client.return_value.fetch_release.return_value = _gate_release("Desperado")
+            _tag([str(flac_album), "--release-id", "r-1", "--dry-run"])
+
+        err = capsys.readouterr().err  # type: ignore[attr-defined]
+        assert (
+            "00. Hidden Track One Audio.flac: hidden track before track 1; album fields only" in err
+        )
+        assert "no release track" not in err
+
+
 class TestUnreadableFiles:
     def _bad(self, flac_album: Path) -> Path:
         bad = flac_album / "bad.flac"

@@ -295,13 +295,17 @@ _VORBIS_COMMENT_BLOCK = 4
 # Vorbis keys other taggers use for a field, read when the canonical key is absent.
 # whipper writes DISCTOTAL, not TOTALDISCS.
 _FLAC_ALIASES: dict[str, tuple[str, ...]] = {"totaldiscs": ("DISCTOTAL",)}
+# Keys read for a field, in order; the first present one wins. Navidrome and
+# ripper.read_disc_position prefer DISCTOTAL, so a stale TOTALDISCS must not hide it.
+_FLAC_READ_ORDER: dict[str, tuple[str, ...]] = {"totaldiscs": ("DISCTOTAL", "TOTALDISCS")}
 
 
 def _flac_tags_from_lookup(lookup: Callable[[str], Sequence[str] | None]) -> dict[str, str]:
     """Map Vorbis comments onto FIELD_MAP names; lookup(key) returns values, first wins."""
     tags: dict[str, str] = {}
     for canonical, (vorbis_key, _) in FIELD_MAP.items():
-        for key in (vorbis_key, *_FLAC_ALIASES.get(canonical, ())):
+        keys = _FLAC_READ_ORDER.get(canonical, (vorbis_key, *_FLAC_ALIASES.get(canonical, ())))
+        for key in keys:
             values = lookup(key)
             if values:
                 tags[canonical] = values[0]

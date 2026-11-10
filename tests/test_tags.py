@@ -1652,6 +1652,37 @@ class TestWhipperDiscTotal:
 
         assert tags["totaldiscs"] == "2"
 
+    def test_disctotal_wins_over_a_stale_totaldiscs(self, flac_album: Path) -> None:
+        path = sorted(flac_album.glob("*.flac"))[0]
+        audio = FLAC(path)
+        # A stale TOTALDISCS must not hide the DISCTOTAL that Navidrome reads first.
+        audio["TOTALDISCS"] = ["1"]
+        audio["DISCTOTAL"] = ["2"]
+        audio.save()
+
+        tags = read_album(flac_album).tracks[0].tags
+
+        assert tags["totaldiscs"] == "2"
+
+    def test_file_with_only_totaldiscs_reads_it(self, flac_album: Path) -> None:
+        tags = read_album(flac_album).tracks[0].tags
+
+        assert tags["totaldiscs"] == "1"
+
+    def test_write_brings_totaldiscs_and_disctotal_to_one_value(self, flac_album: Path) -> None:
+        path = sorted(flac_album.glob("*.flac"))[0]
+        audio = FLAC(path)
+        audio["TOTALDISCS"] = ["1"]
+        audio["DISCTOTAL"] = ["2"]
+        audio.save()
+        track = read_album(flac_album).tracks[0]
+
+        write_tags(track, [TagChange("totaldiscs", "2", "1")])
+
+        audio = FLAC(path)
+        assert audio["TOTALDISCS"] == ["1"]
+        assert audio["DISCTOTAL"] == ["1"]
+
     def _whipper_total(self, path: Path, total: str) -> None:
         audio = FLAC(path)
         audio.pop("TOTALDISCS", None)

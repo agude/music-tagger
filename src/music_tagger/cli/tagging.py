@@ -19,6 +19,7 @@ from ..tagger import (
     TrackDiff,
     apply_changes,
     build_diff,
+    counted_track_count,
     duplicate_track_keys,
     duplicate_track_message,
     resolve_isrc_conflicts,
@@ -80,7 +81,7 @@ def _read(argv: list[str] | None = None) -> None:
     data = album.to_dict()
 
     fmt = album.tracks[0].format.upper()
-    lines = [f"{album.artist} — {album.album} ({album.track_count} tracks, {fmt})"]
+    lines = [f"{album.artist} — {album.album} ({_track_count_label(album)}, {fmt})"]
     for track in album.tracks:
         dur = f"{track.duration_secs:.1f}s"
         title = track.tags.get("title", track.path.name)
@@ -354,7 +355,7 @@ def _print_candidates(argv: list[str] | None = None) -> None:
     searched = f'artist="{args.artist or album.artist}" album="{args.album or album.album}"'
     if args.barcode:
         searched += f' barcode="{args.barcode}"'
-    print(f"Local: {album.artist} — {album.album} ({album.track_count} tracks)")
+    print(f"Local: {album.artist} — {album.album} ({_track_count_label(album)})")
     print(f"Searched: {searched}")
     print()
     if not matches:
@@ -382,13 +383,22 @@ _CANDIDATE_COLUMNS = [
 ]
 
 
+def _track_count_label(album: AlbumTags) -> str:
+    """Track count for display: "3 tracks", or "3 tracks + hidden track" with a hidden file."""
+    hidden = album.track_count - counted_track_count(album)
+    label = f"{counted_track_count(album)} tracks"
+    if hidden == 1:
+        return f"{label} + hidden track"
+    return f"{label} + {hidden} hidden tracks" if hidden else label
+
+
 def _candidate_row(rank: int, match: CandidateMatch, album: AlbumTags) -> list[str]:
     release = match.release
     stats = match.stats
     return [
         str(rank),
         release.id,
-        f"{album.track_count}/{release.track_count}",
+        f"{counted_track_count(album)}/{release.track_count}",
         f"{stats.tracks_within_2s}/{stats.tracks_compared}",
         f"{stats.max_deviation_secs:.1f}s",
         release.country or "-",

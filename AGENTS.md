@@ -81,8 +81,11 @@ Key CLI subcommands, driven by Claude Code in conversation:
    rename (exit 1, nothing renamed) unless it is another file this rename moves,
    so two files may swap names, or the same file, so a case-only change works.
    Renames go through temporary names; a failure reverts the renames already
-   made. A file the revert cannot move back is printed as `<old> is now <name>`,
-   and logged when it reached its planned name. `apply` stops at rename on exit 1. Rewrites the `FILE "…"` lines of every `.cue` in the
+   made. A file the revert cannot move back is printed once, as `<old> is now
+   <name> (<error>)`, and logged when it reached its planned name. Nothing is
+   renamed onto a path that holds a stranded file: a source at such a path stays
+   under its temporary name and is printed as `<old> is now <temp> (<old> is held
+   by <other>)`, so a swap never replaces a file. `apply` stops at rename on exit 1. Rewrites the `FILE "…"` lines of every `.cue` in the
    album for the renamed files and warns about any FILE line naming a file
    that does not exist.
 
@@ -203,6 +206,9 @@ Processing the library is staged album by album across sessions:
 ## Matching rules
 
 - Track count must match (except partial albums / singles).
+- A hidden track (tracknumber 0, the audio whipper rips before track 1) is
+  not counted. It gets album fields only, with the note `hidden track before
+  track 1; album fields only`. Two hidden files on one disc are a duplicate.
 - Partial albums: a file's tracknumber is trusted only when that release
   track's duration (within 2 s) or title agrees with the file. Otherwise the
   file matches the one release track on its disc that fits by duration, with a
@@ -678,8 +684,9 @@ inspection write no log. `lyrics-batch` follows the same rule.
 - `date` (FLAC `DATE`, MP3 `TDRC`) is the recording date — never overwritten
   by the MB release date. When empty, populated from the release group's
   `first_release_date`.
-- FLAC `totaldiscs` is read from `TOTALDISCS`, else `DISCTOTAL` (whipper writes
-  only `DISCTOTAL`, counting every medium of the release, DVDs included). A write
+- FLAC `totaldiscs` is read from `DISCTOTAL`, else `TOTALDISCS` (whipper writes
+  only `DISCTOTAL`, counting every medium of the release, DVDs included; a stale
+  `TOTALDISCS` never hides it). A write
   also sets `DISCTOTAL` when the file has one, and a clear removes it, so the two
   never disagree. Navidrome's `mappings.yaml` lists `disctotal` before
   `totaldiscs`. A multi-disc album, for `rename` and `place`, is one whose
