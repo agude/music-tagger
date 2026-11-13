@@ -562,6 +562,33 @@ class TestLookupToc:
         assert len(releases) == 1
         assert releases[0].id == "release-toc"
 
+    def test_medium_with_null_format_is_counted_as_audio(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "releases": [
+                {
+                    "id": "release-null-format",
+                    "title": "Album",
+                    "date": "2020",
+                    "country": "US",
+                    "status": "Official",
+                    "barcode": "",
+                    "label-info": [],
+                    "media": [{"format": None, "track-count": 5}],
+                }
+            ]
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        client = MusicBrainzClient()
+        client._client = MagicMock()
+        client._client.get.return_value = mock_resp
+
+        releases = client.lookup_toc("1 3 200000 150 15000 30000")
+        assert len(releases) == 1
+        assert releases[0].track_count == 5
+
 
 class TestBuildArtistCredit:
     def test_single_artist(self) -> None:

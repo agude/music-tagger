@@ -349,7 +349,7 @@ NON_AUDIO_FORMATS = frozenset(
 
 
 def _is_audio_medium(medium: dict[str, Any]) -> bool:
-    return medium.get("format", "").casefold() not in NON_AUDIO_FORMATS
+    return (medium.get("format") or "").casefold() not in NON_AUDIO_FORMATS
 
 
 class MusicBrainzClient:
