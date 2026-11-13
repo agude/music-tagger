@@ -17,6 +17,7 @@ from ..tagger import (
     CandidateMatch,
     DuplicateTrackError,
     TrackDiff,
+    _check_locks,
     apply_changes,
     build_diff,
     counted_track_count,
@@ -28,8 +29,11 @@ from ..tagger import (
 )
 from ..tags import (
     LOCKABLE_FIELDS,
+    MULTI_VALUE_FIELDS,
     AlbumTags,
+    TagChange,
     TrackTags,
+    compute_diff,
     disc_number,
     parse_position,
     read_album,
@@ -159,13 +163,18 @@ def _diff(argv: list[str] | None = None) -> None:
         default=None,
         help="Output JSON file (prints digest to stdout).",
     )
+    parser.add_argument(
+        "--keep-existing-credits",
+        action="store_true",
+        help="Keep existing personnel credits that the release omits, after its current credits.",
+    )
     args = parser.parse_args(argv)
 
     album = AlbumTags.from_dict(json.loads(args.evidence.read_text()))
     release = MBRelease.from_dict(json.loads(args.release.read_text()))
 
     try:
-        result = build_diff(album, release)
+        result = build_diff(album, release, keep_existing_credits=args.keep_existing_credits)
     except DuplicateTrackError as error:
         print(f"Error: {error}", file=sys.stderr)
         sys.exit(1)
@@ -243,6 +252,189 @@ def _write_tags(argv: list[str] | None = None) -> None:
         print(f"Updated {count} track(s).")
     else:
         print("No tag changes to apply.")
+
+
+def _edit_tags(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="music-tagger edit-tags",
+        description="Set or clear selected metadata fields on one file or an entire album.",
+    )
+    parser.add_argument("path", type=Path, help="Album directory.")
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--file", type=Path, help="File path within the album.")
+    selection.add_argument("--all", action="store_true", help="Edit every readable audio file.")
+    parser.add_argument(
+        "--set",
+        dest="set_values",
+        action="append",
+        default=[],
+        metavar="FIELD=VALUE",
+        help="Set one field. Repeat for separate values of a multi-valued field.",
+    )
+    parser.add_argument(
+        "--clear",
+        dest="clear_fields",
+        action="append",
+        default=[],
+        metavar="FIELD",
+        help="Clear one field.",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Show changes without writing.")
+    parser.add_argument(
+        "--approve-overwrites",
+        action="store_true",
+        help="Allow overwrites of non-empty title, artist, album, albumartist, or date.",
+    )
+    _add_log_arguments(parser)
+    args = parser.parse_args(argv)
+
+    album_dir = args.path.resolve()
+    if not album_dir.is_dir():
+        print(f"Error: {album_dir} is not a directory.", file=sys.stderr)
+        sys.exit(1)
+
+    file_path = None
+    if args.file is not None:
+        file_path = args.file if args.file.is_absolute() else album_dir / args.file
+        file_path = file_path.resolve()
+        if not file_path.is_relative_to(album_dir):
+            print("Error: --file must resolve inside the album directory.", file=sys.stderr)
+            sys.exit(1)
+    album = read_album(album_dir)
+    tracks = [item for item in album.tracks if args.all or item.path.resolve() == file_path]
+    if args.all and album.unreadable:
+        print("Error: album contains unreadable audio files; nothing written.", file=sys.stderr)
+        sys.exit(1)
+    if not tracks:
+        print(f"Error: {file_path} is not a readable audio file in the album.", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        diffs = []
+        for track in tracks:
+            changes = _manual_tag_changes(track, args.set_values, args.clear_fields)
+            if changes:
+                if track.format not in {"flac", "mp3"}:
+                    raise ValueError(f"{track.path}: general tag writes are unsupported")
+                diffs.append(TrackDiff(track, changes))
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    if not diffs:
+        print("No tag changes needed.")
+        return
+
+    result = AlbumResult(
+        album=album,
+        release=MBRelease(id="manual", title="Manual tag edit"),
+        diffs=diffs,
+    )
+    for diff in result.diffs:
+        if args.all:
+            print(f"  {diff.track.path.name}:")
+        for line in _format_change_lines(diff):
+            print(line)
+
+    try:
+        _check_locks(result)
+    except ValueError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.dry_run:
+        _check_gate(result, approve_overwrites=args.approve_overwrites, dry_run=True)
+        return
+
+    _check_gate(result, approve_overwrites=args.approve_overwrites, dry_run=False)
+    stale = _stale_changes(result)
+    if stale:
+        print(
+            "Error: a file changed since the edit was prepared; nothing written:", file=sys.stderr
+        )
+        for line in stale:
+            print(f"  {line}", file=sys.stderr)
+        sys.exit(1)
+
+    log = _BatchLog(_log_path(args), _manual_tag_log_header(album, tracks))
+    try:
+        count = apply_changes(result, on_written=lambda diff: _log_tag_diff(log, diff))
+    except (NotImplementedError, OSError, ValueError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        log.close()
+
+    if count:
+        print(f"Updated {count} track(s)." if args.all else f"Updated {tracks[0].path.name}.")
+    else:
+        print("No tag changes to apply.")
+
+
+def _manual_tag_changes(
+    track: TrackTags, assignments: list[str], clear_fields: list[str]
+) -> list[TagChange]:
+    """Build checked changes for direct field edits without flattening multi-values."""
+    set_values: dict[str, list[str]] = {}
+    for assignment in assignments:
+        field, separator, value = assignment.partition("=")
+        if not separator or not field or not value:
+            raise ValueError(f"invalid --set value {assignment!r}; use FIELD=VALUE")
+        set_values.setdefault(field, []).append(value)
+
+    if len(set(clear_fields)) != len(clear_fields):
+        raise ValueError("duplicate --clear field")
+    overlap = sorted(set(set_values) & set(clear_fields))
+    if overlap:
+        raise ValueError(f"cannot set and clear the same field: {', '.join(overlap)}")
+
+    requested = set(set_values) | set(clear_fields)
+    if unknown := sorted(requested - LOCKABLE_FIELDS):
+        raise ValueError(f"unknown or managed field(s): {', '.join(unknown)}")
+    special_fields = requested & {"genre", "rating", "fmps_rating", "starred", "starred_at"}
+    if special_fields:
+        raise ValueError(
+            "use the dedicated genre or stats commands for: " + ", ".join(sorted(special_fields))
+        )
+    repeated_single_fields = sorted(
+        field
+        for field, values in set_values.items()
+        if len(values) > 1 and field not in MULTI_VALUE_FIELDS
+    )
+    if repeated_single_fields:
+        raise ValueError(
+            "multiple --set values require multi-valued fields: "
+            + ", ".join(repeated_single_fields)
+        )
+
+    new_tags: dict[str, str] = {}
+    new_multi: dict[str, tuple[str, ...]] = {}
+    for field, values in set_values.items():
+        if field in MULTI_VALUE_FIELDS:
+            new_multi[field] = tuple(values)
+            continue
+        new_tags[field] = values[0]
+
+    for field in clear_fields:
+        if field in MULTI_VALUE_FIELDS:
+            new_multi[field] = ()
+            continue
+        new_tags[field] = ""
+
+    return compute_diff(track, new_tags, new_multi, exact_values=True)
+
+
+def _manual_tag_log_header(album: AlbumTags, tracks: list[TrackTags]) -> list[str]:
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return [
+        f"## Manual tag edit: {album.album or album.directory.name}",
+        "",
+        f"- **Date:** {timestamp}",
+        f"- **File:** {tracks[0].path}"
+        if len(tracks) == 1
+        else f"- **Directory:** {album.directory}",
+        "",
+    ]
 
 
 def _tag_log_header(result: AlbumResult) -> list[str]:
@@ -451,6 +643,11 @@ def _apply(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("path", type=Path, help="Album directory.")
     parser.add_argument("--release-id", required=True, help="MusicBrainz release UUID.")
+    parser.add_argument(
+        "--keep-existing-credits",
+        action="store_true",
+        help="Keep existing personnel credits that the release omits, after its current credits.",
+    )
     cover = parser.add_mutually_exclusive_group(required=True)
     cover.add_argument("--cover-file", type=Path, help="Install and embed this reviewed image.")
     cover.add_argument(
@@ -517,6 +714,8 @@ def _apply_tag_args(args: argparse.Namespace) -> list[str]:
         tag_args.append("--approve-overwrites")
     if args.ignore_locks:
         tag_args.append("--ignore-locks")
+    if args.keep_existing_credits:
+        tag_args.append("--keep-existing-credits")
     if args.isrc:
         tag_args += ["--isrc", args.isrc]
     for spec in args.isrc_code:
@@ -715,6 +914,11 @@ def _tag(argv: list[str] | None = None) -> None:
     parser.add_argument("path", type=Path, help="Album directory.")
     parser.add_argument("--release-id", required=True, help="MusicBrainz release UUID.")
     parser.add_argument("--dry-run", action="store_true", help="Show diff without writing.")
+    parser.add_argument(
+        "--keep-existing-credits",
+        action="store_true",
+        help="Keep existing personnel credits that the release omits, after its current credits.",
+    )
     _add_log_arguments(parser)
     parser.add_argument(
         "--ignore-locks",
@@ -764,7 +968,12 @@ def _tag(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     try:
-        result = build_diff(album, release, ignore_locks=args.ignore_locks)
+        result = build_diff(
+            album,
+            release,
+            ignore_locks=args.ignore_locks,
+            keep_existing_credits=args.keep_existing_credits,
+        )
     except DuplicateTrackError as error:
         print(f"Error: {error}", file=sys.stderr)
         sys.exit(1)

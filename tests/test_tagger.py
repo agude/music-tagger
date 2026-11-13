@@ -1616,6 +1616,112 @@ class TestMultiValuedArtists:
         assert [c.field for d in second.diffs for c in d.changes] == []
 
 
+class TestKeepExistingCredits:
+    def test_keeps_old_role_credits_and_ids_after_current_musicbrainz_values(self) -> None:
+        album = _three_track_album()
+        track = album.tracks[0]
+        track.tags.update(
+            {
+                "musicbrainz_albumid": "old-release",
+                "composer": "Old Composer; Shared Composer",
+                "musicbrainz_composerid": "old-composer-id; shared-id",
+                "lyricist": "Old Lyricist",
+                "musicbrainz_lyricistid": "old-lyricist-id",
+                "performer": "Old Performer; Shared Performer",
+                "musicbrainz_performerid": "old-performer-id; shared-performer-id",
+                "musicbrainz_workid": "old-work-id",
+                "musicbrainz_recordingid": "old-recording-id",
+            }
+        )
+        track.multi.update(
+            {
+                "composer": ("Old Composer; Shared Composer",),
+                "musicbrainz_composerid": ("old-composer-id; shared-id",),
+                "lyricist": ("Old Lyricist",),
+                "musicbrainz_lyricistid": ("old-lyricist-id",),
+            }
+        )
+        release = _make_release()
+        release.discs[1][0].composer = ("New Composer", "Shared Composer")
+        release.discs[1][0].composer_id = ("new-composer-id", "shared-id")
+        release.discs[1][0].performers = "New Performer; Shared Performer"
+        release.discs[1][0].performer_ids = "new-performer-id; shared-performer-id"
+        release.discs[1][0].work_id = "new-work-id"
+        release.discs[1][0].recording_id = "new-recording-id"
+
+        result = build_diff(album, release, keep_existing_credits=True)
+        changes = {change.field: change for change in result.diffs[0].changes}
+
+        assert changes["composer"].new_values == (
+            "New Composer",
+            "Shared Composer",
+            "Old Composer",
+        )
+        assert changes["musicbrainz_composerid"].new_values == (
+            "new-composer-id",
+            "shared-id",
+            "old-composer-id",
+        )
+        assert "lyricist" not in changes
+        assert "musicbrainz_lyricistid" not in changes
+        assert changes["performer"].new_value == ("New Performer; Shared Performer; Old Performer")
+        assert changes["musicbrainz_performerid"].new_value == (
+            "new-performer-id; shared-performer-id; old-performer-id"
+        )
+        assert changes["musicbrainz_workid"].new_value == "new-work-id"
+        assert changes["musicbrainz_recordingid"].new_value == "new-recording-id"
+
+    def test_default_mode_still_removes_omitted_credits(self) -> None:
+        album = _three_track_album({"musicbrainz_albumid": "old-release", "composer": "Old"})
+        album.tracks[0].multi["composer"] = ("Old",)
+        release = _make_release()
+        release.discs[1][0].composer = ("New",)
+
+        result = build_diff(album, release)
+
+        change = next(change for change in result.diffs[0].changes if change.field == "composer")
+        assert change.new_values == ("New",)
+
+    def test_merged_credits_are_idempotent(self) -> None:
+        album = _three_track_album()
+        track = album.tracks[0]
+        track.tags.update({"musicbrainz_albumid": "old-release", "composer": "Old"})
+        track.multi["composer"] = ("Old",)
+        release = _make_release()
+        release.discs[1][0].composer = ("New",)
+
+        first = build_diff(album, release, keep_existing_credits=True)
+        for change in first.diffs[0].changes:
+            if change.multi:
+                track.multi[change.field] = change.new_values
+                track.tags[change.field] = change.new_values[0]
+            else:
+                track.tags[change.field] = change.new_value
+        track.tags["musicbrainz_albumid"] = release.id
+        second = build_diff(album, release, keep_existing_credits=True)
+
+        assert not {
+            "composer",
+            "musicbrainz_composerid",
+            "performer",
+            "musicbrainz_performerid",
+        } & {change.field for change in second.diffs[0].changes}
+
+    def test_locked_credit_change_stays_locked(self) -> None:
+        album = _three_track_album()
+        track = album.tracks[0]
+        track.tags.update({"musicbrainz_albumid": "old-release", "composer": "Old"})
+        track.multi["composer"] = ("Old",)
+        track.locked_fields = ["composer"]
+        release = _make_release()
+        release.discs[1][0].composer = ("New",)
+
+        result = build_diff(album, release, keep_existing_credits=True)
+
+        assert not any(change.field == "composer" for change in result.diffs[0].changes)
+        assert any(change.field == "composer" for change in result.diffs[0].locked_changes)
+
+
 class TestMultiValuedDiffJson:
     def test_multi_change_survives_the_json_round_trip(self) -> None:
         track = TrackTags(Path("/music/01.flac"), {}, format="flac")

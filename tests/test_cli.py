@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,7 +17,15 @@ from music_tagger.cli.library import _is_album_dir, _rename, _scan
 from music_tagger.cli.ratings import _write_ratings, _write_stats
 from music_tagger.cli.rip import _toc
 from music_tagger.cli.services import _mb_discid, _mb_release, _mb_search, _nd
-from music_tagger.cli.tagging import _diff, _lock, _match, _read, _unlock, _write_tags
+from music_tagger.cli.tagging import (
+    _apply_tag_args,
+    _diff,
+    _lock,
+    _match,
+    _read,
+    _unlock,
+    _write_tags,
+)
 from music_tagger.musicbrainz import MBRelease, MBTrack
 from music_tagger.stats import SongStats
 from music_tagger.tagger import AlbumResult, TagConflict, TrackDiff
@@ -3086,3 +3095,70 @@ class TestUnreadableFiles:
         err = capsys.readouterr().err  # type: ignore[attr-defined]
         assert "Warning: 1 unreadable file(s): bad.flac" in err
         assert (flac_album / "01. Renamed.flac").exists()
+
+
+def test_apply_passes_credit_preservation_policy_to_tag() -> None:
+    args = Namespace(
+        release_id="release-id",
+        approve_overwrites=False,
+        ignore_locks=False,
+        keep_existing_credits=True,
+        isrc=None,
+        isrc_code=[],
+    )
+
+    assert _apply_tag_args(args) == ["--release-id", "release-id", "--keep-existing-credits"]
+
+
+def test_diff_cli_uses_credit_preservation_policy(tmp_path: Path) -> None:
+    evidence = tmp_path / "evidence.json"
+    evidence.write_text(
+        json.dumps(
+            {
+                "directory": "/music/Album",
+                "tracks": [
+                    {
+                        "path": "/music/Album/01.flac",
+                        "format": "flac",
+                        "tags": {
+                            "tracknumber": "1",
+                            "discnumber": "1",
+                            "musicbrainz_albumid": "old-release",
+                            "composer": "Old Composer",
+                        },
+                        "multi": {"composer": ["Old Composer"]},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    release = tmp_path / "release.json"
+    release.write_text(
+        json.dumps(
+            MBRelease(
+                id="new-release",
+                title="Album",
+                track_count=1,
+                discs={1: [MBTrack(number=1, title="Song", composer=("New Composer",))]},
+            ).to_dict()
+        ),
+        encoding="utf-8",
+    )
+    output = tmp_path / "diff.json"
+
+    _diff(
+        [
+            "--evidence",
+            str(evidence),
+            "--release",
+            str(release),
+            "--keep-existing-credits",
+            "--out",
+            str(output),
+        ]
+    )
+
+    data = json.loads(output.read_text(encoding="utf-8"))
+    changes = {change["field"]: change for change in data["tracks"][0]["changes"]}
+    assert changes["composer"]["new_values"] == ["New Composer", "Old Composer"]

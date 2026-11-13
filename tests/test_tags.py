@@ -128,6 +128,20 @@ class TestReadAlbumFlac:
         for track in album.tracks:
             assert track.format == "flac"
 
+    def test_release_id_values_preserve_all_raw_comments(self, flac_album: Path) -> None:
+        path = sorted(flac_album.glob("*.flac"))[0]
+        expected = (
+            "f7890790-ff4b-4524-9298-5c3bc66af976",
+            "",
+            "bad-release-id",
+        )
+        audio = FLAC(path)
+        audio["MUSICBRAINZ_ALBUMID"] = list(expected)
+        audio.save()
+
+        track = next(track for track in read_album(flac_album).tracks if track.path == path)
+        assert track.release_id_values == expected
+
     def test_tags_present(self, flac_album: Path) -> None:
         album = read_album(flac_album)
         track = album.tracks[0]

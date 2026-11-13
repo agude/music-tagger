@@ -468,6 +468,55 @@ def _set_credit(tags: dict[str, str], name_field: str, name: str, id_field: str,
 
 # Personnel roles: each name and its ID field, one value per person.
 _ROLE_CREDITS = ("composer", "lyricist", "producer", "engineer", "mixer", "conductor", "remixer")
+_ROLE_CREDIT_FIELDS = _ROLE_CREDITS + tuple(f"musicbrainz_{role}id" for role in _ROLE_CREDITS)
+
+
+def _merge_credit_values(
+    musicbrainz_values: tuple[str, ...], existing_values: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Keep MusicBrainz order, then append existing credits it no longer lists.
+
+    Existing tags sometimes store several values in one semicolon-joined value. Split
+    those legacy values before comparing so the joined string is not duplicated.
+    """
+    merged: list[str] = []
+    seen: set[str] = set()
+    for value in musicbrainz_values:
+        if value and value not in seen:
+            merged.append(value)
+            seen.add(value)
+    for value in existing_values:
+        for credit in value.split(";"):
+            credit = credit.strip()
+            if credit and credit not in seen:
+                merged.append(credit)
+                seen.add(credit)
+    return tuple(merged)
+
+
+def _preserve_existing_credits(
+    track: TrackTags, new_tags: dict[str, str], new_multi: dict[str, tuple[str, ...]]
+) -> None:
+    """Append missing old personnel credits after the release's current credits."""
+    for field_name in _ROLE_CREDIT_FIELDS:
+        existing_values = track.multi.get(field_name)
+        if existing_values is None:
+            existing = track.tags.get(field_name, "")
+            existing_values = (existing,) if existing else ()
+        proposed_values = new_multi.get(field_name, ())
+        merged_values = _merge_credit_values(proposed_values, existing_values)
+        if merged_values or field_name in new_multi:
+            new_multi[field_name] = merged_values
+
+    for field_name in ("performer", "musicbrainz_performerid"):
+        proposed = new_tags.get(field_name, "")
+        existing = track.tags.get(field_name, "")
+        merged = _merge_credit_values(
+            tuple(value.strip() for value in proposed.split(";") if value.strip()),
+            (existing,) if existing else (),
+        )
+        if merged or field_name in new_tags:
+            new_tags[field_name] = "; ".join(merged)
 
 
 def _build_new_multi(
@@ -651,7 +700,13 @@ def _drop_track_artist(new_tags: dict[str, str], new_multi: dict[str, tuple[str,
     new_multi.pop("musicbrainz_artistid", None)
 
 
-def build_diff(album: AlbumTags, release: MBRelease, *, ignore_locks: bool = False) -> AlbumResult:
+def build_diff(
+    album: AlbumTags,
+    release: MBRelease,
+    *,
+    ignore_locks: bool = False,
+    keep_existing_credits: bool = False,
+) -> AlbumResult:
     """Compute the tag diff between current tags and a chosen release.
 
     For a full album, matches local files to MB tracks by tracknumber tag.
@@ -664,6 +719,9 @@ def build_diff(album: AlbumTags, release: MBRelease, *, ignore_locks: bool = Fal
 
     Changes to a track's locked fields go to `locked_changes` instead of
     `changes`, unless `ignore_locks` is set.
+
+    When `keep_existing_credits` is set, matched tracks keep personnel credits
+    MusicBrainz no longer lists. Current MusicBrainz credits stay first.
     """
     # Index MB tracks by (disc, number) for direct lookup
     mb_index: dict[tuple[int, int], int] = {}
@@ -765,6 +823,9 @@ def build_diff(album: AlbumTags, release: MBRelease, *, ignore_locks: bool = Fal
                     f"{track.path.name}: no release track for disc {disc_num} track {track_label}; "
                     "only album fields proposed"
                 )
+
+        if keep_existing_credits and track_index is not None:
+            _preserve_existing_credits(track, new_tags, new_multi)
 
         all_changes = compute_diff(track, new_tags, new_multi)
         changes = [c for c in all_changes if c.field not in locked_fields]

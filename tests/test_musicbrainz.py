@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+from itertools import pairwise
+from threading import Barrier, Lock
 from typing import Any
 from unittest.mock import MagicMock, patch
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
@@ -220,6 +225,107 @@ class TestFetchRelease:
         assert release.discs[1][0].duration_ms == 209000
         assert release.discs[1][1].title == "Twenty-One"
         assert release.discs[1][1].artist == ""
+
+    def test_follows_official_canonical_release_redirect(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("music_tagger.musicbrainz.RATE_LIMIT_SECS", 0)
+        requested_id = "f7890790-ff4b-4524-9298-5c3bc66af976"
+        resolved_id = "e6b4a290-2e81-4563-aed9-5e1af43d220d"
+        redirect_location = f"https://musicbrainz.org/ws/2/release/{resolved_id}"
+        first_url = f"https://musicbrainz.org/ws/2/release/{requested_id}"
+        redirect = httpx.Response(
+            301,
+            headers={"Location": redirect_location},
+            request=httpx.Request("GET", first_url),
+        )
+        response_data = deepcopy(FETCH_RESPONSE)
+        response_data["id"] = resolved_id
+        redirected_url = (
+            f"{redirect_location}?fmt=json&inc=recordings%2Bartist-credits%2Blabels%2Brelease-groups"
+            "%2Bisrcs%2Brecording-level-rels%2Bwork-level-rels%2Bwork-rels%2Bartist-rels"
+        )
+        canonical = httpx.Response(
+            200,
+            json=response_data,
+            request=httpx.Request("GET", redirected_url),
+        )
+        client = MusicBrainzClient()
+        client._client = MagicMock()
+        client._client.get.side_effect = [_response(503), redirect, _response(503), canonical]
+
+        with patch("music_tagger.musicbrainz.time.sleep"):
+            release = client.fetch_release(requested_id)
+
+        assert release.id == resolved_id
+        assert client.last_release_redirect == {
+            "requested_release_id": requested_id,
+            "resolved_release_id": resolved_id,
+            "url": redirected_url,
+        }
+        assert client._client.get.call_count == 4
+        assert client.last_request_retry_count == 1
+        assert client.last_release_retry_count == 2
+        assert client.retry_count == 2
+        redirected_request = client._client.get.call_args_list[3].args[0]
+        assert urlparse(redirected_request).path == urlparse(redirect_location).path
+        assert parse_qs(urlparse(redirected_request).query) == {
+            "fmt": ["json"],
+            "inc": [
+                "recordings+artist-credits+labels+release-groups+isrcs+recording-level-rels"
+                "+work-level-rels+work-rels+artist-rels"
+            ],
+        }
+
+    def test_redirect_sends_requested_includes_through_httpx(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("music_tagger.musicbrainz.RATE_LIMIT_SECS", 0)
+        requested_id = "f7890790-ff4b-4524-9298-5c3bc66af976"
+        resolved_id = "e6b4a290-2e81-4563-aed9-5e1af43d220d"
+        requests: list[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.url.path.endswith(requested_id):
+                return httpx.Response(301, headers={"Location": f"/ws/2/release/{resolved_id}"})
+            assert request.url.params["fmt"] == "json"
+            includes = set(request.url.params["inc"].split("+"))
+            assert {"recordings", "isrcs", "artist-rels", "work-rels"} <= includes
+            response_data = deepcopy(FETCH_RESPONSE)
+            response_data["id"] = resolved_id
+            return httpx.Response(200, json=response_data)
+
+        client = MusicBrainzClient()
+        client._client.close()
+        client._client = httpx.Client(
+            base_url="https://musicbrainz.org/ws/2", transport=httpx.MockTransport(respond)
+        )
+        try:
+            release = client.fetch_release(requested_id)
+        finally:
+            client.close()
+
+        assert len(requests) == 2
+        assert release.id == resolved_id
+        assert release.track_count == 2
+
+    def test_rejects_release_redirect_to_another_host(self) -> None:
+        requested_id = "f7890790-ff4b-4524-9298-5c3bc66af976"
+        redirect_url = "https://example.org/ws/2/release/e6b4a290-2e81-4563-aed9-5e1af43d220d"
+        response = httpx.Response(
+            301,
+            headers={"Location": redirect_url},
+            request=httpx.Request("GET", f"https://musicbrainz.org/ws/2/release/{requested_id}"),
+        )
+        client = MusicBrainzClient()
+        client._client = MagicMock()
+        client._client.get.return_value = response
+
+        with pytest.raises(ValueError, match="unsupported release redirect"):
+            client.fetch_release(requested_id)
+
+        assert client._client.get.call_count == 1
 
     def test_track_duration_secs(self) -> None:
         mock_resp = MagicMock()
@@ -497,6 +603,19 @@ class TestMultiArtistCredits:
 
 
 class TestMixedMedia:
+    def test_unknown_medium_format_keeps_audio_tracks(self) -> None:
+        medium = _medium(1, "CD", 2)
+        medium["format"] = None
+
+        release = _fetch_with_media([medium])
+        search_release = MusicBrainzClient._parse_search_release(
+            {"id": "unknown-format", "title": "Album", "media": [medium]}
+        )
+
+        assert release.track_count == search_release.track_count == 2
+        assert len(release.discs[1]) == 2
+        assert release.format == search_release.format == ""
+
     def test_fetch_counts_only_audio_media(self) -> None:
         release = _fetch_with_media([_medium(1, "CD", 12), _medium(2, "DVD-Video", 5)])
 
@@ -739,6 +858,58 @@ class TestRetry:
             client.fetch_release("r-1")
 
         assert client._client.get.call_count == 1
+
+    def test_concurrent_request_starts_share_one_rate_limit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("music_tagger.musicbrainz.RATE_LIMIT_SECS", 0.02)
+        client = MusicBrainzClient()
+        started = []
+
+        def record_start() -> None:
+            client._rate_limit()
+            started.append(time.monotonic())
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            list(executor.map(lambda _: record_start(), range(4)))
+
+        ordered = sorted(started)
+        assert all(later - earlier >= 0.015 for earlier, later in pairwise(ordered))
+        client.close()
+
+    def test_concurrent_retry_counts_are_request_local(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("music_tagger.musicbrainz.RATE_LIMIT_SECS", 0)
+        barrier = Barrier(2)
+        lock = Lock()
+        calls: dict[str, int] = {}
+        client = MusicBrainzClient()
+        client._client = MagicMock()
+
+        def fake_get(_path: str, *, params: dict[str, str]) -> httpx.Response:
+            key = params["key"]
+            with lock:
+                calls[key] = calls.get(key, 0) + 1
+                attempt = calls[key]
+            if attempt == 1:
+                barrier.wait(timeout=2)
+            if key == "retry" and attempt == 1:
+                return _response(503)
+            return _response(200)
+
+        client._client.get.side_effect = fake_get
+
+        def get_retry_count(key: str) -> tuple[str, int]:
+            client._get("/release/", {"key": key})
+            return key, client.last_request_retry_count
+
+        with patch("music_tagger.musicbrainz.time.sleep"), ThreadPoolExecutor(2) as executor:
+            retry_counts = dict(executor.map(get_retry_count, ["retry", "clean"]))
+
+        assert retry_counts == {"retry": 1, "clean": 0}
+        assert client.retry_count == 1
+        client.close()
 
 
 class TestSearchQueryEscaping:

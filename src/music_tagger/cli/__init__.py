@@ -6,6 +6,7 @@ import io
 import sys
 from collections.abc import Callable
 
+from .batch_dry_run import _batch_dry_run
 from .library import _art, _checklist, _copy, _genre, _path_for, _place, _rename, _replaygain, _scan
 from .lyrics_cmd import _lyrics, _lyrics_batch, _lyrics_decide
 from .ratings import _write_ratings, _write_stats
@@ -14,6 +15,7 @@ from .services import _mb, _nd
 from .tagging import (
     _apply,
     _diff,
+    _edit_tags,
     _lock,
     _match,
     _print_candidates,
@@ -33,6 +35,7 @@ def _register_commands() -> dict[str, tuple[str, Callable[[list[str] | None], No
         "match": ("Score candidates by duration match.", _match),
         "diff": ("Compute tag diff against a MusicBrainz release.", _diff),
         "write-tags": ("Apply tag changes from a diff JSON.", _write_tags),
+        "edit-tags": ("Set or clear selected metadata fields on one audio file.", _edit_tags),
         "write-ratings": ("Write rating tags to audio files.", _write_ratings),
         "write-stats": ("Write ratings and play counts from a snapshot.", _write_stats),
         "path-for": ("Compute library destination paths.", _path_for),
@@ -54,6 +57,10 @@ def _register_commands() -> dict[str, tuple[str, Callable[[list[str] | None], No
         "lyrics-decide": (
             "Show saved lyric options and record a choice or skip for each track.",
             _lyrics_decide,
+        ),
+        "batch-dry-run": (
+            "Create resumable, read-only tag diffs from an inventory.",
+            _batch_dry_run,
         ),
         "lock": ("Lock fields so `tag` keeps them, or show locks.", _lock),
         "unlock": ("Unlock fields so `tag` can change them.", _unlock),

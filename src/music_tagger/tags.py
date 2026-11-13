@@ -18,7 +18,7 @@ from typing import Any, BinaryIO
 from mutagen import File as MutagenFile
 from mutagen import MutagenError
 from mutagen.flac import FLAC, Picture
-from mutagen.id3 import APIC, ID3, POPM, TCON, TXXX
+from mutagen.id3 import APIC, ID3, POPM, TCON, TXXX, UFID
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4
 
@@ -39,6 +39,9 @@ FMPS_RATING_OUTPUT = "FMPS_Rating"
 FMPS_RATING_ALIASES = ("FMPS_Rating", "FMPS_RATING")
 FMPS_PLAYCOUNT_OUTPUT = "FMPS_Playcount"
 FMPS_PLAYCOUNT_ALIASES = ("FMPS_Playcount", "FMPS_PlayCount", "FMPS_PLAYCOUNT")
+
+MUSICBRAINZ_UFID_OWNER = "http://musicbrainz.org"
+MP3_RECORDING_ID_DESCRIPTIONS = ("MusicBrainz Recording Id", "MusicBrainz Track Id")
 
 # MP4 atoms, for reading only. The MP4 writes this tool makes are genre,
 # rating and play-count atoms, and lyrics; write_tags refuses the rest rather
@@ -220,6 +223,11 @@ class TrackTags:
     locked_fields: list[str] = field(default_factory=list)
     # Every value of each MULTI_VALUE_FIELDS field the file holds, in file order.
     multi: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # Raw MusicBrainz album IDs, including repeated, empty, or malformed values.
+    # Kept in memory for inventory identity checks; normal tag diffs use `tags`.
+    release_id_values: tuple[str, ...] = ()
+    # A legacy MP3 recording ID needs its standard UFID and existing aliases synchronized.
+    recording_id_needs_sync: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -231,6 +239,8 @@ class TrackTags:
         }
         if self.multi:
             data["multi"] = {name: list(values) for name, values in self.multi.items()}
+        if self.recording_id_needs_sync:
+            data["recording_id_needs_sync"] = True
         return data
 
     @classmethod
@@ -242,6 +252,7 @@ class TrackTags:
             format=data.get("format", ""),
             locked_fields=list(data.get("locked_fields", [])),
             multi={name: tuple(values) for name, values in data.get("multi", {}).items()},
+            recording_id_needs_sync=bool(data.get("recording_id_needs_sync", False)),
         )
 
 
@@ -398,6 +409,23 @@ def read_flac_comments(path: Path) -> dict[str, list[str]] | None:
             return None
 
 
+def _mp3_recording_id_state(audio: MP3) -> tuple[str, bool]:
+    if audio.tags is None:
+        return "", False
+    frame = audio.tags.get(f"UFID:{MUSICBRAINZ_UFID_OWNER}")
+    standard = frame.data.decode("ascii", "replace") if frame is not None else ""
+    descriptions = {name.casefold() for name in MP3_RECORDING_ID_DESCRIPTIONS}
+    aliases = [
+        str(value)
+        for item in audio.tags.getall("TXXX")
+        if item.desc.casefold() in descriptions
+        for value in item.text
+    ]
+    value = standard or next((item for item in aliases if item), "")
+    needs_sync = bool(value) and (standard != value or any(item != value for item in aliases))
+    return value, needs_sync
+
+
 def _read_mp3_tags(audio: MP3) -> dict[str, str]:
     if audio.tags is None:
         return {}
@@ -413,6 +441,9 @@ def _read_mp3_tags(audio: MP3) -> dict[str, str]:
             frame = audio.tags.get(id3_key)
             if frame:
                 tags[canonical] = str(frame)
+    recording_id, _ = _mp3_recording_id_state(audio)
+    if recording_id:
+        tags["musicbrainz_recordingid"] = recording_id
     return tags
 
 
@@ -464,6 +495,28 @@ def _read_mp4_tags(audio: MP4) -> dict[str, str]:
         if total:
             tags[total_field] = str(total)
     return tags
+
+
+def _read_release_id_values(audio: FLAC | MP3 | MP4) -> tuple[str, ...]:
+    """Return every raw MUSICBRAINZ_ALBUMID value without selecting a first value."""
+    if isinstance(audio, FLAC):
+        values = audio.get("MUSICBRAINZ_ALBUMID")  # type: ignore[no-untyped-call]
+        return tuple(str(value) for value in values or ())
+
+    if isinstance(audio, MP3):
+        if audio.tags is None:
+            return ()
+        values = []
+        for frame in audio.tags.getall("TXXX"):
+            if frame.desc.casefold() == "musicbrainz album id":
+                values.extend(str(value) for value in frame.text)
+        return tuple(values)
+
+    values = audio.get(MP4_MAP["musicbrainz_albumid"])  # type: ignore[no-untyped-call]
+    return tuple(
+        value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value)
+        for value in values or ()
+    )
 
 
 @dataclass(frozen=True)
@@ -584,6 +637,7 @@ def read_album(directory: Path) -> AlbumTags:
             album.unreadable.append(path)
             continue
         multi: dict[str, tuple[str, ...]] = {}
+        recording_id_needs_sync = False
         if isinstance(audio, FLAC):
             tags = _read_flac_tags(audio)
             multi = _read_flac_multi(audio)
@@ -591,6 +645,7 @@ def read_album(directory: Path) -> AlbumTags:
         elif isinstance(audio, MP3):
             tags = _read_mp3_tags(audio)
             multi = _read_mp3_multi(audio)
+            _, recording_id_needs_sync = _mp3_recording_id_state(audio)
             fmt = "mp3"
         elif isinstance(audio, MP4):
             # M4A multi-values are not read: write_tags does not support M4A.
@@ -610,6 +665,8 @@ def read_album(directory: Path) -> AlbumTags:
                 format=fmt,
                 locked_fields=_read_locks(audio),
                 multi=multi,
+                release_id_values=_read_release_id_values(audio),
+                recording_id_needs_sync=recording_id_needs_sync,
             )
         )
     return album
@@ -632,6 +689,25 @@ def _write_mp3_tag(audio: MP3, canonical: str, value: str) -> None:
     if audio.tags is None:
         audio.add_tags()  # type: ignore[no-untyped-call]
     assert audio.tags is not None
+    if canonical == "musicbrainz_recordingid":
+        descriptions = {name.casefold() for name in MP3_RECORDING_ID_DESCRIPTIONS}
+        aliases = [
+            frame for frame in audio.tags.getall("TXXX") if frame.desc.casefold() in descriptions
+        ]
+        if not value:
+            audio.tags.delall(f"UFID:{MUSICBRAINZ_UFID_OWNER}")
+            for frame in aliases:
+                audio.tags.delall(frame.HashKey)
+            return
+        audio.tags.add(UFID(owner=MUSICBRAINZ_UFID_OWNER, data=value.encode("ascii")))
+        for frame in aliases:
+            frame.text = [value]
+        if not any(
+            frame.desc.casefold() == MP3_RECORDING_ID_DESCRIPTIONS[0].casefold()
+            for frame in aliases
+        ):
+            audio.tags.add(TXXX(desc=MP3_RECORDING_ID_DESCRIPTIONS[0], text=[value]))
+        return
     id3_key = FIELD_MAP[canonical][1]
     if value == "":
         # An empty value deletes the field: every matching frame, not an empty one.
@@ -751,13 +827,16 @@ def compute_diff(
     track: TrackTags,
     new_tags: dict[str, str],
     new_multi: dict[str, tuple[str, ...]] | None = None,
+    *,
+    exact_values: bool = False,
 ) -> list[TagChange]:
     """Compute the tag changes needed for a single track.
 
     new_multi holds the target values of multi-valued fields. Their order matters.
+    exact_values compares literal values for explicit field edits.
     """
     # Fields where comparison should be case-insensitive
-    case_insensitive = {"releasestatus", "releasetype"}
+    case_insensitive = set() if exact_values else {"releasestatus", "releasetype"}
     # Fields excluded from diff — always written when other changes exist
     skip_diff = {"music_tagger_updated"}
     multi = new_multi or {}
@@ -778,9 +857,16 @@ def compute_diff(
         if field_name in case_insensitive:
             if old_value.lower() == new_value.lower():
                 continue
-        elif old_value == new_value:
+        elif old_value == new_value and not (
+            field_name == "musicbrainz_recordingid" and track.recording_id_needs_sync
+        ):
             continue
-        if field_name == "title" and old_value and new_value.startswith(old_value):
+        if (
+            not exact_values
+            and field_name == "title"
+            and old_value
+            and new_value.startswith(old_value)
+        ):
             suffix = new_value[len(old_value) :].strip()
             if suffix.startswith("(") and suffix.endswith(")"):
                 inner = suffix[1:-1].lower()

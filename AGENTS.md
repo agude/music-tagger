@@ -31,7 +31,7 @@ Key CLI subcommands, driven by Claude Code in conversation:
    `No candidates found.` with the search terms when MusicBrainz returns
    nothing. `--json` prints JSON instead; `-o FILE` also writes it.
 
-3. `uv run music-tagger tag <album-dir> --release-id <uuid> [--dry-run] [--log changes.log]`
+3. `uv run music-tagger tag <album-dir> --release-id <uuid> [--keep-existing-credits] [--dry-run] [--log changes.log]`
    — fetches the chosen release from MusicBrainz, computes a field-by-field
    diff against current tags, and writes if not `--dry-run`. Appends all
    changes to the log file for auditing.
@@ -45,6 +45,13 @@ Key CLI subcommands, driven by Claude Code in conversation:
    (`title` `Unknown Track`, `artist`/`albumartist` `Unknown Artist`, `album`
    `Unknown Album`, exact case) count as empty, so replacing them is `auto`. On
    any other file the same values still need review.
+   `--keep-existing-credits` opts into preserving existing composer, lyricist,
+   producer, engineer, mixer, conductor, remixer, and performer credits and
+   their MusicBrainz IDs when the selected release omits them. MusicBrainz
+   values stay first; missing existing values follow, with exact duplicates
+   removed. This does not merge artist, albumartist, recording, release, or
+   work IDs. The default remains unchanged. The `read` → `diff` path accepts
+   the same flag. Use `edit-tags` to deliberately remove a retained credit.
 
 4. `uv run music-tagger genre <album-dir> [genre ...] [--dry-run] [--log changes.log]`
    — sets the genre meta-grouping tags on all tracks. Pass each genre as its
@@ -174,12 +181,13 @@ Key CLI subcommands, driven by Claude Code in conversation:
    `tag --ignore-locks` overwrites locked fields and leaves the locks in
    place. A locked `isrc` skips the ISRC conflict check.
 
-10. `uv run music-tagger apply <album-dir> --release-id <uuid> (--cover-file <img> | --keep-cover) --genre <g> [--genre <g> ...]`
+10. `uv run music-tagger apply <album-dir> --release-id <uuid> (--cover-file <img> | --keep-cover) --genre <g> [--genre <g> ...] [--keep-existing-credits]`
    — runs `tag`, `art`, `genre`, `rename`, and `replaygain` in order and
    stops at the first non-zero exit. Checks that the cover image can be
    embedded (a readable JPEG or PNG) and that the genres are canonical
    before any step writes. `--force-genre` lets an unlisted genre through, as
-   `genre --force` does. Passes `--approve-overwrites`, `--ignore-locks`,
+   `genre --force` does. `--keep-existing-credits` passes the same policy to
+   `tag`. Passes `--approve-overwrites`, `--ignore-locks`,
    `--isrc`, and `--isrc-code` through to `tag`, so a gate stop (exit 3 or
    4) happens before anything is written.
    An exception inside a step also prints `apply stopped at <step>` and
@@ -224,6 +232,41 @@ Key CLI subcommands, driven by Claude Code in conversation:
     file with no network. `choose` accepts only a saved record ID and writes that
     record's lyrics as a sidecar. `skip` records that a track has no lyrics and
     writes no file. Details are under "Decisions" below.
+
+15. `uv run music-tagger batch-dry-run --inventory FILE [--out-dir DIR]
+    [--read-workers N] [--directory DIRECTORY] [--retry-errors] [--report-only]
+    [--keep-existing-credits]` — reads the inventory's
+    `strict_dry_run_review_candidate` albums and uses only their existing
+    release IDs. It writes per-album diff JSON, release snapshots, resumable
+    checkpoints, and summary Markdown/JSON to `DIR` (default
+    `/tmp/music-tagger-step2`), which must resolve outside the library root.
+    It re-reads every album before reusing a checkpoint, checking the file set,
+    raw release-ID values, tag data, file sizes, and mtimes. A changed inventory,
+    album, release snapshot, or diff invalidates reuse. MusicBrainz requests use
+    one shared rate-limited client; release snapshots prevent duplicate fetches.
+    The command never writes audio tags, the change log, or the checklist.
+    Reports retain the `tag` gate verdict and separately flag partial,
+    positional, unmatched, unmeasured, or over-2-second duration matches for
+    operator review. Each `diffs/*.json` file is accepted by `write-tags
+    --diff`; review it before any write. `--directory` reprocesses one exact
+    selected album while keeping the full inventory hash, so `--report-only`
+    can regenerate the full report from its checkpoints afterward.
+    `--retry-errors` reprocesses every row without a completed checkpoint for
+    the current inventory; follow it with `--report-only` for the full report.
+    `--keep-existing-credits` applies the same opt-in policy as `tag`. Checkpoints
+    record this option, so results generated under the other policy are not reused.
+
+16. `uv run music-tagger edit-tags <album-dir> (--file <audio-path> | --all)
+    [--set FIELD=VALUE ...] [--clear FIELD ...] [--dry-run]
+    [--approve-overwrites]` — sets or clears selected metadata fields on one
+    audio file, or every track with `--all`. Album-wide edits read the album
+    once to prepare the changes and check the complete batch before writing;
+    unreadable files, unsupported general-tag writes, and locked fields refuse
+    the batch before any file is written. The file path must resolve inside the album directory. Repeat
+    `--set` for separate values of a multi-valued field. `--dry-run` previews
+    the changes; `tag`'s overwrite gate and field locks apply. Genre and rating
+    fields stay with their dedicated commands. Changes append to the standard
+    change log unless `--log FILE` or `--no-log` is passed.
 
 ## Library workflow
 
@@ -312,11 +355,12 @@ src/music_tagger/
 └── cli/             # Argparse commands, one package per command group
     ├── __init__.py   # main() and the command dispatch table only
     ├── common.py     # Logs, exit codes, gate and warning printers shared by modules
-    ├── tagging.py    # read, match, diff, write-tags, tag, apply, lock, unlock, candidates
+    ├── tagging.py    # read, match, diff, edit-tags, write-tags, tag, apply, lock, unlock, candidates
     ├── library.py    # scan, checklist, path-for, copy, place, rename, art, genre, replaygain
     ├── rip.py        # rip, toc, identify
     ├── ratings.py    # write-ratings, write-stats, nd ratings, nd stats
     ├── services.py   # mb and nd subcommands (except ratings and stats)
+    ├── batch_dry_run.py # Read-only inventory batch diffs and reports
     └── lyrics_cmd.py # lyrics, lyrics-batch, lyrics-decide
 ```
 
@@ -328,6 +372,15 @@ src/music_tagger/
   `©lyr` atom (`lyrics --embed`). `write_tags` raises `NotImplementedError`, and
   `write_locks` refuses M4A, rather than silently writing nothing. `replaygain`
   writes M4A through `rsgain`.
+- MP3 recording IDs use `UFID:http://musicbrainz.org`, the standard frame
+  read by Navidrome and Picard. Readers prefer this frame and accept legacy
+  `TXXX:MusicBrainz Recording Id` and `TXXX:MusicBrainz Track Id` values.
+  Writes synchronize the standard frame and existing aliases, retaining the
+  tool's Recording Id compatibility field. Clearing removes all these owned
+  representations and preserves UFID frames belonging to other owners.
+  A saved `read` result records when synchronization is needed, so a normal
+  `diff` and `write-tags` cycle repairs legacy files once and then makes no
+  further changes.
 - **M4A ratings**: MP4 has no standard star field and the conventions
   collide — the freeform `RATING` atom is 0-100 in MusicBee/EZ CD, while
   this tool writes `RATING` as 1-5 for FLAC and MP3. Writing 1-5 into an

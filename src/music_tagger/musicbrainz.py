@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
 
@@ -15,6 +17,11 @@ RATE_LIMIT_SECS = 1.0
 RETRY_STATUS_CODES = {429, 503}
 MAX_ATTEMPTS = 4
 RETRY_BACKOFF_SECS = 2.0
+_RELEASE_INCLUDES = (
+    "recordings+artist-credits+labels+release-groups"
+    "+isrcs+recording-level-rels+work-level-rels"
+    "+work-rels+artist-rels"
+)
 
 
 def _as_tuple(value: Any) -> tuple[str, ...]:
@@ -403,12 +410,44 @@ class MusicBrainzClient:
             timeout=30.0,
         )
         self._last_request: float = 0.0
+        self._rate_limit_lock = threading.Lock()
+        self._retry_lock = threading.Lock()
+        self._request_state = threading.local()
+        self._release_state = threading.local()
+        self._retry_count = 0
+
+    @property
+    def retry_count(self) -> int:
+        """Total 429/503 retries across calls made through this client."""
+        with self._retry_lock:
+            return self._retry_count
+
+    @property
+    def last_request_retry_count(self) -> int:
+        """429/503 retries in the current thread's most recent request."""
+        return getattr(self._request_state, "retry_count", 0)
+
+    @property
+    def last_release_redirect(self) -> dict[str, str] | None:
+        """MusicBrainz's official canonical-ID redirect from the latest release fetch."""
+        return getattr(self._release_state, "redirect", None)
+
+    @property
+    def last_release_retry_count(self) -> int | None:
+        """Retries across both HTTP requests of the latest canonical release fetch."""
+        return getattr(self._release_state, "retry_count", None)
+
+    def _record_retry(self) -> None:
+        with self._retry_lock:
+            self._retry_count += 1
 
     def _rate_limit(self) -> None:
-        elapsed = time.monotonic() - self._last_request
-        if elapsed < RATE_LIMIT_SECS:
-            time.sleep(RATE_LIMIT_SECS - elapsed)
-        self._last_request = time.monotonic()
+        # Request starts share one clock even when callers fetch releases in parallel.
+        with self._rate_limit_lock:
+            elapsed = time.monotonic() - self._last_request
+            if elapsed < RATE_LIMIT_SECS:
+                time.sleep(RATE_LIMIT_SECS - elapsed)
+            self._last_request = time.monotonic()
 
     def _get(self, path: str, params: dict[str, Any]) -> httpx.Response:
         """GET with rate limiting, retrying 429/503 with exponential backoff.
@@ -416,11 +455,17 @@ class MusicBrainzClient:
         Returns the last response; callers decide how to treat its status.
         """
         attempt = 1
+        request_retries = 0
+        self._request_state.retry_count = 0
         while True:
             self._rate_limit()
             resp = self._client.get(path, params=params)
             if resp.status_code not in RETRY_STATUS_CODES or attempt == MAX_ATTEMPTS:
+                self._request_state.retry_count = request_retries
                 return resp
+            request_retries += 1
+            self._request_state.retry_count = request_retries
+            self._record_retry()
             time.sleep(RETRY_BACKOFF_SECS * 2 ** (attempt - 1))
             attempt += 1
 
@@ -455,17 +500,47 @@ class MusicBrainzClient:
         return [self._parse_search_release(r) for r in data.get("releases", [])]
 
     def fetch_release(self, release_id: str) -> MBRelease:
+        self._release_state.redirect = None
+        self._release_state.retry_count = None
+        params = {"fmt": "json", "inc": _RELEASE_INCLUDES}
         resp = self._get(
             f"/release/{release_id}",
-            params={
-                "fmt": "json",
-                "inc": (
-                    "recordings+artist-credits+labels+release-groups"
-                    "+isrcs+recording-level-rels+work-level-rels"
-                    "+work-rels+artist-rels"
-                ),
-            },
+            params=params,
         )
+        if resp.status_code == 301:
+            location = resp.headers.get("location")
+            if not location:
+                resp.raise_for_status()
+            target = urljoin(str(resp.url), location)
+            target_url = urlparse(target)
+            base_url = urlparse(BASE_URL)
+            release_prefix = f"{base_url.path}/release/"
+            if (
+                target_url.scheme != "https"
+                or target_url.netloc != base_url.netloc
+                or not target_url.path.startswith(release_prefix)
+            ):
+                raise ValueError(f"MusicBrainz returned an unsupported release redirect: {target}")
+            resolved_id = target_url.path.removeprefix(release_prefix).split("/", 1)[0]
+            if not resolved_id:
+                raise ValueError(f"MusicBrainz returned an empty release redirect: {target}")
+            query = [
+                (key, value)
+                for key, value in parse_qsl(target_url.query, keep_blank_values=True)
+                if key not in params
+            ]
+            query.extend(params.items())
+            target = urlunparse(target_url._replace(query=urlencode(query)))
+            request_retries = self.last_request_retry_count
+            try:
+                resp = self._get(target, params=dict(query))
+            finally:
+                self._release_state.retry_count = request_retries + self.last_request_retry_count
+            self._release_state.redirect = {
+                "requested_release_id": release_id,
+                "resolved_release_id": resolved_id,
+                "url": target,
+            }
         resp.raise_for_status()
         r = resp.json()
 
