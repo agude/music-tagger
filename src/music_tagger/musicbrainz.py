@@ -348,6 +348,32 @@ NON_AUDIO_FORMATS = frozenset(
 )
 
 
+@dataclass
+class DiscTOC:
+    """A disc's table of contents: track start offsets and the leadout, in frames.
+
+    Offsets include the 150-frame pregap, as MusicBrainz and libdiscid give them.
+    """
+
+    disc_id: str
+    offsets: list[int]
+    leadout: int
+
+    def track_frames(self) -> list[int]:
+        """Each track's length in frames, the last ending at the leadout."""
+        ends = [*self.offsets[1:], self.leadout]
+        return [end - start for start, end in zip(self.offsets, ends, strict=True)]
+
+
+@dataclass
+class MediumInfo:
+    """One audio medium of a release: its position, track lengths, and attached disc IDs."""
+
+    position: int
+    track_lengths_ms: list[int | None]
+    tocs: list[DiscTOC]
+
+
 def barcode_variants(barcode: str) -> list[str]:
     """The barcode as given, plus its UPC-A or EAN-13 twin.
 
@@ -549,6 +575,33 @@ class MusicBrainzClient:
             asin=r.get("asin") or "",
             script=script,
         )
+
+    def fetch_media(self, release_id: str) -> list[MediumInfo]:
+        """Each audio medium of a release: its track lengths and attached disc IDs."""
+        resp = self._get(
+            f"/release/{release_id}", params={"fmt": "json", "inc": "discids+recordings"}
+        )
+        resp.raise_for_status()
+        media: list[MediumInfo] = []
+        for medium in resp.json().get("media", []):
+            if not _is_audio_medium(medium):
+                continue
+            tocs = [
+                DiscTOC(
+                    disc_id=disc.get("id", ""),
+                    offsets=[int(offset) for offset in disc.get("offsets") or []],
+                    leadout=int(disc.get("sectors") or 0),
+                )
+                for disc in medium.get("discs") or []
+            ]
+            lengths = [
+                track.get("length") or (track.get("recording") or {}).get("length")
+                for track in medium.get("tracks") or []
+            ]
+            media.append(
+                MediumInfo(position=medium.get("position", 1), track_lengths_ms=lengths, tocs=tocs)
+            )
+        return media
 
     def lookup_discid(self, discid: str) -> list[MBRelease]:
         resp = self._get(

@@ -52,6 +52,7 @@ HELP_CASES: list[list[str]] = [
     ["rename", "--help"],
     ["replaygain", "--help"],
     ["rip", "--help"],
+    ["identify", "--help"],
 ]
 
 # Dispatchers route on a sub-argument and build no parser of their own, so

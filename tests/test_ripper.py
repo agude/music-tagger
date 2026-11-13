@@ -11,7 +11,6 @@ from music_tagger.ripper import (
     RipResult,
     _check_tool,
     parse_accuraterip,
-    read_disc_id,
     rip_cd,
 )
 
@@ -100,37 +99,6 @@ class TestRipCd:
             pytest.raises(RuntimeError, match="no FLAC files"),
         ):
             rip_cd(output)
-
-
-class TestReadDiscId:
-    def test_missing_discid_package(self) -> None:
-        with (
-            patch.dict("sys.modules", {"discid": None}),
-            pytest.raises(RuntimeError, match="discid"),
-        ):
-            read_disc_id()
-
-    def test_returns_disc_info(self) -> None:
-        mock_track = MagicMock()
-        mock_track.number = 1
-        mock_track.offset = 150
-        mock_track.sectors = 20000
-        mock_track.seconds = 266
-
-        mock_disc = MagicMock()
-        mock_disc.id = "abc123"
-        mock_disc.tracks = [mock_track]
-
-        mock_discid = MagicMock()
-        mock_discid.read.return_value = mock_disc
-
-        with patch.dict("sys.modules", {"discid": mock_discid}):
-            result = read_disc_id("/dev/sr0")
-
-        assert result["disc_id"] == "abc123"
-        assert result["track_count"] == 1
-        assert result["tracks"][0]["number"] == 1
-        assert result["tracks"][0]["seconds"] == 266
 
 
 def _track_block(number: int, v1: str, v2: str, status: str = "Copy OK") -> str:

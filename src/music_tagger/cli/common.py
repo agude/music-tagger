@@ -361,3 +361,13 @@ def _write_lock_log(
     lines += ["", "---", ""]
     with open(log_path, "a") as f:
         f.write("\n".join(lines))
+
+
+def _format_table(header: list[str], rows: list[list[str]]) -> str:
+    """Align columns with two spaces; the last column is not padded."""
+    widths = [max(len(row[i]) for row in [header, *rows]) for i in range(len(header) - 1)]
+    lines = []
+    for row in [header, *rows]:
+        cells = [cell.ljust(width) for cell, width in zip(row, widths, strict=False)]
+        lines.append("  ".join([*cells, row[-1]]))
+    return "\n".join(lines)

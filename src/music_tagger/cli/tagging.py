@@ -41,6 +41,7 @@ from .common import (
     _check_gate,
     _exit_if_unreadable,
     _format_change_lines,
+    _format_table,
     _log_path,
     _output_json,
     _print_album_warnings,
@@ -408,16 +409,6 @@ def _candidate_row(rank: int, match: CandidateMatch, album: AlbumTags) -> list[s
         ",".join(match.flags) or "-",
         release.title,
     ]
-
-
-def _format_table(header: list[str], rows: list[list[str]]) -> str:
-    """Align columns with two spaces; the last column is not padded."""
-    widths = [max(len(row[i]) for row in [header, *rows]) for i in range(len(header) - 1)]
-    lines = []
-    for row in [header, *rows]:
-        cells = [cell.ljust(width) for cell, width in zip(row, widths, strict=False)]
-        lines.append("  ".join([*cells, row[-1]]))
-    return "\n".join(lines)
 
 
 def _stale_changes(result: AlbumResult) -> list[str]:

@@ -102,12 +102,37 @@ Key CLI subcommands, driven by Claude Code in conversation:
    alone, since `place` deletes it. So `apply` leaves an unknown rip named as a
    matched rip, and it never needs ripping again.
 
-7. `uv run music-tagger rip [<output-dir>] [--device /dev/cdrom] [--release-id <uuid>] [--unknown] [--disc N --of M]`
+7. `uv run music-tagger identify [<staging>] [--device /dev/cdrom] [--barcode <code>] [--artist <a> --album <b>] [--json]`
+   — reads the disc's TOC and media catalog number (MCN) from the drive in
+   seconds, without ripping, and finds its release before the rip. Candidates
+   come from the disc ID, the barcode (`--barcode`, else the MCN, searched as
+   both UPC-A and EAN-13), and the title. Each audio medium with the disc's
+   track count is ranked: disc ID attached, all track lengths within 2 s,
+   barcode match, tracks within 2 s. The table shows `Drift`, the largest
+   offset difference in frames from the medium's closest attached disc ID. It
+   prints the route and the `rip` command: exit 0 when the disc ID is attached
+   (`rip --release-id`); exit 3 when the disc ID is not attached but every track
+   length matches, or the barcode matches and at most one track is off (shown as
+   `off: N`): a different pressing. Exit 3 prints the MusicBrainz attach URL as
+   the preferred route (attach, run `identify` again, which then exits 0) and
+   `rip --unknown` (with `--disc N --of M` on a multi-disc release) then `apply
+   --release-id` as the fallback. Exit 1 when no medium is routable, the drive
+   cannot be read, or a MusicBrainz request fails (no traceback). A staging
+   path is put into the printed command for disc 2 and later. The attach URL
+   carries `filter-release.query=<release MBID>` (lowercase; MusicBrainz's
+   match is case-sensitive), so the page lists only that release: the user
+   picks the printed medium and confirms the edit. A link straight to the
+   confirmation needs the medium's database row ID, which the web service
+   does not expose, and MusicBrainz has no API for attaching disc IDs. Do not run it
+   while a rip is using the drive.
+
+8. `uv run music-tagger rip [<output-dir>] [--device /dev/cdrom] [--release-id <uuid>] [--unknown] [--disc N --of M]`
    — rips a CD to FLAC via whipper with AccurateRip verification.
    Whipper handles disc ID lookup, MusicBrainz matching, and FLAC
    encoding. Produces .log and .cue files alongside the audio.
    Use `--release-id` to force a specific MB release, or `--unknown`
-   to rip CDs not in MusicBrainz. An unknown multi-disc album needs
+   to rip a disc whose disc ID no release has (run `identify` first: that is
+   usually another pressing of a listed release, not a missing album). An unknown multi-disc album needs
    `--disc N --of M` (with `--unknown`) on each disc: the position is
    written into the tags, so each disc gets its `N-` prefix and the discs
    do not collide. Without an output directory, it creates a
@@ -132,7 +157,7 @@ Key CLI subcommands, driven by Claude Code in conversation:
    `(Disc N of M)`, so each disc's `.cue` and `.log` names are distinct.
    Requires system package: `whipper`.
 
-8. `uv run music-tagger lock <album-dir> [field ...] [--track N] [--disc N] [--dry-run]`
+9. `uv run music-tagger lock <album-dir> [field ...] [--track N] [--disc N] [--dry-run]`
    — locks fields so `tag` keeps their current value, including an empty
    one. Omit the fields to show current locks. `unlock` takes the same
    arguments and removes them. `tag` reports withheld changes as
@@ -140,7 +165,7 @@ Key CLI subcommands, driven by Claude Code in conversation:
    `tag --ignore-locks` overwrites locked fields and leaves the locks in
    place. A locked `isrc` skips the ISRC conflict check.
 
-9. `uv run music-tagger apply <album-dir> --release-id <uuid> (--cover-file <img> | --keep-cover) --genre <g> [--genre <g> ...]`
+10. `uv run music-tagger apply <album-dir> --release-id <uuid> (--cover-file <img> | --keep-cover) --genre <g> [--genre <g> ...]`
    — runs `tag`, `art`, `genre`, `rename`, and `replaygain` in order and
    stops at the first non-zero exit. Checks that the cover image can be
    embedded (a readable JPEG or PNG) and that the genres are canonical
@@ -152,7 +177,7 @@ Key CLI subcommands, driven by Claude Code in conversation:
    exits 1. `main()` line-buffers stdout so progress lines interleave with
    whipper's and rsgain's output when piped.
 
-10. `uv run music-tagger place <album-dir> [--root <dir>] [--artist-dir <name>] [--album-dir <name>] [--merge] [--dry-run]`
+11. `uv run music-tagger place <album-dir> [--root <dir>] [--artist-dir <name>] [--album-dir <name>] [--merge] [--dry-run]`
     — copies a finished album into the library with SHA-256 verification.
     Refuses an existing album directory unless `--merge` (existing files are
     kept). Prints a flushed `[N/total] <file>: copied` line as each file is
@@ -169,21 +194,21 @@ Key CLI subcommands, driven by Claude Code in conversation:
     `.cue`, and `.toc` after the disc title, and a `:` in it made the NAS
     store them as 8.3 names such as `SFYL6N~T.LOG`.
 
-11. `uv run music-tagger lyrics <album-dir> [--track N [--disc D]] [--lookup | --fetch [--dry-run] [--replace] [--lyrics-id ID] | --embed [--dry-run] [--replace]]`
+12. `uv run music-tagger lyrics <album-dir> [--track N [--disc D]] [--lookup | --fetch [--dry-run] [--replace] [--lyrics-id ID] | --embed [--dry-run] [--replace]]`
     — with no mode, inspects embedded lyrics and `.lrc`/`.txt` sidecars: no
     network, no writes. `--lookup` searches LRCLIB and shows each candidate's
     evidence. `--fetch` saves the chosen lyrics as sidecars. `--embed` writes
     each track's sidecar into its tags, with no network. Details are under
     "Lyrics" below.
 
-12. `uv run music-tagger lyrics-batch <path> [--auto] [--embed] [--dry-run] [--pending FILE] [--decisions FILE]`
+13. `uv run music-tagger lyrics-batch <path> [--auto] [--embed] [--dry-run] [--pending FILE] [--decisions FILE]`
     — backfills lyrics for every album under `<path>` (a library root, an artist
     directory, or one album). Tracks with lyrics or a recorded decision are never
     searched. A track gets a sidecar only when its LRCLIB choice is certain. The rest
     are saved to the pending file with every candidate's record ID. `--embed` also
     writes sidecars into tags. Details are under "Batch" below.
 
-13. `uv run music-tagger lyrics-decide list [--album DIR]`,
+14. `uv run music-tagger lyrics-decide list [--album DIR]`,
     `lyrics-decide choose <album> (--track N [--disc D] | --file NAME) --id ID [--dry-run]`,
     `lyrics-decide skip <album> (--track N [--disc D] | --file NAME) --reason TEXT`
     — judges pending tracks from their saved options. `list` reads the pending
@@ -193,8 +218,10 @@ Key CLI subcommands, driven by Claude Code in conversation:
 
 ## Library workflow
 
-**For ripping a new CD**, use the `rip-album` skill: `rip` → `candidates`
-→ `art --preview` → `apply` → `place`.
+**For ripping a new CD**, use the `rip-album` skill: `identify` (attach the
+disc ID and run it again when it exits 3) → `rip` → `candidates` (only after
+an unknown rip) → `art --preview` → `apply` → `place`. A rip that passed AccurateRip is never ripped again to fix
+metadata or names; `apply` fixes both.
 
 **For fixing existing library albums**, use the `fix-album` skill:
 `checklist next` → `candidates` → `art --preview` → `apply`, in place.
@@ -259,6 +286,7 @@ src/music_tagger/
 ├── tagger.py        # Orchestration: search → diff → write
 ├── cue.py           # Keep CUE FILE lines in step with renamed audio
 ├── discid.py        # Whipper log TOC and MusicBrainz disc ID
+├── identify.py      # Match the drive's TOC to release media before ripping
 ├── placement.py     # Library path computation + verified copy
 ├── coverart.py      # Cover Art Archive client
 ├── navidrome.py     # Navidrome / Subsonic API client
@@ -277,7 +305,7 @@ src/music_tagger/
     ├── common.py     # Logs, exit codes, gate and warning printers shared by modules
     ├── tagging.py    # read, match, diff, write-tags, tag, apply, lock, unlock, candidates
     ├── library.py    # scan, checklist, path-for, copy, place, rename, art, genre, replaygain
-    ├── rip.py        # rip, toc
+    ├── rip.py        # rip, toc, identify
     ├── ratings.py    # write-ratings, write-stats, nd ratings, nd stats
     ├── services.py   # mb and nd subcommands (except ratings and stats)
     └── lyrics_cmd.py # lyrics, lyrics-batch, lyrics-decide

@@ -422,7 +422,7 @@ class TestRipFailure:
         assert error.value.code == 1
         err = capsys.readouterr().err  # type: ignore[attr-defined]
         assert "whipper failed (exit 2)" in err
-        assert "--unknown" in err
+        assert "music-tagger identify" in err
 
 
 class TestApplyInvalidJpeg:

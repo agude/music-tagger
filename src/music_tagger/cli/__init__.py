@@ -9,7 +9,7 @@ from collections.abc import Callable
 from .library import _art, _checklist, _copy, _genre, _path_for, _place, _rename, _replaygain, _scan
 from .lyrics_cmd import _lyrics, _lyrics_batch, _lyrics_decide
 from .ratings import _write_ratings, _write_stats
-from .rip import _rip, _toc
+from .rip import _identify, _rip, _toc
 from .services import _mb, _nd
 from .tagging import (
     _apply,
@@ -60,6 +60,7 @@ def _register_commands() -> dict[str, tuple[str, Callable[[list[str] | None], No
         "rename": ("Rename files to 'NN. Title.ext' from tags.", _rename),
         "replaygain": ("Compute and write ReplayGain 2.0 tags.", _replaygain),
         "rip": ("Rip a CD to FLAC with bootstrap tags.", _rip),
+        "identify": ("Find the release of the disc in the drive, before ripping.", _identify),
     }
 
 

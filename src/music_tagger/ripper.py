@@ -8,12 +8,12 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from mutagen import MutagenError
 from mutagen.flac import FLAC
 
 from .cue import rewrite_cue_references
+from .musicbrainz import DiscTOC
 from .tags import parse_position
 
 
@@ -268,11 +268,10 @@ def _move_disc_files(work_dir: Path, output_dir: Path, prefix: str, replace: boo
     return list(destinations.values())
 
 
-def read_disc_id(device: str = "/dev/cdrom") -> dict[str, Any]:
-    """Read disc ID and TOC from a CD using libdiscid.
+def read_drive_toc(device: str = "/dev/cdrom") -> tuple[DiscTOC, str]:
+    """The disc's TOC and its media catalog number (MCN), "" when the disc has none.
 
-    Returns a dict with disc_id, track_count, and tracks (list of
-    dicts with number, offset, sectors, seconds).
+    Reads only the TOC and the MCN subchannel; it takes seconds, not a rip.
     """
     try:
         import discid
@@ -282,20 +281,12 @@ def read_disc_id(device: str = "/dev/cdrom") -> dict[str, Any]:
             "Install: uv add discid && sudo apt-get install libdiscid-dev"
         ) from err
 
-    disc = discid.read(device)
-    tracks = []
-    for t in disc.tracks:
-        tracks.append(
-            {
-                "number": t.number,
-                "offset": t.offset,
-                "sectors": t.sectors,
-                "seconds": t.seconds,
-            }
-        )
-
-    return {
-        "disc_id": disc.id,
-        "track_count": len(disc.tracks),
-        "tracks": tracks,
-    }
+    disc = discid.read(device, features=["mcn"])
+    toc = DiscTOC(
+        disc_id=disc.id,
+        offsets=[track.offset for track in disc.tracks],
+        leadout=disc.sectors,
+    )
+    mcn = (disc.mcn or "").strip()
+    # Discs without an MCN report all zeros.
+    return toc, "" if not mcn.strip("0") else mcn
