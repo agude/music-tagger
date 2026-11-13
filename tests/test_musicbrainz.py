@@ -751,6 +751,27 @@ class TestParseRecordingCredits:
         assert credits["performers"] == "Singer (lead vocals, guitar)"
         assert credits["performer_ids"] == "a1"
 
+    def test_repeated_performer_attributes_appear_once(self) -> None:
+        recording = {
+            "relations": [
+                {
+                    "type": "instrument",
+                    "target-type": "artist",
+                    "attributes": ["drums (drum set)", "percussion"],
+                    "artist": {"id": "a1", "name": "Drummer"},
+                },
+                {
+                    "type": "instrument",
+                    "target-type": "artist",
+                    "attributes": ["percussion", "drums (drum set)"],
+                    "artist": {"id": "a1", "name": "Drummer"},
+                },
+            ]
+        }
+        credits = _parse_recording_credits(recording)
+        assert credits["performers"] == "Drummer (drums (drum set), percussion)"
+        assert credits["performer_ids"] == "a1"
+
     def test_deduplicates_composers(self) -> None:
         recording = {
             "relations": [

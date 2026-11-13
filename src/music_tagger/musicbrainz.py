@@ -286,10 +286,8 @@ def _parse_recording_credits(recording: dict[str, Any]) -> dict[str, Any]:
                 role = _CREDIT_ROLES[rtype]
                 role_artists.setdefault(role, {})[aid] = name
             elif rtype in ("instrument", "vocal", "performer"):
-                if aid in performer_map:
-                    performer_map[aid][1].extend(attrs)
-                else:
-                    performer_map[aid] = (name, list(attrs))
+                roles = performer_map.setdefault(aid, (name, []))[1]
+                roles.extend(attr for attr in attrs if attr not in roles)
 
         elif target_type == "work" and rtype == "performance":
             work = rel.get("work", {})

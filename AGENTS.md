@@ -49,8 +49,11 @@ Key CLI subcommands, driven by Claude Code in conversation:
    producer, engineer, mixer, conductor, remixer, and performer credits and
    their MusicBrainz IDs when the selected release omits them. MusicBrainz
    values stay first; missing existing values follow, with exact duplicates
-   removed. This does not merge artist, albumartist, recording, release, or
-   work IDs. The default remains unchanged. The `read` → `diff` path accepts
+   removed. A `performer` entry (`Name (role, role)`) is merged by name: an
+   existing entry for a person MusicBrainz lists adds only its missing roles.
+   In every mode, a role repeated within one performer is written once. This
+   does not merge artist, albumartist, recording, release, or work IDs. The
+   default remains unchanged. The `read` → `diff` path accepts
    the same flag. Use `edit-tags` to deliberately remove a retained credit.
 
 4. `uv run music-tagger genre <album-dir> [genre ...] [--dry-run] [--log changes.log]`

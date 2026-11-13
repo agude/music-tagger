@@ -448,7 +448,7 @@ def _build_new_tags(
         _set_credit(
             tags,
             "performer",
-            mb_track.performers,
+            _normalize_performers(mb_track.performers),
             "musicbrainz_performerid",
             mb_track.performer_ids,
         )
@@ -508,15 +508,89 @@ def _preserve_existing_credits(
         if merged_values or field_name in new_multi:
             new_multi[field_name] = merged_values
 
-    for field_name in ("performer", "musicbrainz_performerid"):
-        proposed = new_tags.get(field_name, "")
-        existing = track.tags.get(field_name, "")
-        merged = _merge_credit_values(
-            tuple(value.strip() for value in proposed.split(";") if value.strip()),
-            (existing,) if existing else (),
-        )
-        if merged or field_name in new_tags:
-            new_tags[field_name] = "; ".join(merged)
+    performers = _merge_performers(new_tags.get("performer", ""), track.tags.get("performer", ""))
+    if performers or "performer" in new_tags:
+        new_tags["performer"] = performers
+
+    proposed_ids = new_tags.get("musicbrainz_performerid", "")
+    existing_ids = track.tags.get("musicbrainz_performerid", "")
+    merged_ids = _merge_credit_values(
+        tuple(value.strip() for value in proposed_ids.split(";") if value.strip()),
+        (existing_ids,) if existing_ids else (),
+    )
+    if merged_ids or "musicbrainz_performerid" in new_tags:
+        new_tags["musicbrainz_performerid"] = "; ".join(merged_ids)
+
+
+def _split_top_level(text: str, separator: str) -> list[str]:
+    """Split on `separator` outside parentheses, so "drums (drum set)" stays whole."""
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for char in text:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(depth - 1, 0)
+        if char == separator and depth == 0:
+            parts.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    parts.append("".join(current).strip())
+    return [part for part in parts if part]
+
+
+def _parse_performer(entry: str) -> tuple[str, list[str]]:
+    """Split "Name (role, role)" into the name and its roles, without duplicate roles."""
+    if entry.endswith(")"):
+        depth = 0
+        for index in range(len(entry) - 1, -1, -1):
+            if entry[index] == ")":
+                depth += 1
+            elif entry[index] == "(":
+                depth -= 1
+                if depth == 0:
+                    name = entry[:index].strip()
+                    if name:
+                        roles: list[str] = []
+                        for role in _split_top_level(entry[index + 1 : -1], ","):
+                            if role not in roles:
+                                roles.append(role)
+                        return name, roles
+                    break
+    return entry, []
+
+
+def _format_performer(name: str, roles: list[str]) -> str:
+    return f"{name} ({', '.join(roles)})" if roles else name
+
+
+def _normalize_performers(value: str) -> str:
+    """Remove repeated roles within each performer, keeping one entry per position.
+
+    Entries stay in place so they still line up with `musicbrainz_performerid`.
+    """
+    entries = [_parse_performer(entry) for entry in _split_top_level(value, ";")]
+    return "; ".join(_format_performer(name, roles) for name, roles in entries)
+
+
+def _merge_performers(proposed: str, existing: str) -> str:
+    """Keep MusicBrainz performers, then add existing ones it omits.
+
+    An existing performer with the same name as a MusicBrainz one is the same
+    entry: its missing roles are added to that entry rather than repeating the
+    person.
+    """
+    merged = [_parse_performer(entry) for entry in _split_top_level(proposed, ";")]
+    for entry in _split_top_level(existing, ";"):
+        name, roles = _parse_performer(entry)
+        match = next((item for item in merged if item[0] == name), None)
+        if match is None:
+            merged.append((name, roles))
+        else:
+            match[1].extend(role for role in roles if role not in match[1])
+    return "; ".join(_format_performer(name, roles) for name, roles in merged)
 
 
 def _build_new_multi(

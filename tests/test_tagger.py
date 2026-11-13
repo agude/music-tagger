@@ -1671,6 +1671,57 @@ class TestKeepExistingCredits:
         assert changes["musicbrainz_workid"].new_value == "new-work-id"
         assert changes["musicbrainz_recordingid"].new_value == "new-recording-id"
 
+    def test_same_performer_gains_roles_instead_of_repeating(self) -> None:
+        album = _three_track_album()
+        album.tracks[0].tags.update(
+            {
+                "musicbrainz_albumid": "old-release",
+                "performer": "Drummer (drums (drum set), percussion); Singer",
+                "musicbrainz_performerid": "drummer-id; singer-id",
+            }
+        )
+        release = _make_release()
+        release.discs[1][
+            0
+        ].performers = (
+            "Drummer (drums (drum set), percussion, percussion, drums (drum set), timbales); Singer"
+        )
+        release.discs[1][0].performer_ids = "drummer-id; singer-id"
+
+        result = build_diff(album, release, keep_existing_credits=True)
+        changes = {change.field: change for change in result.diffs[0].changes}
+
+        assert changes["performer"].new_value == (
+            "Drummer (drums (drum set), percussion, timbales); Singer"
+        )
+        assert "musicbrainz_performerid" not in changes
+
+    def test_existing_performer_roles_are_added_to_the_same_person(self) -> None:
+        album = _three_track_album()
+        album.tracks[0].tags.update(
+            {
+                "musicbrainz_albumid": "old-release",
+                "performer": "Player (piano, piano, harpsichord); Retained (cello)",
+            }
+        )
+        release = _make_release()
+        release.discs[1][0].performers = "Player (piano); Added (flute)"
+
+        result = build_diff(album, release, keep_existing_credits=True)
+        change = next(c for c in result.diffs[0].changes if c.field == "performer")
+
+        assert change.new_value == "Player (piano, harpsichord); Added (flute); Retained (cello)"
+
+    def test_default_mode_removes_repeated_performer_roles(self) -> None:
+        album = _three_track_album({"musicbrainz_albumid": "old-release"})
+        release = _make_release()
+        release.discs[1][0].performers = "Singer (lead vocals, lead vocals); Band (guitar)"
+
+        result = build_diff(album, release)
+        change = next(c for c in result.diffs[0].changes if c.field == "performer")
+
+        assert change.new_value == "Singer (lead vocals); Band (guitar)"
+
     def test_default_mode_still_removes_omitted_credits(self) -> None:
         album = _three_track_album({"musicbrainz_albumid": "old-release", "composer": "Old"})
         album.tracks[0].multi["composer"] = ("Old",)
