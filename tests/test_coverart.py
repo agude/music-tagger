@@ -760,3 +760,35 @@ class TestImageValidation:
 
         assert existing.read_bytes() == b"\x89PNG\r\n\x1a\n" + b"original"
         assert not (tmp_path / "cover.jpg").exists()
+
+
+@pytest.fixture(autouse=True)
+def _preview_tempdir(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Keep art --preview downloads out of the real temp directory and out of tmp_path."""
+    import tempfile
+
+    temp = tmp_path_factory.mktemp("temp")
+    monkeypatch.setattr(tempfile, "tempdir", str(temp))
+    return temp
+
+
+def test_preview_reuses_one_directory_per_release(
+    flac_album: Path, _preview_tempdir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from music_tagger.cli.library import _art
+
+    def fake_fetch(release_id: str, dest_dir: Path, **_: object) -> ArtResult:
+        dest = dest_dir / "cover.jpg"
+        dest.write_bytes(_jpeg(10, 10))
+        return ArtResult(saved=True, path=dest, size_bytes=1)
+
+    with patch("music_tagger.cli.library.fetch_cover_art", side_effect=fake_fetch):
+        _art([str(flac_album), "--release-id", "r-1", "--preview"])
+        _art([str(flac_album), "--release-id", "r-1", "--preview"])
+        _art([str(flac_album), "--release-id", "r-2", "--preview"])
+
+    previews = _preview_tempdir / "music-tagger-covers"
+    assert sorted(p.name for p in previews.iterdir()) == ["r-1", "r-2"]
+    assert f"Candidate: {previews / 'r-1' / 'cover.jpg'}" in capsys.readouterr().out

@@ -166,7 +166,10 @@ def _identify(argv: list[str] | None = None) -> None:
         f"Route: {lengths} {medium} of {best.release.id}, "
         f"but its disc IDs do not include this disc{drift}."
     )
-    print("  This is a different pressing of a listed release, not a missing album.")
+    if best.tracks_compared == 0:
+        print("  The release lists this disc but has no disc ID for it yet.")
+    else:
+        print("  This is a different pressing of a listed release, not a missing album.")
     print(f"  Attach (preferred): open {attach_url(disc, best.release.id)}")
     print(f"    pick medium {best.position} ({len(disc.offsets)} tracks), and confirm the edit.")
     print("    Then run identify again: it exits 0 and prints a --release-id rip.")

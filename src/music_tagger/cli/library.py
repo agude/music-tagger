@@ -475,9 +475,11 @@ def _print_embed_skips(embed: EmbedResult) -> None:
 
 
 def _preview_cover(release_id: str, album_dir: Path) -> None:
-    result = fetch_cover_art(
-        release_id, Path(tempfile.mkdtemp(prefix="cover-")), full_size=True, force=True
-    )
+    # One directory per release, reused: a preview per call left a new
+    # /tmp/cover-* directory behind every time.
+    preview_dir = Path(tempfile.gettempdir()) / "music-tagger-covers" / release_id
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    result = fetch_cover_art(release_id, preview_dir, full_size=True, force=True)
     if result.not_found or result.path is None:
         print(f"No cover art available for release {release_id}.")
         sys.exit(1)

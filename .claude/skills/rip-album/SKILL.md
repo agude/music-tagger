@@ -58,7 +58,7 @@ offset difference, in frames, from that medium's closest attached disc ID.
 | --- | --- | --- |
 | 0 | `the disc ID is attached to medium N of M` | Run the printed `Rip:` command. The release is settled; skip step 3. |
 | 3 | `... match medium N of M ..., but its disc IDs do not include this disc` | A different pressing of a listed release. Show the user the top row (barcode, `Within 2s`, any `off:` tracks), the attach URL, and the line `pick medium N (T tracks), and confirm the edit`. Ask with `AskUserQuestion`: attach now, or rip unknown. **Attach now (recommended):** wait for the user, then run step 1 again; it exits 0, so follow that row. If it still exits 3, the MusicBrainz web service may lag the edit by a minute or two: wait and run step 1 again before asking the user. **Rip unknown:** run the printed fallback `rip` command and use that release ID in step 6; keep the attach URL for step 8. |
-| 4 | `no MusicBrainz release has barcode ...` | This CD is not in MusicBrainz; the closest rows are other releases. Do not attach the disc ID to them and do not tag from them. Run the printed `rip --unknown` now: the audio does not depend on the release. Give the user the printed attach URL to add the release (it starts from the disc's track lengths). After the user adds it, find it with the printed `mb discid <disc ID>` (the barcode search lags new releases by hours) and continue at step 4 with that release ID. For a multi-disc release, add every disc as a medium; then run step 1 for each later disc, which routes it to attaching its disc ID. If the user will not add it now, stop after the rip and report `$STAGING`; do not place an untagged album. |
+| 4 | `no MusicBrainz release has barcode ...` | This CD is not in MusicBrainz; the closest rows are other releases. Do not attach the disc ID to them and do not tag from them. Run the printed `rip --unknown` now: the audio does not depend on the release. On a multi-disc set (the case or Discogs shows several discs), add `--disc N --of M` yourself; `identify` cannot know the disc count of a missing release. Give the user the printed attach URL to add the release (it starts from the disc's track lengths), and walk them through the form with `${CLAUDE_SKILL_DIR}/references/add-release.md`. After the user adds it, find it with the printed `mb discid <disc ID>` (the barcode search lags new releases by hours) and continue at step 4 with that release ID. For a multi-disc release, add every disc as a medium; then run step 1 for each later disc, which routes it to attaching its disc ID. If the user will not add it now, stop after the rip and report `$STAGING`; do not place an untagged album. |
 | 1 | `no release medium matches this disc's track lengths` | Do not rip. Retry once with a different `--artist`/`--album` spelling or `--barcode`. If nothing matches, tell the user the searches tried and stop. |
 | 1 | `cannot read the disc` | Report the error. Ask the user to check the disc and drive. |
 
@@ -133,8 +133,12 @@ uv run music-tagger art "$STAGING" --release-id <uuid> --preview
 
 It prints `Candidate:` (a temp file) with dimensions. View it with Read.
 If it shows this release's artwork, pass `--cover-file "<candidate path>"`.
-If it is wrong, or exit 1 (`No cover art available`), ask the user for an
-image path and pass `--cover-file "<path>"`.
+If it is wrong, or exit 1 (`No cover art available`), preview another release
+of the same release group that shares the artwork (for example the vinyl of
+the same remaster): `art "$STAGING" --release-id <other uuid> --preview`.
+Show the user the candidate and its size, and ask whether to use it or a path
+to a better image (a larger scan or download). A newly added release has no
+cover until someone uploads one.
 
 Any JPEG or PNG works, at any size. The album folder keeps the original as
 `cover.jpg` or `cover.png`; the tracks get a JPEG, converted when the
