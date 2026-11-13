@@ -286,6 +286,7 @@ def _write_rename_log(
     renames: list[tuple[str, str]],
     cues: list[Path],
     sidecars: list[tuple[str, str]],
+    disc_files: list[tuple[str, str]] | None = None,
 ) -> None:
     timestamp = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     lines = [
@@ -300,6 +301,8 @@ def _write_rename_log(
         lines.append(f"- `{old}` → `{new}`")
     for old, new in sidecars:
         lines.append(f"- Lyric sidecar `{old}` → `{new}`")
+    for old, new in disc_files or []:
+        lines.append(f"- Rip file `{old}` → `{new}`")
     for cue in cues:
         lines.append(f"- CUE updated: `{cue.name}`")
     lines += ["", "---", ""]

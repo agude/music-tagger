@@ -95,7 +95,12 @@ Key CLI subcommands, driven by Claude Code in conversation:
    under its temporary name and is printed as `<old> is now <temp> (<old> is held
    by <other>)`, so a swap never replaces a file. `apply` stops at rename on exit 1. Rewrites the `FILE "…"` lines of every `.cue` in the
    album for the renamed files and warns about any FILE line naming a file
-   that does not exist.
+   that does not exist. Whipper's `.cue`, `.log`, and `.toc` from an
+   unknown rip (`Unknown Artist - <disc ID>.<ext>`) are renamed to `<Artist> -
+   <Album>.<ext>`, with ` (Disc N of M)` on a multi-disc album, once the tracks
+   carrying that disc ID (`MUSICBRAINZ_DISCID`) are tagged. Its `.m3u` is left
+   alone, since `place` deletes it. So `apply` leaves an unknown rip named as a
+   matched rip, and it never needs ripping again.
 
 7. `uv run music-tagger rip [<output-dir>] [--device /dev/cdrom] [--release-id <uuid>] [--unknown] [--disc N --of M]`
    — rips a CD to FLAC via whipper with AccurateRip verification.

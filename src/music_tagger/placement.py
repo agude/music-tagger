@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .lyrics import lyric_sidecars
+from .tagger import WHIPPER_PLACEHOLDERS
 from .tags import AlbumTags, TrackTags, disc_number, parse_position, parse_total
 
 DEFAULT_LIBRARY_ROOT = Path("/mnt/synology/media/music")
@@ -63,7 +64,7 @@ def _fit_bytes(text: str, budget: int) -> str:
     return "".join(kept)
 
 
-def _sanitize(name: str, budget: int = MAX_NAME_BYTES) -> str:
+def sanitize_name(name: str, budget: int = MAX_NAME_BYTES) -> str:
     """Make name safe as one path component, cut to at most budget UTF-8 bytes."""
     name = _UNSAFE_CHARS.sub("-", name)
     name = _STRIP_EDGES.sub("", _fit_bytes(name, budget))
@@ -132,14 +133,14 @@ def compute_placement(
     `artist_dir` and `album_dir` replace the directory names computed from
     the tags; they are sanitized the same way.
     """
-    artist_name = _sanitize(artist_dir or album.artist or "Unknown Artist")
+    artist_name = sanitize_name(artist_dir or album.artist or "Unknown Artist")
     if album_dir:
-        album_dir_name = _sanitize(album_dir)
+        album_dir_name = sanitize_name(album_dir)
     else:
         year = _extract_year(album)
         year_suffix = f" ({year})" if year else ""
         budget = MAX_NAME_BYTES - len(year_suffix.encode("utf-8"))
-        safe = _sanitize(album.album or "Unknown Album", budget=budget)
+        safe = sanitize_name(album.album or "Unknown Album", budget=budget)
         album_dir_name = safe + year_suffix
     destination = root / artist_name / album_dir_name
 
@@ -165,7 +166,7 @@ def compute_placement(
                 # Whipper names these after the disc title, which can hold
                 # characters (such as ":") that the NAS share mangles.
                 budget = MAX_NAME_BYTES - len(f.suffix.encode("utf-8"))
-                dest_name = _sanitize(f.stem, budget=budget) + f.suffix
+                dest_name = sanitize_name(f.stem, budget=budget) + f.suffix
                 mappings.append(FileMapping(source=f, dest=destination / dest_name))
 
     conflicts = find_destination_conflicts(mappings)
@@ -180,10 +181,10 @@ def is_multi_disc(album: AlbumTags) -> bool:
     A total comes from `totaldiscs`, or from a "1/2" discnumber. Each of rip,
     rename, and place uses this rule, so they agree on the disc prefix.
     """
-    return any(disc_number(t) > 1 or _disc_total(t) > 1 for t in album.tracks)
+    return any(disc_number(t) > 1 or disc_total(t) > 1 for t in album.tracks)
 
 
-def _disc_total(track: TrackTags) -> int:
+def disc_total(track: TrackTags) -> int:
     """The release's disc count as this track states it, or 0 when it states none."""
     from_number = parse_total(track.tags.get("discnumber", "")) or 0
     return max(from_number, parse_position(track.tags.get("totaldiscs", "")) or 0)
@@ -199,8 +200,52 @@ def track_filename(track: TrackTags, multi_disc: bool) -> str:
         prefix = f"{track_num:02d}. "
     suffix = track.path.suffix
     budget = MAX_NAME_BYTES - len(f"{prefix}{suffix}".encode())
-    title = _sanitize(track.tags.get("title", track.path.stem), budget=budget)
+    title = sanitize_name(track.tags.get("title", track.path.stem), budget=budget)
     return f"{prefix}{title}{suffix}"
+
+
+# Whipper's disc template "%A - %d" on a disc ripped with --unknown: the artist
+# placeholder, then the disc ID in place of the title.
+_UNKNOWN_DISC_STEM = re.compile(r"^Unknown Artist - (?P<disc_id>[A-Za-z0-9._-]{27}-)$")
+# Whipper's per-disc files. Its .m3u is left alone: `place` deletes it.
+_DISC_FILE_SUFFIXES = frozenset({".cue", ".log", ".toc"})
+
+
+def unknown_disc_file_renames(album: AlbumTags) -> list[tuple[Path, Path]]:
+    """Whipper's per-disc files from an unknown rip, renamed as a matched rip names them.
+
+    A file named "Unknown Artist - <disc ID>.<ext>" gets "<Artist> - <Album>.<ext>",
+    with " (Disc N of M)" on a multi-disc album, once the tracks that carry that
+    disc ID (MUSICBRAINZ_DISCID) are tagged. Files whose tracks still hold
+    whipper's placeholders are left alone.
+    """
+    by_disc_id: dict[str, list[TrackTags]] = {}
+    for track in album.tracks:
+        if disc_id := track.tags.get("musicbrainz_discid", ""):
+            by_disc_id.setdefault(disc_id, []).append(track)
+
+    multi_disc = is_multi_disc(album)
+    total = max((max(disc_number(t), disc_total(t)) for t in album.tracks), default=1)
+    renames: list[tuple[Path, Path]] = []
+    for path in sorted(album.directory.iterdir()):
+        if path.suffix.lower() not in _DISC_FILE_SUFFIXES or not path.is_file():
+            continue
+        found = _UNKNOWN_DISC_STEM.match(path.stem)
+        tracks = by_disc_id.get(found["disc_id"], []) if found else []
+        if not tracks:
+            continue
+        artist = tracks[0].tags.get("albumartist") or tracks[0].tags.get("artist", "")
+        title = tracks[0].tags.get("album", "")
+        if not artist or not title:
+            continue
+        if artist == WHIPPER_PLACEHOLDERS["artist"] or title == WHIPPER_PLACEHOLDERS["album"]:
+            continue
+        name = f"{artist} - {title}"
+        if multi_disc:
+            name += f" (Disc {disc_number(tracks[0])} of {total})"
+        budget = MAX_NAME_BYTES - len(path.suffix.encode())
+        renames.append((path, path.with_name(sanitize_name(name, budget=budget) + path.suffix)))
+    return renames
 
 
 def _extract_year(album: AlbumTags) -> str:

@@ -767,6 +767,7 @@ def _rename(argv: list[str] | None = None) -> None:
         find_destination_conflicts,
         is_multi_disc,
         track_filename,
+        unknown_disc_file_renames,
     )
 
     multi_disc = is_multi_disc(album)
@@ -795,10 +796,16 @@ def _rename(argv: list[str] | None = None) -> None:
         moves = [(s, s.with_name(new_path.stem + s.suffix)) for s in lyric_sidecars(track.path)]
         plan.append((track, new_name, new_path, moves))
 
+    # Whipper's .cue/.log/.toc from an unknown rip, named for the tagged album.
+    disc_moves = unknown_disc_file_renames(album)
+
     collisions = find_destination_conflicts(
         FileMapping(source=src, dest=dst)
-        for track, _, new_path, moves in plan
-        for src, dst in [(track.path, new_path), *moves]
+        for src, dst in [
+            *((t.path, p) for t, _, p, _ in plan),
+            *(m for _, _, _, moves in plan for m in moves),
+            *disc_moves,
+        ]
     )
     if collisions:
         print(f"Error: {conflict_message(collisions)}", file=sys.stderr)
@@ -806,14 +813,23 @@ def _rename(argv: list[str] | None = None) -> None:
 
     # A target that exists blocks the rename unless it is a file this plan moves
     # (a swap) or the same file as one (a case-only change).
-    planned_sources = [track.path for track, _, _, _ in plan] + [
-        src for _, _, _, moves in plan for src, _ in moves
+    planned_sources = [
+        *(track.path for track, _, _, _ in plan),
+        *(src for _, _, _, moves in plan for src, _ in moves),
+        *(src for src, _ in disc_moves),
+    ]
+    targets = [
+        *(
+            (track.path, dst)
+            for track, _, new_path, moves in plan
+            for dst in [new_path, *(d for _, d in moves)]
+        ),
+        *disc_moves,
     ]
     blocked = [
-        f"  {track.path.name}: '{dst.name}' already exists and is not part of this rename"
-        for track, _, new_path, moves in plan
-        for dst in [new_path, *(d for _, d in moves)]
-        if dst.exists() and not any(_is_same_file(dst, src) for src in planned_sources)
+        f"  {src.name}: '{dst.name}' already exists and is not part of this rename"
+        for src, dst in targets
+        if dst.exists() and not any(_is_same_file(dst, s) for s in planned_sources)
     ]
     if blocked:
         print("\n".join(blocked), file=sys.stderr)
@@ -825,11 +841,14 @@ def _rename(argv: list[str] | None = None) -> None:
             print(f"  {track.path.name} -> {new_name}")
             for src, dst in moves:
                 print(f"  {src.name} -> {dst.name}")
+        for src, dst in disc_moves:
+            print(f"  {src.name} -> {dst.name}")
         print(f"\n(dry run — {len(album.tracks)} tracks)")
         return
 
     pairs = [
-        pair for track, _, new_path, moves in plan for pair in [(track.path, new_path), *moves]
+        *(pair for track, _, new_path, moves in plan for pair in [(track.path, new_path), *moves]),
+        *disc_moves,
     ]
     audio_pairs = [(track.path, new_path) for track, _, new_path, _ in plan]
     sidecar_pairs = [pair for _, _, _, moves in plan for pair in moves]
@@ -852,6 +871,7 @@ def _rename(argv: list[str] | None = None) -> None:
                 [(s.name, d.name) for s, d in audio_pairs if (s, d) in landed],
                 [],
                 [(s.name, d.name) for s, d in sidecar_pairs if (s, d) in landed],
+                [(s.name, d.name) for s, d in disc_moves if (s, d) in landed],
             )
         print(
             f"Error: rename failed and {len(error.stranded)} file(s) could not be reverted: "
@@ -871,13 +891,19 @@ def _rename(argv: list[str] | None = None) -> None:
             print(f"  {src.name} -> {dst.name}")
             sidecar_renames.append((src.name, dst.name))
 
+    disc_renames = [(src.name, dst.name) for src, dst in disc_moves]
+    for old, new in disc_renames:
+        print(f"  {old} -> {new}")
+
     print(f"Renamed {len(renames)} file(s).")
     if sidecar_renames:
         print(f"Renamed {len(sidecar_renames)} lyric sidecar(s).")
+    if disc_renames:
+        print(f"Renamed {len(disc_renames)} rip file(s) from the unknown-disc name.")
     cues = _update_cue_sheets(target, dict(renames))
     log_path = _log_path(args)
-    if log_path and renames:
-        _write_rename_log(log_path, album, renames, cues, sidecar_renames)
+    if log_path and (renames or disc_renames):
+        _write_rename_log(log_path, album, renames, cues, sidecar_renames, disc_renames)
 
 
 def _path_key(path: Path) -> tuple[Path, str]:

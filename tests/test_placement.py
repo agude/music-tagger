@@ -13,32 +13,32 @@ from music_tagger.placement import (
     FileMapping,
     PlacementConflictError,
     PlacementPlan,
-    _sanitize,
     compute_placement,
     copy_files,
+    sanitize_name,
 )
 from music_tagger.tags import AlbumTags, TagChange, TrackTags, read_album, write_tags
 
 
 class TestSanitize:
     def test_removes_slashes(self) -> None:
-        assert _sanitize("AC/DC") == "AC-DC"
+        assert sanitize_name("AC/DC") == "AC-DC"
 
     def test_removes_colons(self) -> None:
-        assert _sanitize("Title: Subtitle") == "Title- Subtitle"
+        assert sanitize_name("Title: Subtitle") == "Title- Subtitle"
 
     def test_strips_dots_and_spaces(self) -> None:
-        assert _sanitize("  .name. ") == "name"
+        assert sanitize_name("  .name. ") == "name"
 
     def test_empty_becomes_underscore(self) -> None:
-        assert _sanitize("") == "_"
-        assert _sanitize("...") == "_"
+        assert sanitize_name("") == "_"
+        assert sanitize_name("...") == "_"
 
     def test_normal_text_unchanged(self) -> None:
-        assert _sanitize("Eagles") == "Eagles"
+        assert sanitize_name("Eagles") == "Eagles"
 
     def test_unicode_preserved(self) -> None:
-        assert _sanitize("Björk") == "Björk"
+        assert sanitize_name("Björk") == "Björk"
 
 
 class TestComputePlacement:
