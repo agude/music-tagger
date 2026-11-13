@@ -40,7 +40,11 @@ Key CLI subcommands, driven by Claude Code in conversation:
    `artist`, `album`, `albumartist`, or `date` that is more than a case,
    Unicode-punctuation, or whitespace change), 4 `Gate: blocked`
    (unresolved ISRC conflicts). A real run refuses exit-3 changes unless
-   `--approve-overwrites` is passed.
+   `--approve-overwrites` is passed. On an unknown-rip file (it has
+   `MUSICBRAINZ_DISCID` and no `MUSICBRAINZ_ALBUMID`), whipper's placeholders
+   (`title` `Unknown Track`, `artist`/`albumartist` `Unknown Artist`, `album`
+   `Unknown Album`, exact case) count as empty, so replacing them is `auto`. On
+   any other file the same values still need review.
 
 4. `uv run music-tagger genre <album-dir> [genre ...] [--dry-run] [--log changes.log]`
    — sets the genre meta-grouping tags on all tracks. Pass each genre as its

@@ -101,6 +101,8 @@ FIELD_MAP: dict[str, tuple[str, str]] = {
     "media": ("MEDIA", "TXXX:MEDIA"),
     "barcode": ("BARCODE", "TXXX:BARCODE"),
     "musicbrainz_albumid": ("MUSICBRAINZ_ALBUMID", "TXXX:MusicBrainz Album Id"),
+    # Written by whipper on every rip; on an unknown rip it is the only MB ID.
+    "musicbrainz_discid": ("MUSICBRAINZ_DISCID", "TXXX:MusicBrainz Disc Id"),
     "musicbrainz_artistid": ("MUSICBRAINZ_ARTISTID", "TXXX:MusicBrainz Artist Id"),
     "musicbrainz_albumartistid": (
         "MUSICBRAINZ_ALBUMARTISTID",

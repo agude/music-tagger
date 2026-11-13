@@ -922,16 +922,42 @@ _STYLE_EQUIVALENTS = str.maketrans(
 )
 
 
+# The values whipper writes on a disc ripped with --unknown. Replacing one on an
+# unknown rip loses nothing, so the gate treats it as an empty field.
+WHIPPER_PLACEHOLDERS = {
+    "title": "Unknown Track",
+    "artist": "Unknown Artist",
+    "albumartist": "Unknown Artist",
+    "album": "Unknown Album",
+}
+
+
+def is_unknown_rip(track: TrackTags) -> bool:
+    """True for a file as whipper leaves an unknown rip: a disc ID and no release ID."""
+    return bool(track.tags.get("musicbrainz_discid")) and not track.tags.get("musicbrainz_albumid")
+
+
+def is_placeholder(track: TrackTags, field: str, value: str) -> bool:
+    """True when value is whipper's placeholder for field, on an unknown-rip file.
+
+    A library file that happens to hold "Unknown Track" is not an unknown rip, so
+    its value still needs review.
+    """
+    return is_unknown_rip(track) and WHIPPER_PLACEHOLDERS.get(field) == value
+
+
 def overwrites_needing_review(result: AlbumResult) -> list[tuple[Path, TagChange]]:
     """Return changes that replace a reviewed field's value with different text.
 
-    Filling an empty field, and changes of case, Unicode punctuation, or
-    whitespace only, do not need review.
+    Filling an empty field, replacing whipper's placeholder on an unknown rip, and
+    changes of case, Unicode punctuation, or whitespace only, do not need review.
     """
     overwrites = []
     for diff in result.diffs:
         for change in diff.effective_changes:
             if change.field not in REVIEWED_FIELDS or not change.old_value:
+                continue
+            if is_placeholder(diff.track, change.field, change.old_value):
                 continue
             if _style_key(change.old_value) == _style_key(change.new_value):
                 continue
