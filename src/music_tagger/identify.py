@@ -38,9 +38,13 @@ class MediumMatch:
         """The disc can be ripped as this medium.
 
         Its disc ID is attached; or every track length matches; or the barcode
-        matches and at most one track (a remastered or edited one) is off.
+        matches and at most one track (a remastered or edited one) is off; or
+        the barcode and track count match and MusicBrainz has no lengths to
+        compare, as on a medium entered without a disc ID.
         """
         if self.exact or self.lengths_match:
+            return True
+        if self.barcode_match and self.tracks_compared == 0:
             return True
         return self.barcode_match and self.tracks_compared > 1 and len(self.outliers) <= 1
 

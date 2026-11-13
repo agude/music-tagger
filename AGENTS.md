@@ -121,7 +121,10 @@ Key CLI subcommands, driven by Claude Code in conversation:
    different barcode: the CD is not in MusicBrainz. It then prints no
    release-filtered attach URL (attaching to another release would be a wrong
    edit), only an unknown rip, the attach page that can start a new release,
-   and `mb search --barcode` to find the release once added. A candidate with
+   and `mb discid <disc ID>` to find the release once added (MusicBrainz's
+   search index lags new releases; disc ID lookups do not). A medium with no
+   track lengths in MusicBrainz (entered without a disc ID) routes with exit 3
+   when the barcode and track count match. A candidate with
    no barcode keeps the exit-3 route. Exit 1 when no medium is routable, the drive
    cannot be read, or a MusicBrainz request fails (no traceback). A staging
    path is put into the printed command for disc 2 and later. The attach URL

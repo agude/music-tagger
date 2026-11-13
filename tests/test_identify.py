@@ -405,7 +405,7 @@ class TestReleaseMissing:
         assert "Do not attach this disc ID to another release" in out
         assert "filter-release.query" not in out
         assert "rip --device /dev/cdrom --unknown\n" in out
-        assert "mb search --barcode 0603497808397" in out
+        assert f"mb discid {DISC.disc_id}" in out
 
     def test_candidate_without_a_barcode_keeps_the_normal_route(
         self, capsys: pytest.CaptureFixture[str]
@@ -422,3 +422,34 @@ class TestReleaseMissing:
         assert data["release_missing"] is True
         assert data["attach_url"] is None
         assert data["rip_command"] == "uv run music-tagger rip --device /dev/cdrom --unknown"
+
+
+class TestMediumWithoutLengths:
+    def test_barcode_and_count_match_routes_to_attach(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        client = MagicMock(spec=MusicBrainzClient)
+        client.lookup_discid.return_value = []
+        client.search_releases.return_value = [RELEASE]
+        client.fetch_media.return_value = [
+            MediumInfo(position=1, track_lengths_ms=[1000] * 16, tocs=[]),
+            MediumInfo(position=2, track_lengths_ms=[None] * 10, tocs=[]),
+        ]
+        with (
+            patch("music_tagger.ripper.read_drive_toc", return_value=(DISC, "0603497837465")),
+            patch("music_tagger.cli.rip.MusicBrainzClient", return_value=client),
+            pytest.raises(SystemExit) as error,
+        ):
+            _identify(["/tmp/rip-1"])
+        out = capsys.readouterr().out
+        assert error.value.code == 3
+        assert "barcode and track count match (MusicBrainz has no lengths to compare)" in out
+        assert "pick medium 2 (10 tracks)" in out
+        assert "rip /tmp/rip-1 --device /dev/cdrom --unknown --disc 2 --of 2" in out
+
+    def test_no_lengths_without_a_barcode_match_does_not_route(self) -> None:
+        bare = MBRelease(id="rel-x", title="Little Feat")
+        medium = MediumInfo(position=1, track_lengths_ms=[None] * 10, tocs=[])
+        match = match_medium(DISC, bare, medium, 1, "0603497837465")
+        assert match is not None
+        assert not match.routable

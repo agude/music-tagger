@@ -157,7 +157,9 @@ def _identify(argv: list[str] | None = None) -> None:
         else "; it has no disc ID with this track count"
     )
     lengths = "track lengths match"
-    if not best.lengths_match:
+    if best.tracks_compared == 0:
+        lengths = "the barcode and track count match (MusicBrainz has no lengths to compare)"
+    elif not best.lengths_match:
         off = ", ".join(str(n) for n in best.outliers)
         lengths = f"the barcode and all track lengths but track {off} match"
     print(
@@ -193,7 +195,8 @@ def _print_missing_release(result: Identification, device: str, staging: str | N
     print(f"     {rip_command(None, device, staging)}")
     print("  2. Add this release to MusicBrainz. Its attach page can start a new release")
     print(f"     with this disc's track lengths: {attach_url(result.disc)}")
-    print(f"  3. Find it: uv run music-tagger mb search --barcode {result.barcode}")
+    print(f"  3. Find it by this disc's ID: uv run music-tagger mb discid {result.disc.disc_id}")
+    print("     (the barcode search lags new releases by hours; disc ID lookups do not)")
     print("  4. Tag: apply <staging> --release-id <new release ID> ...")
 
 
