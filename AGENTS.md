@@ -735,9 +735,13 @@ inspection write no log. `lyrics-batch` follows the same rule.
 
   `TXXX:ALBUM ARTISTS` follows the spelling in the design table; it could not be checked
   against Navidrome's mapping offline.
-- `date` (FLAC `DATE`, MP3 `TDRC`) is the recording date — never overwritten
+- `date` (FLAC `DATE`, MP3 `TDRC`) is the original date — never overwritten
   by the MB release date. When empty, populated from the release group's
-  `first_release_date`.
+  `first_release_date`. Whipper writes the release date into `DATE` on a
+  matched rip, so a value equal to this release's date (when that differs from
+  `first_release_date`) is replaced with `first_release_date`, without review.
+  Otherwise the reissue's year names the library folder: `Dixie Chicken (2023)`
+  instead of `(1973)`.
 - FLAC `totaldiscs` is read from `DISCTOTAL`, else `TOTALDISCS` (whipper writes
   only `DISCTOTAL`, counting every medium of the release, DVDs included; a stale
   `TOTALDISCS` never hides it). A write

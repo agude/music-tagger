@@ -392,7 +392,9 @@ def _build_new_tags(
     tags["totaldiscs"] = str(max(release.discs)) if release.discs else "1"
     tags["totaltracks"] = str(len(disc_tracks)) if disc_tracks else str(release.track_count)
 
-    if release.first_release_date and not track.tags.get("date"):
+    if release.first_release_date and (
+        not track.tags.get("date") or is_release_date(track.tags["date"], release)
+    ):
         tags["date"] = release.first_release_date
     if release.date:
         tags["releasedate"] = release.date
@@ -946,10 +948,25 @@ def is_placeholder(track: TrackTags, field: str, value: str) -> bool:
     return is_unknown_rip(track) and WHIPPER_PLACEHOLDERS.get(field) == value
 
 
+def is_release_date(value: str, release: MBRelease) -> bool:
+    """True when a date tag holds this release's own date, not the original one.
+
+    Whipper writes the release date into DATE on a matched rip, so a reissue got
+    its reissue year. DATE is the original date; this value is replaced by the
+    release group's first release date when the two differ.
+    """
+    return (
+        bool(value and release.date and release.first_release_date)
+        and value == release.date
+        and release.first_release_date != release.date
+    )
+
+
 def overwrites_needing_review(result: AlbumResult) -> list[tuple[Path, TagChange]]:
     """Return changes that replace a reviewed field's value with different text.
 
-    Filling an empty field, replacing whipper's placeholder on an unknown rip, and
+    Filling an empty field, replacing whipper's placeholder on an unknown rip,
+    replacing a reissue's release date in `date` with the original date, and
     changes of case, Unicode punctuation, or whitespace only, do not need review.
     """
     overwrites = []
@@ -958,6 +975,12 @@ def overwrites_needing_review(result: AlbumResult) -> list[tuple[Path, TagChange
             if change.field not in REVIEWED_FIELDS or not change.old_value:
                 continue
             if is_placeholder(diff.track, change.field, change.old_value):
+                continue
+            if (
+                change.field == "date"
+                and is_release_date(change.old_value, result.release)
+                and change.new_value == result.release.first_release_date
+            ):
                 continue
             if _style_key(change.old_value) == _style_key(change.new_value):
                 continue
