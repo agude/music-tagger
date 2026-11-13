@@ -367,3 +367,58 @@ class TestIdentifyCommand:
         with pytest.raises(SystemExit) as error:
             _identify(["--artist", "Little Feat"])
         assert error.value.code == 2
+
+
+class TestReleaseMissing:
+    """A barcode that no release has: the CD is not in MusicBrainz yet."""
+
+    OTHER = MBRelease(id="rel-2007", title="Little Feat", date="2007", barcode="821797077064")
+
+    def _run(
+        self, release: MBRelease, argv: list[str], capsys: pytest.CaptureFixture[str]
+    ) -> tuple[int, str]:
+        client = MagicMock(spec=MusicBrainzClient)
+        client.lookup_discid.return_value = []
+        client.search_releases.side_effect = lambda artist, album, barcode=None: (
+            [] if barcode else [release]
+        )
+        attached = _drifted(DISC, 428)
+        client.fetch_media.return_value = [
+            MediumInfo(position=1, track_lengths_ms=_lengths_ms(DISC), tocs=[attached])
+        ]
+        with (
+            patch("music_tagger.ripper.read_drive_toc", return_value=(DISC, "0603497808397")),
+            patch("music_tagger.cli.rip.MusicBrainzClient", return_value=client),
+            pytest.raises(SystemExit) as error,
+        ):
+            _identify(["--album", "Little Feat", *argv])
+        code = error.value.code
+        return (code if isinstance(code, int) else 0), capsys.readouterr().out
+
+    def test_lengths_match_under_another_barcode_is_a_missing_release(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        code, out = self._run(self.OTHER, [], capsys)
+        assert code == 4
+        assert "no MusicBrainz release has barcode 0603497808397" in out
+        assert "rel-2007 (2007, barcode 821797077064), is a different release" in out
+        assert "Do not attach this disc ID to another release" in out
+        assert "filter-release.query" not in out
+        assert "rip --device /dev/cdrom --unknown\n" in out
+        assert "mb search --barcode 0603497808397" in out
+
+    def test_candidate_without_a_barcode_keeps_the_normal_route(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        bare = MBRelease(id="rel-bare", title="Little Feat")
+        code, out = self._run(bare, [], capsys)
+        assert code == 3
+        assert "Attach (preferred)" in out
+
+    def test_json_reports_the_missing_release(self, capsys: pytest.CaptureFixture[str]) -> None:
+        code, out = self._run(self.OTHER, ["--json"], capsys)
+        data = json.loads(out)
+        assert code == 4
+        assert data["release_missing"] is True
+        assert data["attach_url"] is None
+        assert data["rip_command"] == "uv run music-tagger rip --device /dev/cdrom --unknown"

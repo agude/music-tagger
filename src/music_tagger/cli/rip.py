@@ -17,7 +17,7 @@ from ..musicbrainz import MusicBrainzClient
 from .common import EXIT_REVIEW, _format_table, _output_json
 
 if TYPE_CHECKING:
-    from ..identify import MediumMatch
+    from ..identify import Identification, MediumMatch
 
 
 def _toc(argv: list[str] | None = None) -> None:
@@ -105,11 +105,14 @@ def _identify(argv: list[str] | None = None) -> None:
             "toc": disc.offsets,
             "leadout": disc.leadout,
             "matches": [_match_dict(m) for m in result.matches],
-            "rip_command": rip_command(best, args.device, args.staging)
+            "release_missing": result.release_missing,
+            "rip_command": rip_command(None, args.device, args.staging)
+            if result.release_missing
+            else rip_command(best, args.device, args.staging)
             if best and best.routable
             else None,
             "attach_url": attach_url(disc, best.release.id)
-            if best and best.routable and not best.exact
+            if best and best.routable and not best.exact and not result.release_missing
             else None,
         }
         sys.stdout.write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
@@ -128,6 +131,11 @@ def _identify(argv: list[str] | None = None) -> None:
         if result.matches:
             rows = [_match_row(i, m) for i, m in enumerate(result.matches, 1)]
             print(_format_table(_IDENTIFY_COLUMNS, rows) + "\n")
+
+    if result.release_missing:
+        if not args.json:
+            _print_missing_release(result, args.device, args.staging)
+        sys.exit(EXIT_RELEASE_MISSING)
 
     if best is None or not best.routable:
         if not args.json:
@@ -164,6 +172,29 @@ def _identify(argv: list[str] | None = None) -> None:
     print(f"    1. Rip: {rip_command(best, args.device, args.staging)}")
     print(f"    2. Tag: apply <staging> --release-id {best.release.id} ...")
     sys.exit(EXIT_REVIEW)
+
+
+# identify: the barcode names a release that MusicBrainz does not have.
+EXIT_RELEASE_MISSING = 4
+
+
+def _print_missing_release(result: Identification, device: str, staging: str | None) -> None:
+    from ..identify import attach_url, rip_command
+
+    print(f"Route: no MusicBrainz release has barcode {result.barcode}.")
+    if result.best is not None:
+        closest = result.best.release
+        print(
+            f"  The closest by track lengths, {closest.id} ({closest.date or 'no date'}, "
+            f"barcode {closest.barcode}), is a different release."
+        )
+    print("  Do not attach this disc ID to another release, and do not tag from one.")
+    print("  1. Rip now; the audio does not depend on the release:")
+    print(f"     {rip_command(None, device, staging)}")
+    print("  2. Add this release to MusicBrainz. Its attach page can start a new release")
+    print(f"     with this disc's track lengths: {attach_url(result.disc)}")
+    print(f"  3. Find it: uv run music-tagger mb search --barcode {result.barcode}")
+    print("  4. Tag: apply <staging> --release-id <new release ID> ...")
 
 
 _IDENTIFY_COLUMNS = [

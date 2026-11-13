@@ -56,6 +56,19 @@ class Identification:
     def best(self) -> MediumMatch | None:
         return self.matches[0] if self.matches else None
 
+    @property
+    def release_missing(self) -> bool:
+        """The barcode names a release MusicBrainz does not have.
+
+        True when a barcode is known, no medium has the disc ID attached, no
+        candidate has the barcode, and every candidate that fits the track
+        lengths carries a different barcode. A candidate with no barcode may
+        still be this release, so it keeps the normal route.
+        """
+        if not self.barcode or any(m.exact or m.barcode_match for m in self.matches):
+            return False
+        return all(m.release.barcode for m in self.matches if m.routable)
+
 
 def attach_url(disc: DiscTOC, release_id: str | None = None) -> str:
     """The MusicBrainz page that attaches this disc ID to a medium.
@@ -156,8 +169,8 @@ def identify_disc(
     return result
 
 
-def rip_command(match: MediumMatch, device: str, staging: str | None = None) -> str:
-    """The rip command for the disc, given the medium it matches.
+def rip_command(match: MediumMatch | None, device: str, staging: str | None = None) -> str:
+    """The rip command for the disc, given the medium it matches, or None for no medium.
 
     `staging` is the directory earlier discs of the album were ripped into.
     """
@@ -165,6 +178,8 @@ def rip_command(match: MediumMatch, device: str, staging: str | None = None) -> 
     if staging:
         command += f" {shlex.quote(staging)}"
     command += f" --device {device}"
+    if match is None:
+        return f"{command} --unknown"
     if match.exact:
         return f"{command} --release-id {match.release.id}"
     command += " --unknown"

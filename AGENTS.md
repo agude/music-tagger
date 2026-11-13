@@ -116,7 +116,13 @@ Key CLI subcommands, driven by Claude Code in conversation:
    `off: N`): a different pressing. Exit 3 prints the MusicBrainz attach URL as
    the preferred route (attach, run `identify` again, which then exits 0) and
    `rip --unknown` (with `--disc N --of M` on a multi-disc release) then `apply
-   --release-id` as the fallback. Exit 1 when no medium is routable, the drive
+   --release-id` as the fallback. Exit 4 when a barcode is known (given or
+   MCN), no candidate has it, and every candidate that fits carries a
+   different barcode: the CD is not in MusicBrainz. It then prints no
+   release-filtered attach URL (attaching to another release would be a wrong
+   edit), only an unknown rip, the attach page that can start a new release,
+   and `mb search --barcode` to find the release once added. A candidate with
+   no barcode keeps the exit-3 route. Exit 1 when no medium is routable, the drive
    cannot be read, or a MusicBrainz request fails (no traceback). A staging
    path is put into the printed command for disc 2 and later. The attach URL
    carries `filter-release.query=<release MBID>` (lowercase; MusicBrainz's
