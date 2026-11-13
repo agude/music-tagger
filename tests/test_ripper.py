@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -621,3 +622,32 @@ class TestRipCommandUnknownDisc:
 
         out = capsys.readouterr().out  # type: ignore[attr-defined]
         assert f"  uv run music-tagger rip {target} --unknown --disc 2 --of 2" in out
+
+
+class TestRipFailureCleansUp:
+    def test_empty_work_dir_is_removed(self, tmp_path: Path) -> None:
+        with (
+            patch("shutil.which", return_value="/usr/bin/whipper"),
+            patch(
+                "music_tagger.ripper.subprocess.run",
+                side_effect=subprocess.CalledProcessError(2, ["whipper"]),
+            ),
+            pytest.raises(subprocess.CalledProcessError),
+        ):
+            rip_cd(tmp_path)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_work_dir_with_partial_files_is_kept(self, tmp_path: Path) -> None:
+        def partial(cmd: list[str], check: bool) -> None:
+            work_dir = Path(cmd[cmd.index("-O") + 1])
+            (work_dir / "01. Unknown Track 1.flac").write_bytes(b"")
+            raise subprocess.CalledProcessError(2, cmd)
+
+        with (
+            patch("shutil.which", return_value="/usr/bin/whipper"),
+            patch("music_tagger.ripper.subprocess.run", side_effect=partial),
+            pytest.raises(subprocess.CalledProcessError),
+        ):
+            rip_cd(tmp_path)
+        [work_dir] = tmp_path.iterdir()
+        assert work_dir.name.startswith(".whipper-")

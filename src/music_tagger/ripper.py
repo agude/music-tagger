@@ -181,7 +181,14 @@ def rip_cd(
     if unknown:
         cmd.extend(["-U"])
 
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError:
+        # A failed lookup leaves the work directory empty; a later rip into the
+        # same output_dir would otherwise trip over it. Partial files are kept.
+        if not any(work_dir.iterdir()):
+            work_dir.rmdir()
+        raise
 
     ripped = sorted(work_dir.glob("*.flac"))
     if not ripped:

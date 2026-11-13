@@ -119,7 +119,8 @@ Key CLI subcommands, driven by Claude Code in conversation:
    when none of these hold. When whipper rips audio hidden before track 1
    (`00. Hidden Track One Audio.flac`), N counts only the numbered tracks and the
    log's track 0 section is expected. Tracks absent from the AccurateRip database are normal. A whipper
-   failure exits 1 with `Error: whipper failed (exit N)`, not a traceback.
+   failure exits 1 with `Error: whipper failed (exit N)`, not a traceback,
+   and removes the `.whipper-*` directory when whipper left it empty.
    Whipper refuses an output directory that holds a `.log`, so `rip` runs
    it in a fresh `.whipper-*` subdirectory and moves the files up. When
    whipper's `DISCNUMBER`/`DISCTOTAL` tags show a multi-disc release, tracks
