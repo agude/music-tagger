@@ -37,7 +37,9 @@ uv run music-tagger rip --device <device>
 ```
 
 Add `--release-id <uuid>` when the user gave one. If whipper reports that
-the disc is not in MusicBrainz, rerun with `--unknown`.
+the disc is not in MusicBrainz, rerun with `--unknown`. For an unknown
+multi-disc album, add `--disc N --of M` to every disc's command. The
+`Next:` line prints the command for the next disc with these flags.
 
 The first line is `Staging: <path>`; call that `$STAGING`. The output ends
 with an AccurateRip summary. Whipper's Q-subchannel CRC warnings during the

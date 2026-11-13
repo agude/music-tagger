@@ -476,6 +476,58 @@ class TestRipDiscs:
         assert read_disc_position(path) == (None, None)
 
 
+class TestUnknownDisc:
+    def test_position_is_written_into_the_tags_and_prefixed(self, tmp_path: Path) -> None:
+        from music_tagger.ripper import read_disc_position
+
+        whipper = _whipper_disc(["01. Unknown Track 1.flac", "02. Unknown Track 2.flac"], None)
+        with (
+            patch("shutil.which", return_value="/usr/bin/whipper"),
+            patch("music_tagger.ripper.subprocess.run", side_effect=whipper),
+        ):
+            result = rip_cd(tmp_path, unknown=True, unknown_disc=(2, 2))
+
+        assert [path.name for path in result.tracks] == [
+            "2-01. Unknown Track 1.flac",
+            "2-02. Unknown Track 2.flac",
+        ]
+        assert (result.disc_number, result.disc_total) == (2, 2)
+        assert read_disc_position(result.tracks[0]) == (2, 2)
+        assert (tmp_path / "Artist - Album.cue").read_text() == (
+            'FILE "2-01. Unknown Track 1.flac" WAVE\nFILE "2-02. Unknown Track 2.flac" WAVE\n'
+        )
+
+    def test_second_unknown_disc_joins_the_first_without_collision(self, tmp_path: Path) -> None:
+        first = _whipper_disc(["01. Unknown Track 1.flac"], None, "Unknown disc one")
+        second = _whipper_disc(["01. Unknown Track 1.flac"], None, "Unknown disc two")
+        with (
+            patch("shutil.which", return_value="/usr/bin/whipper"),
+            patch("music_tagger.ripper.subprocess.run", side_effect=first),
+        ):
+            rip_cd(tmp_path, unknown=True)
+        disc_one = (tmp_path / "01. Unknown Track 1.flac").read_bytes()
+        with (
+            patch("shutil.which", return_value="/usr/bin/whipper"),
+            patch("music_tagger.ripper.subprocess.run", side_effect=second),
+        ):
+            result = rip_cd(tmp_path, unknown=True, unknown_disc=(2, 2))
+
+        assert sorted(path.name for path in tmp_path.glob("*.flac")) == [
+            "01. Unknown Track 1.flac",
+            "2-01. Unknown Track 1.flac",
+        ]
+        assert (tmp_path / "01. Unknown Track 1.flac").read_bytes() == disc_one
+        assert result.disc_number == 2
+
+    def test_unknown_disc_needs_unknown(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="needs unknown=True"):
+            rip_cd(tmp_path, unknown_disc=(2, 2))
+
+    def test_unknown_disc_number_must_be_one_of_the_total(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="not one of 2 discs"):
+            rip_cd(tmp_path, unknown=True, unknown_disc=(3, 2))
+
+
 class TestRipCommandDiscs:
     def _rip(self, tmp_path: Path, disc: tuple[int, int] | None) -> str:
         from music_tagger.cli.rip import _rip
@@ -508,3 +560,64 @@ class TestRipCommandDiscs:
         self._rip(tmp_path, None)
 
         assert "Disc verified; safe to eject." in capsys.readouterr().out  # type: ignore[attr-defined]
+
+
+class TestRipCommandUnknownDisc:
+    def _run(self, tmp_path: Path, argv: list[str]) -> MagicMock:
+        from music_tagger.cli.rip import _rip
+
+        log_file = tmp_path / "rip.log"
+        log_file.write_text(_log(_track_block(1, EXACT, EXACT)))
+        with patch("music_tagger.ripper.rip_cd") as rip:
+            rip.return_value = RipResult(
+                tracks=[], track_count=1, log_file=log_file, disc_number=2, disc_total=2
+            )
+            _rip([str(tmp_path / "out"), *argv])
+        return rip
+
+    def test_passes_the_position_to_rip_cd(self, tmp_path: Path) -> None:
+        rip = self._run(tmp_path, ["--unknown", "--disc", "2", "--of", "2"])
+
+        assert rip.call_args.kwargs["unknown"] is True
+        assert rip.call_args.kwargs["unknown_disc"] == (2, 2)
+
+    def test_no_position_passes_none(self, tmp_path: Path) -> None:
+        rip = self._run(tmp_path, ["--unknown"])
+
+        assert rip.call_args.kwargs["unknown_disc"] is None
+
+    def test_disc_needs_unknown(self, tmp_path: Path, capsys: object) -> None:
+        with pytest.raises(SystemExit) as exit_info:
+            self._run(tmp_path, ["--disc", "2", "--of", "2"])
+
+        assert exit_info.value.code == 2
+        assert "--disc needs --unknown" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+    def test_disc_and_total_come_together(self, tmp_path: Path, capsys: object) -> None:
+        with pytest.raises(SystemExit) as exit_info:
+            self._run(tmp_path, ["--unknown", "--disc", "2"])
+
+        assert exit_info.value.code == 2
+        assert "must be given together" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+    def test_disc_must_be_one_of_the_total(self, tmp_path: Path, capsys: object) -> None:
+        with pytest.raises(SystemExit) as exit_info:
+            self._run(tmp_path, ["--unknown", "--disc", "3", "--of", "2"])
+
+        assert exit_info.value.code == 2
+        assert "is not one of --of 2 discs" in capsys.readouterr().err  # type: ignore[attr-defined]
+
+    def test_next_disc_repeats_the_unknown_flags(self, tmp_path: Path, capsys: object) -> None:
+        from music_tagger.cli.rip import _rip
+
+        log_file = tmp_path / "rip.log"
+        log_file.write_text(_log(_track_block(1, EXACT, EXACT)))
+        target = tmp_path / "out"
+        with patch("music_tagger.ripper.rip_cd") as rip:
+            rip.return_value = RipResult(
+                tracks=[], track_count=1, log_file=log_file, disc_number=1, disc_total=2
+            )
+            _rip([str(target), "--unknown", "--disc", "1", "--of", "2"])
+
+        out = capsys.readouterr().out  # type: ignore[attr-defined]
+        assert f"  uv run music-tagger rip {target} --unknown --disc 2 --of 2" in out

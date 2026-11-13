@@ -89,12 +89,15 @@ Key CLI subcommands, driven by Claude Code in conversation:
    album for the renamed files and warns about any FILE line naming a file
    that does not exist.
 
-7. `uv run music-tagger rip [<output-dir>] [--device /dev/cdrom] [--release-id <uuid>] [--unknown]`
+7. `uv run music-tagger rip [<output-dir>] [--device /dev/cdrom] [--release-id <uuid>] [--unknown] [--disc N --of M]`
    — rips a CD to FLAC via whipper with AccurateRip verification.
    Whipper handles disc ID lookup, MusicBrainz matching, and FLAC
    encoding. Produces .log and .cue files alongside the audio.
    Use `--release-id` to force a specific MB release, or `--unknown`
-   to rip CDs not in MusicBrainz. Without an output directory, it creates a
+   to rip CDs not in MusicBrainz. An unknown multi-disc album needs
+   `--disc N --of M` (with `--unknown`) on each disc: the position is
+   written into the tags, so each disc gets its `N-` prefix and the discs
+   do not collide. Without an output directory, it creates a
    temp staging directory and prints `Staging: <path>`. It parses whipper's
    log and prints an AccurateRip summary per track; it exits 3 when a track
    is a mismatch (`Found, NO exact match`), its status is not `Copy OK`, or

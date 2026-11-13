@@ -71,7 +71,29 @@ def _rip(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Overwrite files from an earlier rip of this disc in the output directory.",
     )
+    parser.add_argument(
+        "--disc",
+        type=int,
+        default=None,
+        help="Disc number of an unknown multi-disc album (with --unknown and --of).",
+    )
+    parser.add_argument(
+        "--of",
+        type=int,
+        dest="disc_total",
+        default=None,
+        help="Number of discs in the album (with --disc).",
+    )
     args = parser.parse_args(argv)
+    if (args.disc is None) != (args.disc_total is None):
+        parser.error("--disc and --of must be given together")
+    unknown_disc: tuple[int, int] | None = None
+    if args.disc is not None:
+        if not args.unknown:
+            parser.error("--disc needs --unknown; MusicBrainz gives the disc position otherwise")
+        if not 1 <= args.disc <= args.disc_total:
+            parser.error(f"--disc {args.disc} is not one of --of {args.disc_total} discs")
+        unknown_disc = (args.disc, args.disc_total)
 
     from .. import ripper
 
@@ -85,6 +107,7 @@ def _rip(argv: list[str] | None = None) -> None:
             release_id=args.release_id,
             unknown=args.unknown,
             replace=args.replace,
+            unknown_disc=unknown_disc,
         )
     except subprocess.CalledProcessError as error:
         print(f"Error: whipper failed (exit {error.returncode}).", file=sys.stderr)
@@ -116,8 +139,10 @@ def _rip(argv: list[str] | None = None) -> None:
 
     print(f"\n{disc} verified; safe to eject.")
     if result.is_multi_disc and (result.disc_number or 0) < (result.disc_total or 0):
-        print(f"Next: insert disc {(result.disc_number or 0) + 1}, then run:")
-        print(f"  uv run music-tagger rip {target}")
+        next_disc = (result.disc_number or 0) + 1
+        flags = f" --unknown --disc {next_disc} --of {result.disc_total}" if args.unknown else ""
+        print(f"Next: insert disc {next_disc}, then run:")
+        print(f"  uv run music-tagger rip {target}{flags}")
         return
     print("Next: review tags and candidates:")
     print(f"  uv run music-tagger candidates {target}")

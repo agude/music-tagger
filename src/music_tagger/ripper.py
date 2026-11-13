@@ -133,6 +133,7 @@ def rip_cd(
     release_id: str | None = None,
     unknown: bool = False,
     replace: bool = False,
+    unknown_disc: tuple[int, int] | None = None,
 ) -> RipResult:
     """Rip a CD to FLAC files in output_dir using whipper.
 
@@ -143,7 +144,17 @@ def rip_cd(
     release they get a ``D-`` prefix, so each disc of an album can be ripped
     into the same output_dir. `replace` overwrites files from an earlier rip
     of the same disc.
+
+    `unknown_disc` is (number, total) for a disc ripped with `unknown`, where
+    whipper has no MusicBrainz position. The position is written into the FLAC
+    tags, so the disc gets the same ``D-`` prefix as a matched disc.
     """
+    if unknown_disc is not None:
+        number, total = unknown_disc
+        if not unknown:
+            raise ValueError("unknown_disc needs unknown=True; whipper reads it otherwise")
+        if not 1 <= number <= total:
+            raise ValueError(f"disc {number} is not one of {total} discs")
     _check_tool("whipper")
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -175,6 +186,8 @@ def rip_cd(
     ripped = sorted(work_dir.glob("*.flac"))
     if not ripped:
         raise RuntimeError(f"whipper produced no FLAC files in {work_dir}")
+    if unknown_disc is not None:
+        _write_disc_position(ripped, *unknown_disc)
 
     disc_number, disc_total = read_disc_position(ripped[0])
     prefix = f"{disc_number}-" if disc_number and (disc_total or 1) > 1 else ""
@@ -211,6 +224,15 @@ def read_disc_position(path: Path) -> tuple[int | None, int | None]:
         parse_position(number[0]) if number else None,
         parse_position(total[0]) if total else None,
     )
+
+
+def _write_disc_position(paths: list[Path], number: int, total: int) -> None:
+    """Write DISCNUMBER and DISCTOTAL into whipper's FLACs for an unknown disc."""
+    for path in paths:
+        audio = FLAC(path)  # type: ignore[no-untyped-call]
+        audio["DISCNUMBER"] = str(number)
+        audio["DISCTOTAL"] = str(total)
+        audio.save()
 
 
 def _move_disc_files(work_dir: Path, output_dir: Path, prefix: str, replace: bool) -> list[Path]:
