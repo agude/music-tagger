@@ -19,8 +19,11 @@ def _mb_search(argv: list[str] | None = None) -> None:
         prog="music-tagger mb search",
         description="Search MusicBrainz for candidate releases.",
     )
-    parser.add_argument("--artist", required=True, help="Artist name.")
-    parser.add_argument("--album", required=True, help="Album title.")
+    parser.add_argument("--artist", default="", help="Artist name.")
+    parser.add_argument("--album", default="", help="Album title.")
+    parser.add_argument(
+        "--barcode", default=None, help="Barcode (UPC/EAN); enough on its own to search."
+    )
     parser.add_argument("--format", default="CD", help="Media format filter (default: CD).")
     parser.add_argument("--limit", type=int, default=10, help="Max results (default: 10).")
     parser.add_argument(
@@ -31,6 +34,8 @@ def _mb_search(argv: list[str] | None = None) -> None:
         help="Output JSON file (prints digest to stdout).",
     )
     args = parser.parse_args(argv)
+    if not args.album and not args.barcode:
+        parser.error("give --album (with or without --artist), or --barcode")
 
     mb_client = MusicBrainzClient()
     try:
@@ -39,13 +44,17 @@ def _mb_search(argv: list[str] | None = None) -> None:
             args.album,
             format=args.format,
             limit=args.limit,
+            barcode=args.barcode,
         )
     finally:
         mb_client.close()
 
     data = [r.to_dict() for r in results]
 
-    lines = [f'{len(results)} candidates for "{args.artist}" — "{args.album}":']
+    searched = f'"{args.artist}" — "{args.album}"' if args.album else ""
+    if args.barcode:
+        searched += f"{' ' if searched else ''}barcode {args.barcode}"
+    lines = [f"{len(results)} candidates for {searched}:"]
     for r in results:
         info = (
             f"  [{r.id}]  {r.title} ({r.date})"

@@ -348,6 +348,23 @@ NON_AUDIO_FORMATS = frozenset(
 )
 
 
+def barcode_variants(barcode: str) -> list[str]:
+    """The barcode as given, plus its UPC-A or EAN-13 twin.
+
+    A CD's media catalog number is a 13-digit EAN; MusicBrainz usually stores a
+    US release's barcode as the 12-digit UPC-A, which is the EAN without its
+    leading 0.
+    """
+    code = barcode.strip()
+    if not code.isdigit():
+        return [code]
+    if len(code) == 13 and code.startswith("0"):
+        return [code, code[1:]]
+    if len(code) == 12:
+        return [code, "0" + code]
+    return [code]
+
+
 def _is_audio_medium(medium: dict[str, Any]) -> bool:
     return (medium.get("format") or "").casefold() not in NON_AUDIO_FORMATS
 
@@ -389,14 +406,23 @@ class MusicBrainzClient:
         limit: int = 10,
         barcode: str | None = None,
     ) -> list[MBRelease]:
-        clauses = [f"release:{_lucene_phrase(album)}"]
+        """Search releases by artist and album, by barcode, or by all three.
+
+        A barcode alone is a complete query: artist and album may then be empty.
+        """
+        clauses = []
         if artist.strip():
-            clauses.insert(0, f"artist:{_lucene_phrase(artist)}")
+            clauses.append(f"artist:{_lucene_phrase(artist)}")
+        if album.strip():
+            clauses.append(f"release:{_lucene_phrase(album)}")
+        if barcode:
+            barcode_clause = f"barcode:({' OR '.join(barcode_variants(barcode))})"
+            clauses = [f"({' '.join(clauses)}) AND {barcode_clause}" if clauses else barcode_clause]
+        if not clauses:
+            raise ValueError("search needs an album title or a barcode")
         query = " ".join(clauses)
         if format:
             query += f" AND format:{format}"
-        if barcode:
-            query += f" AND barcode:{barcode}"
         resp = self._get("/release/", params={"query": query, "fmt": "json", "limit": limit})
         resp.raise_for_status()
         data = resp.json()
