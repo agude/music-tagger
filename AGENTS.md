@@ -55,11 +55,15 @@ Key CLI subcommands, driven by Claude Code in conversation:
    per album are encouraged when they fit. These are broad browsing
    categories, not musicological genres. Values are validated against
    `.claude/skills/rip-album/references/genre-list.md`, the canonical list;
-   `--force` overrides for a deliberate addition.
+   `--force` overrides for a deliberate addition. `--track N` (repeatable)
+   limits `--add` or `--remove` to those tracks; a multi-disc album also
+   needs `--disc D`. A number that matches no track exits 1 and writes
+   nothing.
 
    ```bash
    genre <dir> "Pop Rock" "Y2K Rock"   # replace with exactly these two
    genre <dir> --add "Live"            # keep what is there, add one
+   genre <dir> --add "Live" --disc 2 --track 10 --track 11   # two tracks only
    genre <dir> --remove "Live"         # drop one
    ```
 

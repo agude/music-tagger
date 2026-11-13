@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from music_tagger.genres import GENRE_LIST_PATH, load_canonical, unknown_genres
 
 TABLE = """\
@@ -231,3 +233,86 @@ class TestGenreList:
         _genre(["--list", "--root", str(root)])
 
         assert "Hidden Genre" not in capsys.readouterr().out  # type: ignore[attr-defined]
+
+
+class TestGenreTrackSelection:
+    def _genres(self, album: Path) -> dict[str, list[str]]:
+        from music_tagger.tags import read_genres
+
+        return {path.name: read_genres(path) for path in sorted(album.glob("*.flac"))}
+
+    def test_add_changes_only_the_named_track(self, flac_album: Path) -> None:
+        from music_tagger.cli.library import _genre
+
+        _genre([str(flac_album), "--add", "Live", "--track", "2"])
+
+        genres = self._genres(flac_album)
+        assert genres["02 - Track 2.flac"] == ["Live"]
+        assert genres["01 - Track 1.flac"] == []
+        assert genres["03 - Track 3.flac"] == []
+
+    def test_remove_keeps_the_other_genres(self, flac_album: Path) -> None:
+        from music_tagger.cli.library import _genre
+
+        _genre([str(flac_album), "Retro Rock", "Folk Rock"])
+        _genre([str(flac_album), "--remove", "Folk Rock", "--track", "1"])
+
+        genres = self._genres(flac_album)
+        assert genres["01 - Track 1.flac"] == ["Retro Rock"]
+        assert genres["02 - Track 2.flac"] == ["Retro Rock", "Folk Rock"]
+
+    def test_unknown_track_fails_and_writes_nothing(self, flac_album: Path, capsys: object) -> None:
+        from music_tagger.cli.library import _genre
+
+        with pytest.raises(SystemExit) as exit_info:
+            _genre([str(flac_album), "--add", "Live", "--track", "9"])
+
+        assert exit_info.value.code == 1
+        assert "no track 9" in capsys.readouterr().err  # type: ignore[attr-defined]
+        assert all(genres == [] for genres in self._genres(flac_album).values())
+
+    def test_track_needs_add_or_remove(self, flac_album: Path) -> None:
+        from music_tagger.cli.library import _genre
+
+        with pytest.raises(SystemExit) as exit_info:
+            _genre([str(flac_album), "--track", "2"])
+
+        assert exit_info.value.code == 2
+
+    def test_disc_needs_track(self, flac_album: Path) -> None:
+        from music_tagger.cli.library import _genre
+
+        with pytest.raises(SystemExit) as exit_info:
+            _genre([str(flac_album), "--add", "Live", "--disc", "2"])
+
+        assert exit_info.value.code == 2
+
+    def test_multi_disc_album_needs_disc(self, flac_album: Path) -> None:
+        from mutagen.flac import FLAC
+
+        from music_tagger.cli.library import _genre
+
+        audio = FLAC(flac_album / "02 - Track 2.flac")
+        audio["DISCNUMBER"] = "2"
+        audio.save()
+
+        with pytest.raises(SystemExit) as exit_info:
+            _genre([str(flac_album), "--add", "Live", "--track", "2"])
+
+        assert exit_info.value.code == 2
+        assert all(genres == [] for genres in self._genres(flac_album).values())
+
+    def test_disc_selects_the_track_on_that_disc(self, flac_album: Path) -> None:
+        from mutagen.flac import FLAC
+
+        from music_tagger.cli.library import _genre
+
+        audio = FLAC(flac_album / "02 - Track 2.flac")
+        audio["DISCNUMBER"] = "2"
+        audio.save()
+
+        _genre([str(flac_album), "--add", "Live", "--track", "2", "--disc", "2"])
+
+        genres = self._genres(flac_album)
+        assert genres["02 - Track 2.flac"] == ["Live"]
+        assert genres["01 - Track 1.flac"] == []

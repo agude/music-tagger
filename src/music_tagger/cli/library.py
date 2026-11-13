@@ -542,6 +542,18 @@ def _genre(argv: list[str] | None = None) -> None:
         "--remove", action="append", default=[], metavar="GENRE", help="Remove a genre."
     )
     parser.add_argument(
+        "--track",
+        type=int,
+        action="append",
+        dest="tracks",
+        default=[],
+        metavar="N",
+        help="Limit --add or --remove to this track number (repeatable).",
+    )
+    parser.add_argument(
+        "--disc", type=int, default=None, help="Disc number for --track on a multi-disc album."
+    )
+    parser.add_argument(
         "--force", action="store_true", help="Allow genres that are not on the canonical list."
     )
     parser.add_argument(
@@ -586,6 +598,10 @@ def _genre(argv: list[str] | None = None) -> None:
 
     if args.path is None:
         parser.error("path is required (unless using --list)")
+    if args.tracks and not (args.add or args.remove):
+        parser.error("--track needs --add or --remove")
+    if args.disc is not None and not args.tracks:
+        parser.error("--disc needs --track")
 
     target: Path = args.path.resolve()
     if not target.is_dir():
@@ -620,11 +636,23 @@ def _genre(argv: list[str] | None = None) -> None:
             print(f"See {GENRE_LIST_PATH}, or pass --force.", file=sys.stderr)
             sys.exit(1)
 
+    targets = album.tracks
+    if args.tracks:
+        from ..tags import disc_number
+
+        if args.disc is None and len({disc_number(t) for t in album.tracks}) > 1:
+            parser.error("--track on a multi-disc album needs --disc")
+        try:
+            targets = _select_tracks(album.tracks, args.tracks, args.disc)
+        except ValueError as error:
+            print(f"Error: {error}", file=sys.stderr)
+            sys.exit(1)
+
     stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     count = 0
     log_path = _log_path(args)
     try:
-        for track in album.tracks:
+        for track in targets:
             old = read_genres(track.path)
             if args.genres:
                 new = list(dict.fromkeys(args.genres))
@@ -647,14 +675,38 @@ def _genre(argv: list[str] | None = None) -> None:
     finally:
         # Logged even when a write fails, so the count matches what is on disk.
         if log_path and not args.dry_run and count > 0:
-            on_disk = sorted({g for track in album.tracks for g in read_genres(track.path)})
+            on_disk = sorted({g for track in targets for g in read_genres(track.path)})
             _write_genre_log(log_path, album, str(on_disk), count)
 
-    applied = sorted({g for track in album.tracks for g in read_genres(track.path)})
+    applied = sorted({g for track in targets for g in read_genres(track.path)})
     if args.dry_run:
-        print(f"\n(dry run — {count} of {len(album.tracks)} tracks would change)")
+        print(f"\n(dry run — {count} of {len(targets)} tracks would change)")
     else:
         print(f"Set genre={applied} on {count} track(s).")
+
+
+def _select_tracks(
+    tracks: list[TrackTags], numbers: list[int], disc: int | None
+) -> list[TrackTags]:
+    """The tracks numbered in `numbers`, on `disc` when one is given.
+
+    Raises ValueError when a number matches no track, so a typo cannot pass silently.
+    """
+    from ..tags import disc_number, parse_position
+
+    chosen: list[TrackTags] = []
+    for number in dict.fromkeys(numbers):
+        matches = [
+            track
+            for track in tracks
+            if parse_position(track.tags.get("tracknumber")) == number
+            and (disc is None or disc_number(track) == disc)
+        ]
+        if not matches:
+            where = f" on disc {disc}" if disc is not None else ""
+            raise ValueError(f"no track {number}{where}")
+        chosen.extend(matches)
+    return chosen
 
 
 def _print_artist_genres(root: Path, artist: str) -> None:
