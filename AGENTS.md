@@ -51,6 +51,9 @@ Key CLI subcommands, driven by Claude Code in conversation:
    values stay first; missing existing values follow, with exact duplicates
    removed. A `performer` entry (`Name (role, role)`) is merged by name: an
    existing entry for a person MusicBrainz lists adds only its missing roles.
+   MusicBrainz can list two artists with one name, so an existing entry is
+   merged only when exactly one entry has its name; otherwise it is kept as
+   its own entry unless a same-named entry already lists all its roles.
    In every mode, a role repeated within one performer is written once. This
    does not merge artist, albumartist, recording, release, or work IDs. The
    default remains unchanged. The `read` → `diff` path accepts

@@ -578,18 +578,22 @@ def _normalize_performers(value: str) -> str:
 def _merge_performers(proposed: str, existing: str) -> str:
     """Keep MusicBrainz performers, then add existing ones it omits.
 
-    An existing performer with the same name as a MusicBrainz one is the same
-    entry: its missing roles are added to that entry rather than repeating the
-    person.
+    An existing entry whose roles a same-named entry already lists is kept as
+    that entry. Otherwise, when exactly one entry has the name, the existing
+    roles are added to it rather than repeating the person. Two MusicBrainz
+    artists can share a name, so with several same-named entries the existing
+    one is appended unchanged instead of guessing which person it is.
     """
     merged = [_parse_performer(entry) for entry in _split_top_level(proposed, ";")]
     for entry in _split_top_level(existing, ";"):
         name, roles = _parse_performer(entry)
-        match = next((item for item in merged if item[0] == name), None)
-        if match is None:
-            merged.append((name, roles))
+        namesakes = [item for item in merged if item[0] == name]
+        if any(set(roles) <= set(item[1]) for item in namesakes):
+            continue
+        if len(namesakes) == 1:
+            namesakes[0][1].extend(role for role in roles if role not in namesakes[0][1])
         else:
-            match[1].extend(role for role in roles if role not in match[1])
+            merged.append((name, roles))
     return "; ".join(_format_performer(name, roles) for name, roles in merged)
 
 

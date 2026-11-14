@@ -1712,6 +1712,36 @@ class TestKeepExistingCredits:
 
         assert change.new_value == "Player (piano, harpsichord); Added (flute); Retained (cello)"
 
+    def test_namesake_performers_stay_separate(self) -> None:
+        # Two MusicBrainz artists named "Mike Tyler" on one recording.
+        album = _three_track_album()
+        album.tracks[0].tags.update(
+            {
+                "musicbrainz_albumid": "old-release",
+                "performer": "Mike Tyler (additional, bass); Mike Tyler (guitar); Kept (oud, oud)",
+            }
+        )
+        release = _make_release()
+        release.discs[1][0].performers = "Mike Tyler (additional, bass); Mike Tyler (guitar)"
+
+        result = build_diff(album, release, keep_existing_credits=True)
+        change = next(c for c in result.diffs[0].changes if c.field == "performer")
+
+        assert change.new_value == "Mike Tyler (additional, bass); Mike Tyler (guitar); Kept (oud)"
+
+    def test_unmatched_role_of_a_shared_name_is_kept_as_its_own_entry(self) -> None:
+        album = _three_track_album()
+        album.tracks[0].tags.update(
+            {"musicbrainz_albumid": "old-release", "performer": "Pat (drums)"}
+        )
+        release = _make_release()
+        release.discs[1][0].performers = "Pat (bass); Pat (guitar)"
+
+        result = build_diff(album, release, keep_existing_credits=True)
+        change = next(c for c in result.diffs[0].changes if c.field == "performer")
+
+        assert change.new_value == "Pat (bass); Pat (guitar); Pat (drums)"
+
     def test_default_mode_removes_repeated_performer_roles(self) -> None:
         album = _three_track_album({"musicbrainz_albumid": "old-release"})
         release = _make_release()

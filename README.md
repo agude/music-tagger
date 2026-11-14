@@ -40,7 +40,8 @@ accept MusicBrainz personnel additions while retaining existing contributor
 names and IDs that it omits. This is opt-in; intentional removal of a bogus
 credit remains an explicit `edit-tags` operation. Performers are merged per
 person, so an existing performer gains missing roles instead of being listed
-twice. A role repeated within one performer is always written once.
+twice. Two MusicBrainz artists with the same name stay separate entries. A role
+repeated within one performer is always written once.
 
 - Track durations (from the audio stream) are ground truth.
 - Track count must match between files and the MusicBrainz release.
