@@ -48,6 +48,11 @@ def duplicate_track_message(duplicates: dict[tuple[int, int], list[TrackTags]]) 
     )
 
 
+# Source tags that overwrites_needing_review reads through is_unknown_rip. Diff
+# JSON carries them so write-tags applies the same gate as tag.
+GATE_TRACK_TAGS = ("musicbrainz_discid", "musicbrainz_albumid")
+
+
 @dataclass
 class TagConflict:
     field: str
@@ -114,6 +119,9 @@ class TrackDiff:
             "conflicts": [conflict.to_dict() for conflict in self.conflicts],
             "warnings": list(self.warnings),
             "locked_changes": [change.to_dict() for change in self.locked_changes],
+            "gate_tags": {
+                name: self.track.tags[name] for name in GATE_TRACK_TAGS if self.track.tags.get(name)
+            },
         }
 
 
@@ -141,15 +149,24 @@ class AlbumResult:
         return {
             "release_id": self.release.id,
             "release_title": self.release.title,
+            "release_date": self.release.date,
+            "release_first_release_date": self.release.first_release_date,
             "tracks": [d.to_dict() for d in self.diffs],
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AlbumResult:
+        """Rebuild a result from diff JSON, with the facts the safety gate reads.
+
+        A diff written before the release dates and gate tags were saved has
+        none, so the gate treats its date and placeholder changes as overwrites.
+        """
         diffs = []
         for td in data.get("tracks", []):
+            gate_tags = td.get("gate_tags", {})
             track = TrackTags(
                 path=Path(td["path"]),
+                tags={name: gate_tags[name] for name in GATE_TRACK_TAGS if gate_tags.get(name)},
                 format=td.get("format", ""),
             )
             changes = [TagChange.from_dict(c) for c in td.get("changes", [])]
@@ -157,7 +174,12 @@ class AlbumResult:
             warnings = list(td.get("warnings", []))
             locked_changes = [TagChange.from_dict(c) for c in td.get("locked_changes", [])]
             diffs.append(TrackDiff(track, changes, conflicts, warnings, locked_changes))
-        release = MBRelease(id=data["release_id"], title=data.get("release_title", ""))
+        release = MBRelease(
+            id=data["release_id"],
+            title=data.get("release_title", ""),
+            date=data.get("release_date", ""),
+            first_release_date=data.get("release_first_release_date", ""),
+        )
         album = AlbumTags(directory=Path("."))
         return cls(album=album, release=release, diffs=diffs)
 

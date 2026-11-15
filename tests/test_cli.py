@@ -660,6 +660,22 @@ class TestWriteTagsCommand:
         assert "MusicBrainz=[USDW10110279]" in log
         assert f"resolution={resolution}" in log
 
+    def test_release_date_replacement_needs_no_approval(
+        self, flac_album: Path, tmp_path: Path
+    ) -> None:
+        album = read_album(flac_album)
+        track = album.tracks[0]
+        reissue_date = track.tags["date"]
+        release = MBRelease("r-1", "Desperado", date=reissue_date, first_release_date="1972-06-01")
+        change = TagChange("date", reissue_date, "1972-06-01")
+        result = AlbumResult(album, release, [TrackDiff(track, [change])])
+        diff_path = tmp_path / "diff.json"
+        diff_path.write_text(json.dumps(result.to_dict()))
+
+        _write_tags(["--diff", str(diff_path), "--log", str(tmp_path / "changes.log")])
+
+        assert read_album(flac_album).tracks[0].tags["date"] == "1972-06-01"
+
     def _make_diff_json(self, flac_album: Path) -> dict:
         from music_tagger.tags import read_album as _read_album
 

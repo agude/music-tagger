@@ -857,7 +857,11 @@ inspection write no log. `lyrics-batch` follows the same rule.
 The diff JSON path (`read` → `diff` → `write-tags`) enforces the same gate as
 `tag`: review overwrites exit 3 unless `write-tags --approve-overwrites`, and
 unresolved ISRC conflicts exit 4. Dry runs print the verdict and exit with its
-code. Before any write it re-reads each file the diff changes; if a change's
+code. The diff JSON carries what the gate's exemptions read: the release's
+`release_date` and `release_first_release_date`, and each track's `gate_tags`
+(`musicbrainz_discid`, `musicbrainz_albumid`). A diff written before these keys
+existed has none, so its release-date and placeholder changes need approval.
+Before any write it re-reads each file the diff changes; if a change's
 `old_value` no longer matches the file, the whole run exits 1 and writes nothing.
 The diff JSON path still honors a `resolution` set on each conflict, and a kept resolution locks `isrc` there
 too. Do not add a duplicate ISRC entry to `changes`; the resolution

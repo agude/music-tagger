@@ -699,6 +699,60 @@ class TestAlbumResultSerialization:
         assert restored.diffs[0].warnings == ["Unverified metadata."]
         assert restored.has_unresolved_conflicts is has_unresolved_conflicts
 
+    def test_release_date_exemption_survives_round_trip(self) -> None:
+        track = TrackTags(Path("/music/01.flac"), {"date": "1987"}, format="flac")
+        release = MBRelease(
+            id="release-1", title="Phantom", date="1987", first_release_date="1987-03-19"
+        )
+        change = TagChange("date", "1987", "1987-03-19")
+        result = AlbumResult(
+            AlbumTags(Path("/music"), [track]), release, [TrackDiff(track, [change])]
+        )
+        assert overwrites_needing_review(result) == []
+
+        restored = AlbumResult.from_dict(result.to_dict())
+
+        assert overwrites_needing_review(restored) == []
+
+    def test_diff_without_release_dates_still_needs_review(self) -> None:
+        track = TrackTags(Path("/music/01.flac"), {"date": "1987"}, format="flac")
+        release = MBRelease(
+            id="release-1", title="Phantom", date="1987", first_release_date="1987-03-19"
+        )
+        change = TagChange("date", "1987", "1987-03-19")
+        data = AlbumResult(
+            AlbumTags(Path("/music"), [track]), release, [TrackDiff(track, [change])]
+        ).to_dict()
+        del data["release_date"], data["release_first_release_date"]
+
+        restored = AlbumResult.from_dict(data)
+
+        assert overwrites_needing_review(restored) == [(Path("/music/01.flac"), change)]
+
+    @pytest.mark.parametrize(
+        ("source_tags", "needs_review"),
+        [
+            ({"musicbrainz_discid": "disc-1"}, False),
+            ({"musicbrainz_discid": "disc-1", "musicbrainz_albumid": "release-0"}, True),
+        ],
+    )
+    def test_placeholder_exemption_survives_round_trip(
+        self, source_tags: dict[str, str], needs_review: bool
+    ) -> None:
+        track = TrackTags(
+            Path("/music/01.flac"), {"title": "Unknown Track", **source_tags}, format="flac"
+        )
+        change = TagChange("title", "Unknown Track", "Doolin-Dalton")
+        result = AlbumResult(
+            AlbumTags(Path("/music"), [track]), _make_release(), [TrackDiff(track, [change])]
+        )
+
+        data = result.to_dict()
+        restored = AlbumResult.from_dict(data)
+
+        assert data["tracks"][0]["gate_tags"] == source_tags
+        assert bool(overwrites_needing_review(restored)) is needs_review
+
     def test_round_trip(self) -> None:
         track = TrackTags(path=Path("/music/01.flac"), tags={"title": "Old"}, format="flac")
         changes = [TagChange(field="title", old_value="Old", new_value="New")]
